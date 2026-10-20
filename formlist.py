@@ -1,0 +1,1075 @@
+"""Build a list of companies with contact forms for an area and industries.
+
+Runtime: Windows (target) / cross-platform, Python 3.9+.
+Usage:
+  python formlist.py                                  (interactive, Japanese prompts)
+  python formlist.py --area 東京都世田谷区 --industry ホテル・旅館 --industry 百貨店 --limit 200
+  python formlist.py --input 会社リスト.csv           (URLs or company names, one per line)
+Outputs (in 出力/): フォームリスト_<area>_<time>.xlsx and .csv
+Columns A..V are identical to 05 企業リスト台帳, then added check columns.
+"""
+import argparse
+import csv
+import datetime as dt
+import hashlib
+import re
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from threading import Lock
+from urllib.parse import quote_plus, urlparse
+
+import openpyxl
+from openpyxl.styles import Font, PatternFill
+
+import google_places_text_source
+import hp_finder
+import hp_verify
+from limited_http_budget import HttpBudgetExceeded
+import size_guess
+import subareas
+import map_browser_source
+import ng_list
+from ng_state_store import NgStateStore
+import osm_source
+import overture_source
+import portal_source
+import site_checker
+import state
+
+HERE = Path(__file__).resolve().parent
+OUT_DIR = HERE / "出力"
+
+LEDGER_COLS = ['No', '企業名', '業種', 'エリア', '規模', '決裁単位', 'HP URL', '問い合わせフォームURL 無ければメール',
+               '担当部署', '相性 女性', '相性 親子', '相性 ファミリー', '相性 観光客', '相性 社員',
+               '過去のWS POPUP 体験イベント実績', '実績URL', '季節の催事予定', '企業理念キーワード', '刺さる案件種類',
+               '使うメール型', '優先度スコア', 'ステータス']
+EXTRA_COLS = ['フォーム判定', '営業お断りの表示', 'お断り文言の抜き出し', 'メールアドレス', '判定メモ', '取得元', '地図の元データ', '取得日時', 'HP概要', '書き出し', 'HPの照合', 'LINE公式']
+MAIL_TYPE = {'メーカー': 'A6', '商業施設': 'A1', '百貨店': 'A1', 'ホテル・旅館': 'A2', '観光施設': 'A2', '住宅・不動産': 'A3',
+             'ブライダル': 'A4', '結婚相談所': 'A5', '自動車・保険': 'A8', '携帯ショップ': 'A8', '美容・コスメ': 'A6',
+             'アパレル': 'A6', 'ライフスタイル雑貨': 'A6', '食品・生産者直売': 'A7', '教育機関': 'A10', '福祉施設': 'A10',
+             '自治体・地域団体': 'A11', '企業の社内イベント': 'A9', 'その他': 'A12'}
+AUDIT_COLS = ['比較電話', '比較住所', '比較値取得元', '比較値取得元URL', '比較値取得時刻']
+EXTRA_COLS += ['source_detail', 'duplicate_removed', 'source_group',
+               'contact_confidence', 'sales_permission', 'resume_state',
+               'official_research_state', 'official_candidate_url', 'registered_url'] + AUDIT_COLS
+INDUSTRIES = list(osm_source.INDUSTRY_TAGS)
+
+
+# Google/Yahoo は業種名ではなく、地図で引ける言葉で探す。ここに無い業種は「・」で分けた語をそれぞれ探す
+MAP_TERMS = {"サロン": ["美容室", "ネイルサロン", "エステサロン"], "住宅・不動産": ["住宅展示場", "不動産"], "自動車・保険": ["自動車販売店", "保険代理店"], "美容・コスメ": ["美容室", "化粧品店"],
+             "食品・生産者直売": ["直売所"], "自治体・地域団体": ["公民館"], "商業施設": ["ショッピングモール"], "ブライダル": ["結婚式場"]}
+NO_MAP = {"企業の社内イベント"}  # 地図の検索語にならない業種
+GOOGLE_PLACES_TEXT_BLOCK = "Google Places Text Search is not connected. API terms, billing, and storage/export approval are unverified."
+
+
+def open_ng_state_store(db_path):
+    if not db_path:
+        return None
+    store = NgStateStore(db_path)
+    store.migration_status()
+    return store
+
+
+def is_ng_url(url, store=None):
+    return store.is_ng([url]) if store is not None else (ng_list.is_ng(url) or ng_list.is_ng_form(url))
+
+
+def add_auto_ng(url, reason, company, store=None):
+    if store is None:
+        return ng_list.add(url, reason, company)
+    host = ng_list.domain(url)
+    if not host or "." not in host or host in ng_list.TOO_WIDE:
+        return False
+    if ng_list._shared(host):
+        u = str(url or "").strip()
+        u = u if u.lower().startswith(("http://", "https://")) else "https://" + u.lstrip("/")
+        return bool(store.add_form_ng(u, reason, company))
+    return bool(store.add_domain_ng(url, reason, company))
+
+
+def google_places_text_preview(area, term, api_key, transport, max_pages=3, request_budget=3):
+    config = google_places_text_source.PlacesTextConfig(
+        area=area,
+        term=term,
+        api_key=api_key,
+        max_pages=max_pages,
+        request_budget=request_budget,
+    )
+    result = google_places_text_source.search_text(config, transport)
+    fetched_at = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    rows = [{
+        "name": p.name,
+        "industry": term,
+        "area": area,
+        "url": p.website_uri,
+        "source": "Google Places Text Search",
+        "source_key": "google_places_text",
+        "source_detail": f"status={result.status}; reason={result.reason}; pages={result.pages}; requests={result.requests}",
+        "osm_ref": p.place_id,
+        "place_id": p.place_id,
+        "google_place_id": p.place_id,
+        "tel": p.phone,
+        "address": p.address,
+        "comparison_phone": p.phone,
+        "comparison_address": p.address,
+        "comparison_source": "Google Places Text Search" if (p.phone or p.address) else "",
+        "comparison_source_url": p.place_id,
+        "comparison_fetched_at": fetched_at if (p.phone or p.address) else "",
+    } for p in result.rows]
+    return {"status": result.status, "reason": result.reason, "pages": result.pages, "requests": result.requests,
+            "next_page_token": result.next_page_token, "rows": rows}
+
+
+def reject_google_places_text_rows(rows):
+    if any(r.get("source_key") == "google_places_text" for r in rows):
+        raise RuntimeError(GOOGLE_PLACES_TEXT_BLOCK)
+
+
+def positive_int(raw):
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    if value <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return value
+
+
+
+_LOG_LOCK = Lock()
+
+
+def log(msg):
+    with _LOG_LOCK:
+        print(msg, flush=True)
+
+
+def ask_interactive():
+    print("\n問い合わせフォームのある会社リストを作ります。\n")
+    area = ""
+    while not area:
+        area = input("1. 探す場所を入れてください（例: 東京都世田谷区 / 大阪市北区 / 埼玉県川口市）\n   > ").strip()
+    print("\n2. 業種の番号を選んでください。いくつでも選べます（例: 1 3 5）")
+    for i, name in enumerate(INDUSTRIES, 1):
+        print(f"   {i:>2}. {name}")
+    picks = []
+    while not picks:
+        raw = input("   > ").replace("、", " ").replace(",", " ").split()
+        picks = [INDUSTRIES[int(x) - 1] for x in raw if x.isdigit() and 1 <= int(x) <= len(INDUSTRIES)]
+    raw = input("\n3. 最大何社まで調べますか（何も入れずにEnterで200）\n   > ").strip()
+    limit = int(raw) if raw.isdigit() and int(raw) > 0 else 200
+    return area, picks, limit
+
+
+def read_input_file(path):
+    rows = []
+    p = Path(path)
+    text = p.read_text(encoding="utf-8-sig", errors="replace") if p.suffix.lower() != ".xlsx" else ""
+    for line in text.splitlines():
+        cells = [c.strip() for c in next(csv.reader([line]))] if line.strip() else []
+        if not cells:
+            continue
+        url = next((c for c in cells if c.startswith("http") or ("." in c and " " not in c and "/" in c)), "")
+        name = next((c for c in cells if c and c != url), url)
+        rows.append({"name": name, "industry": "", "area": "", "url": url, "source": "貼り付けリスト", "osm_ref": ""})
+    return rows
+
+
+def dedupe(rows):
+    seen, out, no_url = {}, [], []
+    for r in rows:
+        if not r["url"]:
+            no_url.append(r)
+            continue
+        p = urlparse(r["url"] if r["url"].startswith("http") else "http://" + r["url"])
+        key = (p.netloc.lower().removeprefix("www."), p.path.rstrip("/"))
+        if key in seen:
+            kept = seen[key]
+            dup = f'{r.get("name", "")} / {r.get("source", "")}'.strip(" /")
+            old = kept.get("duplicate_removed", "")
+            kept["duplicate_removed"] = (old + " | " if old else "") + dup
+            continue
+        seen[key] = r
+        out.append(r)
+    return out, no_url
+
+
+def apply_ng(rows, path):
+    """NGリストのドメイン(サブドメイン含む)に一致する会社を除く。対照: NGに入れたドメインの行が消える"""
+    ng = {ng_list.domain(l.split("#")[0]) for l in Path(path).read_text(encoding="utf-8-sig").splitlines()} - {""}
+    keep = [r for r in rows if not ng_list.is_ng(r["url"], (ng, set()))]
+    return keep, len(rows) - len(keep)
+
+
+def judge_hp(r, res):
+    """このHPがその会社のものかの結論を r["ev_text"](列「HPの照合」)に書く。
+    検索で見つけたHP(r["hp_ev"]がある行)は、チェック時の判定が使えない証拠なら r["discard"] を立てる
+    (別会社のHPと、そこから取ったフォーム・メールは使わない)。検索時の結果でチェック時の判定を上書きしない。
+    取得元の「補完」の印は外さない(送信の関門は変えない)"""
+    ev, why = res.get("ev", ""), res.get("ev_why", "")
+    searched = "hp_ev" in r
+    if searched and not hp_verify.usable(r, ev):
+        r["discard"] = f"{ev}: {why}"
+    if searched:
+        r["ev_text"] = f"検索で発見・{ev}：{why}" if ev else "検索で発見・照合なし"
+    else:
+        r["ev_text"] = "地図に登録のHP（" + (ev or "照合なし") + (f"：{why}" if ev == "不一致" else "") + "）"
+        if not ev and res.get("verdict") == "フォームあり":  # 照合の材料が取れなかったのにフォームがある行も、確認なしでは送らない
+            r["source"] += " + 地図のHPは照合できず(要確認・補完扱い)"
+        if ev == "不一致":  # 電話・住所の有無を問わない。地図に載っているHPでも、照合で食い違えば確認なしでは送らない
+            r["source"] += " + 地図のHPが照合不一致(要確認・補完扱い)"  # 「補完」を含めて、確認なしの自動送信の関門で止める
+
+
+def classify_contact(res):
+    verdict = res.get("verdict", "")
+    note = res.get("note", "")
+    state_label = res.get("official_research_state", "")
+    if state_label == "manual_candidate":
+        return {"contact_confidence": "公式HP要目視", "contact_candidate": True, "sales_permission": "未確認"}
+    if state_label == "not_found":
+        return {"contact_confidence": "公式HP再探索済み:候補なし", "contact_candidate": False, "sales_permission": "未確認"}
+    if state_label == "blocked":
+        return {"contact_confidence": "公式HP再探索無効", "contact_candidate": False, "sales_permission": "未確認"}
+    if state_label == "failed":
+        return {"contact_confidence": "公式HP再探索失敗", "contact_candidate": False, "sales_permission": "未確認"}
+    if res.get("needs_official_search"):
+        confidence = "公式HP再探索待ち"
+        candidate = False
+    elif verdict == "フォームあり":
+        confidence = "自動確認:フォーム"
+        candidate = True
+    elif verdict == "メールのみ":
+        confidence = "自動確認:メール"
+        candidate = True
+    elif verdict == "要目視":
+        confidence = "候補:要目視"
+        candidate = True
+    elif verdict in ("取得失敗", "robots禁止"):
+        confidence = "取得失敗"
+        candidate = False
+    else:
+        confidence = "未発見"
+        candidate = False
+    if res.get("refuse"):
+        sales = "営業不可候補:拒否文あり"
+    elif "問い合わせ以外" in note or "予約" in note or "採用" in note or "応募" in note:
+        sales = "営業不可候補:用途不一致"
+    else:
+        sales = "未確認"
+    return {"contact_confidence": confidence, "contact_candidate": candidate, "sales_permission": sales}
+
+
+def apply_result_state(r, res, checkpoint_status=""):
+    for key, val in {
+        "verdict": "取得失敗",
+        "form_url": "",
+        "email": "",
+        "refuse": False,
+        "refuse_text": "",
+        "note": "",
+        "overview": "",
+        "ev": "",
+        "ev_why": "",
+    }.items():
+        res.setdefault(key, val)
+    res.update(classify_contact(res))
+    res["resume_state"] = checkpoint_status or res.get("checkpoint_status", "")
+    detail = _verify_detail_text(res.get("verify_detail"))
+    if detail and detail not in r.get("source_detail", ""):
+        append_detail(r, detail)
+    if res.get("needs_official_search"):
+        detail = r.get("source_detail", "")
+        r["source_detail"] = (detail + " | " if detail else "") + "official_site_search_needed"
+    return res
+
+
+def record_comparison_audit(r):
+    """Keep independent pre-HP comparison values for later audit.
+
+    The values come from the candidate source row (Google Maps, an injected list, etc.).
+    Do not fill these from the candidate HP body, because that would make the HP check circular.
+    """
+    phone = r.get("comparison_phone", r.get("tel", ""))
+    address = r.get("comparison_address", r.get("address", ""))
+    if phone or address:
+        r.setdefault("comparison_phone", phone)
+        r.setdefault("comparison_address", address)
+        r.setdefault("comparison_source", r.get("source") or "不明")
+        r.setdefault("comparison_source_url", r.get("osm_ref", ""))
+        r.setdefault("comparison_fetched_at", r.get("fetched_at", ""))
+    else:
+        for key in ("comparison_phone", "comparison_address", "comparison_source",
+                    "comparison_source_url", "comparison_fetched_at"):
+            r.setdefault(key, "")
+
+
+def append_detail(r, detail):
+    old = r.get("source_detail", "")
+    r["source_detail"] = (old + " | " if old else "") + detail
+
+
+def _verify_detail_text(detail):
+    if not detail:
+        return ""
+    pairs = [
+        ("candidate_url", detail.get("candidate_url", "")),
+        ("category", detail.get("category", "")),
+        ("level", detail.get("level", "")),
+        ("why", detail.get("why", "")),
+        ("pre_level", detail.get("pre_override_level", "")),
+        ("pre_why", detail.get("pre_override_why", "")),
+        ("tel_hit", detail.get("tel_hit", "")),
+        ("addr", detail.get("addr_status", "")),
+        ("addr_why", detail.get("addr_why", "")),
+        ("title_match", detail.get("title_match", "")),
+        ("industry_ok", detail.get("industry_ok", "")),
+    ]
+    clean = []
+    for key, val in pairs:
+        if val in ("", None):
+            continue
+        if isinstance(val, bool):
+            val = str(val).lower()
+        clean.append(f"{key}={str(val).replace('|', '/').replace(';', ',')[:120]}")
+    return "hp_verify:" + ";".join(clean) if clean else ""
+
+
+def _append_candidate_details(r):
+    for detail in r.pop("_candidate_verify_details", []) or []:
+        text = _verify_detail_text(detail)
+        if text:
+            append_detail(r, text)
+    r.pop("_candidate_verify_detail", None)
+
+
+def _clear_budget_stop_state(r):
+    r.pop("_budget_stop_stage", None)
+    r.pop("_budget_stop_current_url", None)
+    r.pop("_budget_stop_candidate_url", None)
+    r.pop("_budget_stop_reason", None)
+    r.pop("_budget_stop_saved_at", None)
+
+
+def _host(url):
+    try:
+        return urlparse(url if str(url).startswith("http") else "http://" + str(url)).netloc.lower().removeprefix("www.")
+    except Exception:
+        return ""
+
+
+def row_fingerprint(r):
+    """サイト確認の結果を再利用してよい「同じ行」の指紋。照合は行の名前・電話・住所に対する判定なので、
+    URLが同じでも指紋が違えば(名前を直した・同じHPを使う別の店舗)前回の結果を使わない"""
+    parts = (_name_key(r),
+             hp_verify.tel_digits(r.get("tel", "")),  # 判定(judge_detail)が見る項目と同じにする。phone は判定が見ない
+             hp_verify._addr_norm(r.get("address", "")),  # 判定は生の住所で照合するので、鍵も(正規化した)生の住所
+             str(r.get("industry", "")),  # 業種で業種語の確認・施設名の判定が変わる
+             str(r.get("area", "")))
+    return hashlib.sha1("\x1f".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def _check_site(url, r, resume_checks=False, retry_limit=2, budget=None, line_id=None):
+    checkpoint_status = ""
+    variant = row_fingerprint(r) + "#" + site_checker.CHECK_RULES
+    check_lease_id = None
+    try:
+        if resume_checks:
+            action, payload = state.begin_check(url, r.get("name", ""), retry_limit=retry_limit, variant=variant)
+            checkpoint_status = action
+            if action in ("cached", "retry_limit", "running"):
+                return payload, checkpoint_status, None
+            check_lease_id = payload.get("lease_id")
+        res = site_checker.check(url, row=r, budget=budget, line_id=line_id)
+        if resume_checks:
+            state.save_check(url, r.get("name", ""), res, check_lease_id, variant=variant)
+        return res, checkpoint_status, None
+    except HttpBudgetExceeded:
+        raise
+    except Exception as e:
+        if resume_checks:
+            state.fail_check(url, r.get("name", ""), e, check_lease_id, variant=variant)
+        return None, checkpoint_status or "failed", e
+
+
+def should_research_official_site(r, res):
+    if not r.get("url") or res.get("refuse"):
+        return False
+    if res.get("form_url") or res.get("email") or res.get("contact_candidate"):
+        return False
+    if res.get("needs_official_search"):
+        return True
+    host = _host(r.get("url", ""))
+    soft_hosts = (
+        "instagram.com", "facebook.com", "x.com", "twitter.com", "ameblo.jp", "note.com",
+        "lit.link", "lin.ee", "hotpepper.jp", "hpr.jp", "beauty.hotpepper.jp",
+        "minimodel.jp", "ekiten.jp", "google.com", "sites.google.com", "docs.google.com",
+        "forms.gle", "b-merit.jp", "reserva.be", "airrsv.net",
+    )
+    if any(host == h or host.endswith("." + h) for h in soft_hosts):
+        return True
+    return not res.get("contact_candidate") and res.get("verdict") not in ("robots禁止", "取得失敗")
+
+
+def research_official_site(r, res, resume_checks=False, retry_limit=2, budget=None, line_id=None, ng_store=None):
+    _clear_budget_stop_state(r)
+    if not should_research_official_site(r, res):
+        return res, res.get("resume_state", "")
+    original_url = r.get("url", "")
+    append_detail(r, f"official_site_research:from={original_url}")
+    try:
+        url, level, why = hp_finder.search_one(r, candidate_allowed=lambda u: candidate_allowed(u, ng_store), budget=budget, line_id=line_id)
+    except HttpBudgetExceeded:
+        details = r.get("_candidate_verify_details", []) or []
+        if details:
+            r["_budget_stop_candidate_url"] = details[-1].get("candidate_url", "")
+        r["_budget_stop_stage"] = "official_site_research"
+        r["_budget_stop_current_url"] = ""
+        _append_candidate_details(r)
+        raise
+    except Exception as e:
+        _append_candidate_details(r)
+        append_detail(r, f"official_site_research:error={repr(e)[:80]}")
+        res["official_research_state"] = "failed"
+        return res, res.get("resume_state", "")
+    _append_candidate_details(r)
+    if not url:
+        append_detail(r, f"official_site_research:not_found:{why}")
+        res["official_research_state"] = "not_found"
+        return res, res.get("resume_state", "")
+    if _host(url) == _host(original_url):
+        append_detail(r, f"official_site_research:same_host:{url}")
+        res["official_research_state"] = "manual_candidate"
+        res["official_candidate_url"] = url
+        return res, res.get("resume_state", "")
+    if level not in hp_verify.STRONG:
+        append_detail(r, f"official_site_research:manual_candidate={url}; level={level}; why={why}")
+        res["official_research_state"] = "manual_candidate"
+        res["official_candidate_url"] = url
+        return res, res.get("resume_state", "")
+    if is_ng_url(url, ng_store):
+        append_detail(r, f"official_site_research:blocked_by_ng={url}")
+        r["discard"] = f"official_research_ng: {url}"[:120]
+        res["official_research_state"] = "blocked"
+        return res, res.get("resume_state", "")
+    r["registered_url"] = original_url
+    r["url"], r["hp_ev"], r["hp_ev_why"] = url, level, why
+    r["source"] += " + 公式HP再探索(要確認)"
+    append_detail(r, f"official_site_research:found={url}; level={level}; why={why}")
+    found_res, checkpoint_status, err = _check_site(url, r, resume_checks=resume_checks, retry_limit=retry_limit,
+                                                   budget=budget, line_id=line_id)
+    if err:
+        if "hp_ev" in r:
+            r["discard"] = f"照合後の例外: {err!r}"[:120]
+        found_res = {"verdict": "取得失敗", "form_url": "", "email": "", "refuse": False, "refuse_text": "",
+                     "note": repr(err)[:120], "overview": ""}
+    found_res["official_research_state"] = "found"
+    return found_res, checkpoint_status
+
+
+def canonical_url_key(r):
+    if not r.get("url"):
+        return None
+    p = urlparse(r["url"] if str(r["url"]).startswith("http") else "http://" + str(r["url"]))
+    return p.netloc.lower().removeprefix("www."), p.path.rstrip("/")
+
+
+def candidate_allowed(candidate_url, store=None):
+    return not is_ng_url(candidate_url, store)
+
+
+def _name_key(r):
+    return "".join(hp_finder._tokens(r.get("name", ""), r.get("area", ""))) or str(r.get("name", "")).strip().lower()
+
+
+def store_identity_key(r):
+    place_id = r.get("place_id") or r.get("source_place_id") or r.get("google_place_id")
+    if place_id:
+        return "place", str(place_id)
+    url_key = canonical_url_key(r)
+    if not url_key:
+        return None
+    tel = hp_verify.tel_digits(r.get("tel", "") or r.get("phone", ""))
+    addr = hp_verify.addr_key(r.get("address", ""))
+    if tel and addr:
+        return "url_addr_tel", url_key, addr, tel
+    if tel:
+        return "url_tel", url_key, tel
+    if addr:
+        name = _name_key(r)
+        return ("url_addr_name", url_key, addr, name) if name else None
+    return None
+
+
+def dedupe_checked_by_url(rows):
+    seen, kept, removed = {}, [], []
+    for r in rows:
+        key = store_identity_key(r)
+        if not key:
+            kept.append(r)
+            continue
+        if key in seen:
+            base = seen[key]
+            dup = f'{r.get("name", "")} / {r.get("source", "")}'.strip(" /")
+            old = base.get("duplicate_removed", "")
+            base["duplicate_removed"] = (old + " | " if old else "") + dup
+            removed.append(r)
+            continue
+        seen[key] = r
+        kept.append(r)
+    return kept, removed
+
+
+def is_output_ng(r, store=None):
+    if store is not None:
+        return store.is_ng([r.get("url", ""), r.get("form_url", "")])
+    return (
+        ng_list.is_ng(r.get("url", ""))
+        or ng_list.is_ng_form(r.get("url", ""))
+        or ng_list.is_ng_form(r.get("form_url", ""))
+    )
+
+
+def assign_budget_line_ids(rows):
+    for i, r in enumerate(rows, 1):
+        if not r.get("_budget_line_id"):
+            r["_budget_line_id"] = f"row-{i}:{source_key(r)}:{r.get('name', '')}:{r.get('area', '')}"
+
+
+BUDGET_STOP_COLS = [
+    "name", "industry", "area", "hp_url", "stage", "current_url", "candidate_url", "source",
+    "source_detail", "stop_reason", "saved_at",
+]
+
+
+def _record_budget_stop_row(r, reason, stage="", current_url=""):
+    details = list(r.get("_candidate_verify_details", []) or [])
+    candidate_url = r.get("_budget_stop_candidate_url", "")
+    if not candidate_url and details:
+        candidate_url = details[-1].get("candidate_url", "")
+    stage = r.get("_budget_stop_stage", stage)
+    current_url = r.get("_budget_stop_current_url", current_url)
+    _append_candidate_details(r)
+    if stage != "official_site_research" and "hp_verify:" not in str(r.get("source_detail", "")) and r.get("url"):
+        text = _verify_detail_text({
+            "candidate_url": r.get("url", ""),
+            "category": "fetch_failed",
+            "why": "http_budget_exceeded",
+        })
+        if text:
+            append_detail(r, text)
+    append_detail(r, f"http_budget_stop:reason={str(reason).replace('|', '/')[:120]}")
+    stopped = dict(r)
+    stopped["_budget_stop_reason"] = str(reason)
+    stopped["_budget_stop_stage"] = stage
+    stopped["_budget_stop_current_url"] = current_url
+    stopped["_budget_stop_candidate_url"] = candidate_url
+    stopped["_budget_stop_saved_at"] = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+    return stopped
+
+
+def write_budget_stop_diagnostic(rows):
+    OUT_DIR.mkdir(exist_ok=True)
+    stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    for suffix in [""] + [f"_{i:02d}" for i in range(1, 1000)]:
+        path = OUT_DIR / f"http_budget_stop_diagnostic_{stamp}{suffix}.csv"
+        try:
+            with open(path, "x", encoding="utf-8-sig", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(BUDGET_STOP_COLS)
+                for r in rows:
+                    w.writerow(safe_output_row([
+                        r.get("name", ""),
+                        r.get("industry", ""),
+                        r.get("area", ""),
+                        r.get("url", ""),
+                        r.get("_budget_stop_stage", ""),
+                        r.get("_budget_stop_current_url", ""),
+                        r.get("_budget_stop_candidate_url", ""),
+                        r.get("source", ""),
+                        r.get("source_detail", ""),
+                        r.get("_budget_stop_reason", ""),
+                        r.get("_budget_stop_saved_at", ""),
+                    ]))
+            return path
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"could not create unique http budget diagnostic file for {stamp}")
+
+
+def run_checks(rows, workers=4, resume_checks=False, retry_limit=2, official_research=False, budget=None, ng_store=None):
+    assign_budget_line_ids(rows)
+    done = [0]
+    budget_stop_rows = []
+    budget_stop_lock = Lock()
+
+    def one(r):
+        _clear_budget_stop_state(r)
+        record_comparison_audit(r)
+        checkpoint_status = ""
+        line_id = hp_finder._line_id(r)
+        try:
+            res, checkpoint_status, err = _check_site(r["url"], r, resume_checks=resume_checks, retry_limit=retry_limit,
+                                                      budget=budget, line_id=line_id)
+            if err:
+                raise err
+            res = apply_result_state(r, res, checkpoint_status)
+            if official_research:
+                res, checkpoint_status = research_official_site(r, res, resume_checks=resume_checks, retry_limit=retry_limit,
+                                                                budget=budget, line_id=line_id, ng_store=ng_store)
+                res = apply_result_state(r, res, checkpoint_status)
+            judge_hp(r, res)
+        except HttpBudgetExceeded as e:
+            try:
+                stopped = _record_budget_stop_row(r, e, stage="initial_check", current_url=r.get("url", ""))
+                with budget_stop_lock:
+                    budget_stop_rows.append(stopped)
+            except Exception as record_error:
+                log(f"HTTP budget stopped; diagnostic row record failed: {record_error!r}")
+            raise
+        except Exception as e:  # keep going; record the raw error
+            if "hp_ev" in r:
+                r["discard"] = f"照合中の例外: {e!r}"[:120]  # 検索で見つけたHPは、照合できなければ使わない
+            res = {"verdict": "取得失敗", "form_url": "", "email": "", "refuse": False, "refuse_text": "", "note": repr(e)[:120], "overview": ""}
+            res = apply_result_state(r, res, checkpoint_status or "failed")
+        done[0] += 1
+        log(f"  [{done[0]}/{len(rows)}] {res['verdict']}{' 営業お断り' if res['refuse'] else ''}  {r['name']}")
+        return {**r, **res, "checked_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M")}
+
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as ex:  # different sites in parallel, same site sequential
+            return list(ex.map(one, rows))
+    except HttpBudgetExceeded:
+        try:
+            path = write_budget_stop_diagnostic(budget_stop_rows)
+            log(f"HTTP budget stopped; diagnostic saved: {path}")
+        except Exception as save_error:
+            log(f"HTTP budget stopped; diagnostic save failed: {save_error!r}")
+        raise
+
+
+def size_text(r):
+    return (r.get('size', '') + ('：' + r['size_why'] if r.get('size_why') else '')) if r.get('size') else ''
+
+
+def to_row(i, r):
+    contact = r["form_url"] if r["verdict"] in ("フォームあり", "要目視") else (r["email"] or r["form_url"])
+    status = "対象外 営業お断り" if r["refuse"] else "未着手"
+    ledger = [i, r["name"], r["industry"], r["area"], size_text(r), "", r["url"], contact, "", "", "", "", "", "", "", "", "", "", "",
+              MAIL_TYPE.get(r["industry"], ""), "", status]
+    extra = [r["verdict"], "あり" if r["refuse"] else "", r["refuse_text"], r["email"], r["note"], r["source"], r["osm_ref"], r["checked_at"], r.get("overview", ""), "", r.get("ev_text", ""), r.get("line_url", "")]
+    extra += [r.get("source_detail", ""), r.get("duplicate_removed", ""), r.get("source_key", ""),
+              r.get("contact_confidence", ""), r.get("sales_permission", ""), r.get("resume_state", ""),
+              r.get("official_research_state", ""), r.get("official_candidate_url", ""), r.get("registered_url", ""),
+              r.get("comparison_phone", ""), r.get("comparison_address", ""), r.get("comparison_source", ""),
+              r.get("comparison_source_url", ""), r.get("comparison_fetched_at", "")]
+    return ledger + extra
+
+
+
+def safe_output_cell(value):
+    if not isinstance(value, str) or not value:
+        return value
+    had_leading_control = ord(value[0]) < 32
+    value = "".join(ch if ch in "\t\r\n" or ord(ch) >= 32 else " " for ch in value)
+    trimmed = value.lstrip(" \t\r\n")
+    if trimmed and trimmed[0] in ("=", "+", "-", "@"):
+        return "'" + value
+    if had_leading_control:
+        return "'" + value
+    return value
+
+
+def safe_output_row(row):
+    return [safe_output_cell(value) for value in row]
+ORDER = {"フォームあり": 0, "要目視": 1, "メールのみ": 2, "見つからず": 3, "robots禁止": 4, "取得失敗": 5}
+
+
+def source_key(r):
+    if r.get("source_key"):
+        return r["source_key"]
+    src = r.get("source", "")
+    if "Overture" in src:
+        return "overture"
+    if "OpenStreetMap" in src:
+        return "osm"
+    if "ポータル" in src:
+        return "portal"
+    if "リスト" in src:
+        return "input"
+    if "Google" in src:
+        return "google"
+    return src.split(":")[0] or "unknown"
+
+
+def summarize_source_funnel(all_rows, deduped_targets, checked, no_url):
+    keys = sorted({source_key(r) for r in all_rows + deduped_targets + checked + no_url})
+    log("\n=== source funnel ===")
+    log("source, candidates, hp_before_dedupe, no_hp, deduped_targets, form_or_email, usable_after_checks")
+    for key in keys:
+        src_rows = [r for r in all_rows if source_key(r) == key]
+        src_targets = [r for r in deduped_targets if source_key(r) == key]
+        src_checked = [r for r in checked if source_key(r) == key]
+        contactable = sum(1 for r in src_checked if r.get("verdict") in ("フォームあり", "要手動", "メールのみ"))
+        usable = sum(1 for r in src_checked if r.get("verdict") in ("フォームあり", "要手動", "メールのみ") and not r.get("refuse"))
+        contactable = sum(1 for r in src_checked if r.get("contact_candidate"))
+        usable = sum(1 for r in src_checked if r.get("contact_candidate") and r.get("sales_permission") == "未確認")
+        log(f"{key}, {len(src_rows)}, {sum(1 for r in src_rows if r.get('url'))}, {sum(1 for r in src_rows if not r.get('url'))}, {len(src_targets)}, {contactable}, {usable}")
+
+
+def summarize_contact_states(checked):
+    automatic = sum(1 for r in checked if r.get("contact_confidence") in ("自動確認:フォーム", "自動確認:メール"))
+    candidates = sum(1 for r in checked if r.get("contact_candidate"))
+    missing = sum(1 for r in checked if r.get("contact_confidence") == "未発見")
+    official_wait = sum(1 for r in checked if r.get("contact_confidence") == "公式HP再探索待ち")
+    not_allowed = sum(1 for r in checked if str(r.get("sales_permission", "")).startswith("営業不可候補"))
+    log("\n=== contact readiness ===")
+    log(f"自動確認済み(フォーム/メール): {automatic}件")
+    log(f"候補込み(要目視含む): {candidates}件")
+    log(f"未発見: {missing}件")
+    log(f"公式HP再探索待ち: {official_wait}件")
+    log(f"営業不可候補(拒否文/用途不一致): {not_allowed}件")
+
+
+def write_outputs(checked, no_url, label):
+    reject_google_places_text_rows(list(checked) + list(no_url))
+    OUT_DIR.mkdir(exist_ok=True)
+    stamp = dt.datetime.now().strftime("%Y%m%d_%H%M")
+    safe = "".join(c for c in label if c not in '\\/:*?"<>|# ')[:30] or "リスト"
+    base = OUT_DIR / f"フォームリスト_{safe}_{stamp}"
+    n = 1
+    while True:  # 同じ場所を同じ分に2つ探しても、互いの結果を上書きしない(.csv を排他で先に作って名前を確保する)
+        try:
+            open(base.with_suffix(".csv"), "x").close()
+            break
+        except FileExistsError:
+            n += 1
+            base = OUT_DIR / f"フォームリスト_{safe}_{stamp}_{n}"
+    checked = sorted(checked, key=lambda r: (r["refuse"], ORDER.get(r["verdict"], 9)))
+    rows = [safe_output_row(to_row(i, r)) for i, r in enumerate(checked, 1)]
+    header = LEDGER_COLS + EXTRA_COLS
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "企業リスト"
+    ws.append(header)
+    for row in rows:
+        ws.append(row)
+    for c in ws[1]:
+        c.font = Font(bold=True)
+    gray = PatternFill("solid", fgColor="DDDDDD")
+    for r_idx, r in enumerate(checked, 2):
+        if r["refuse"]:
+            for c in ws[r_idx]:
+                c.fill = gray
+    ws.freeze_panes = "C2"
+    ws.auto_filter.ref = ws.dimensions
+    for col, w in zip("ABCDEFGH", (5, 30, 14, 14, 6, 8, 36, 44)):
+        ws.column_dimensions[col].width = w
+    ws2 = wb.create_sheet("URLが分からない会社")
+    ws2.append(["企業名", "業種", "エリア", "検索用リンク（クリックでGoogle検索）", "地図の元データ"])
+    for r in no_url:
+        q = quote_plus(f'{r["name"]} {r["area"]}')
+        ws2.append(safe_output_row([r["name"], r["industry"], r["area"], f"https://www.google.com/search?q={q}", r["osm_ref"]]))
+    wb.save(base.with_suffix(".xlsx"))
+    with open(base.with_suffix(".csv"), "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        w.writerows(rows)
+    return base.with_suffix(".xlsx"), base.with_suffix(".csv")
+
+
+RUN_STATS = {"out_of_area": 0}
+
+
+def out_of_area(r, area):
+    """行の住所が、指定した区・市の外にある(Googleが近くの別の区の店も返す)。住所が無い・エリアに区市町村が無いときは判定しない(False)"""
+    m = re.search(r"[^都道府県]+?[区市町村]$", area or "")
+    return bool(m and r.get("address") and m.group(0) not in r["address"])
+
+
+def limit_osm_rows(rows, limit, log):
+    """OSM の取得件数を --limit で切る。電話も住所も無い行が半数以上なら、HPを検索で補えず照合が通りにくいと警告する"""
+    no_evidence = sum(1 for r in rows if not r.get("tel") and not r.get("address"))
+    if rows and no_evidence * 2 >= len(rows):
+        log(f"  [osm] 電話も住所も無い行が {no_evidence}/{len(rows)}件あります。HPを検索で補っても、電話・住所で照合できず採れません（取得元 google の方が、電話・住所を持つ行が多いです）")
+    if len(rows) > limit:
+        log(f"  [osm] {len(rows)}件のうち、{limit}件だけを使います（--limit。HP・電話・住所を持つ行を先に残します）")
+        return sorted(rows, key=lambda r: (not r.get("url"), not (r.get("tel") or r.get("address"))))[:limit]
+    return rows
+
+
+def count_stages(fetched, checked, no_url, skip_reasons):
+    """段階別の件数を辞書で返す(出力の組み立てと検算を分けるため)。
+    候補 = HP不明 + 調べた + 調べなかった(同じHP・大手チェーン・上限超え・お断り表示で外した等。引き算で出す)
+    調べた = 自動送信の対象 + 対象にならない(理由別の合計)"""
+    reasons = {}
+    for _name, _url, reason in skip_reasons:
+        reasons[reason] = reasons.get(reason, 0) + 1
+    not_target = sum(reasons.values())
+    return {
+        "fetched": fetched,
+        "no_url": len(no_url),
+        "checked": len(checked),
+        "not_checked": fetched - len(no_url) - len(checked),
+        "reasons": reasons,
+        "sendable": len(checked) - not_target,
+    }
+
+
+def summarize_sendable(csv_path, fetched, checked, no_url):
+    """出力の最後に、候補から「自動送信の対象」までの段階別の件数と、落ちた理由別の件数を出す。
+    自動送信の対象の判定は autosend と同じ関数(target_skip_reasons)を使う(別の数え方をしない)"""
+    import autosend  # 遅延: autosend が formlist を import するため
+    outside = RUN_STATS.get("out_of_area", 0)
+    skips = autosend.target_skip_reasons(csv_path)
+    c = count_stages(fetched, checked, no_url, skips)  # fetched はエリア外を除いた後の数
+    with open(csv_path, encoding="utf-8-sig", newline="") as fh:
+        csv_rows = list(csv.DictReader(fh))
+    verified = [r for r in csv_rows if not autosend._hp_verify_skip_reason(r)]
+    form_ok = [r for r in verified if r.get(EXTRA_COLS[0]) == next(iter(ORDER))]
+    dropped = sum(1 for r in no_url if r.get("discard"))
+    c.update(verified=len(verified), form_ok=len(form_ok), dropped=dropped, outside=outside)
+    log("\n=== 件数の内訳(候補から自動送信の対象まで) ===")
+    log(f"地図・リストの候補: {c['fetched'] + outside}件")
+    if outside:
+        log(f"  住所が指定エリアの外で除外: {outside}件")
+    log(f"  ホームページ不明: {c['no_url'] - dropped}件 / 検索で見つけたHPが別会社の疑いで捨てた: {dropped}件")
+    log(f"  調べなかった(同じHP・NG・大手チェーン・上限超え・お断り表示で外した等): {c['not_checked']}件")
+    log(f"  調べた: {c['checked']}件")
+    log(f"    うちHPの照合が通った(電話一致・住所一致): {c['verified']}件 / 照合で落ちた・照合できなかった: {c['checked'] - c['verified']}件")
+    log(f"    照合が通った会社のうち、フォームあり: {c['form_ok']}件")
+    grouped = {}
+    for reason, n in c["reasons"].items():
+        key = reason.split(":")[0]
+        grouped[key] = grouped.get(key, 0) + n
+    for reason, n in sorted(grouped.items(), key=lambda kv: -kv[1]):
+        log(f"    自動送信の対象にならない({reason}): {n}件")
+    log(f"  自動送信の対象: {c['sendable']}件（調べた{c['checked']}件中）")
+    line_only = [r for r in csv_rows if r.get("LINE公式") and r.get(EXTRA_COLS[0]) != next(iter(ORDER))]
+    c["line_only"] = len(line_only)
+    log(f"  フォームが無くLINE公式がある会社: {c['line_only']}件（自動では送らない。列「LINE公式」のURLを開き、友だち追加して手で送る）")
+    log("  ※「フォームあり」は、そのHPが会社のものかの確認前の数です。送れる件数は、この「自動送信の対象」です")
+    return c
+
+
+def summarize(fetched, checked, no_url, refused=0):
+    counts = {}
+    for r in checked:
+        counts[r["verdict"]] = counts.get(r["verdict"], 0) + 1
+    refuse = refused
+    log("\n=== 結果 ===")
+    log(f"地図・リストから見つかった会社: {fetched}件")
+    log(f"  ホームページが分かった会社（同じHPの重複を除く）: {len(checked)}件を調べました / ホームページ不明: {len(no_url)}件")
+    sup = sum("補完" in r["source"] for r in checked)
+    if sup:
+        log(f"  うち {sup}件は検索で見つけたHPです（チェーン店は本部のHP。取得元の列に「補完」と入っています）")
+    for k in ORDER:
+        if counts.get(k):
+            log(f"  {k}（HPの照合前の数）: {counts[k]}件")
+    log(f"  営業お断りの表示あり（送らない）: {refuse}件")
+
+
+PARALLEL_MAX = 5  # Googleマップへの同時アクセスの上限。増やすほどブロックされやすい
+
+
+def prefetch_google(area, units, limit, workers):
+    """Googleマップの検索を、検索語(業種・キーワード)×町名の単位で並列に取る。戻りは {(単位の番号, 検索語, 町): 行の一覧 か 例外}。
+    どれか1つが例外で止まったら、まだ始めていない検索は実行しない(ブロックされたときに叩き続けないため)。
+    ブラウザは1検索ごとに自前で開いて閉じるので、スレッド間で共有するものは無い"""
+    import random
+    import time
+    from threading import Event
+    stop = Event()
+    subs = subareas.split(area)
+    jobs = []
+    for ui, (ind, kw) in enumerate(units):
+        if not kw and ind in NO_MAP:
+            continue
+        for term in ([kw] if kw else MAP_TERMS.get(ind) or ind.split("・")):
+            for sub in subs:
+                jobs.append((ui, term, sub))
+
+    def run(job):
+        ui, term, sub = job
+        if stop.is_set():
+            return job, RuntimeError("ほかの検索が止まったため、この検索は実行しませんでした")
+        time.sleep(random.uniform(0, 2))  # 同時に始めた検索が、同じ瞬間にGoogleへ集中しないようにずらす
+        try:
+            return job, map_browser_source.fetch("google", sub, term, log, limit=limit)
+        except Exception as e:
+            stop.set()
+            return job, e
+
+    workers = max(1, min(PARALLEL_MAX, workers))
+    if len(jobs) > 1 and workers > 1:
+        log(f"\n{len(jobs)}件の検索（検索語×町名）を、最大{workers}本ずつ並行して取得します")
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        return dict(ex.map(run, jobs))
+
+
+def main(budget=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--area")
+    ap.add_argument("--industry", action="append")
+    ap.add_argument("--keyword", action="append", help="会社名・施設名に含まれる語(何個でも)")
+    ap.add_argument("--limit", type=positive_int, default=200)
+    ap.add_argument("--parallel", type=int, default=3, help="Googleマップを同時に何本取るか(1〜5。既定3。増やすとブロックされやすい)")
+    ap.add_argument("--source", action="append", choices=["osm", "google", "google_places_text"], help="地図の取得元(何個でも。既定google。Yahoo!マップは外した)")
+    ap.add_argument("--input", help="CSV/TXT of company names or URLs")
+    ap.add_argument("--overture-file", help="Locally extracted Overture Places CSV/JSONL/GeoJSON")
+    ap.add_argument("--overture-release", default="2026-09-23.1")
+    ap.add_argument("--overture-license", default="CDLA-Permissive-2.0/Apache-2.0")
+    ap.add_argument("--boundary-geojson", help="Optional ward boundary GeoJSON for strict point-in-polygon filtering")
+    ap.add_argument("--portal", help="ポータルサイト等のURL。掲載企業のHPを自動で集める")
+    ap.add_argument("--include-large", action="store_true", help="大手・チェーンと推定した会社も調べる(既定は外す)")
+    ap.add_argument("--ng", help="送らない会社のドメイン一覧(1行1件のTXT/CSV)。既存客・競合を入れる")
+    ap.add_argument("--ng-state-db", help="SQLite DB for NG and send-state gating")
+    ap.add_argument("--resume-checks", action="store_true", help="サイト確認結果を既存SQLiteに保存し、途中停止後に行単位で再開する")
+    ap.add_argument("--check-retry-limit", type=int, default=2, help="--resume-checks 時の取得再試行上限")
+    ap.add_argument("--official-research", action="store_true", help="SNS/portal/no-contact URLs are re-searched for an official HP, then checked again")
+    a = ap.parse_args()
+    ng_store = open_ng_state_store(a.ng_state_db)
+
+    if a.source and "google_places_text" in a.source:
+        log(GOOGLE_PLACES_TEXT_BLOCK)
+        return 1
+
+    if a.portal:
+        try:
+            rows, label = portal_source.fetch(a.portal, a.limit, log), "ポータル_" + urlparse(a.portal).netloc
+        except RuntimeError as e:
+            log(f"止まりました: {e}")
+            return 1
+    elif a.input or a.overture_file:
+        rows = read_input_file(a.input) if a.input else []
+        label = Path(a.input).stem if a.input else "overture"
+    else:
+        if a.area and (a.industry or a.keyword):
+            area, inds, limit = a.area, a.industry or [], a.limit
+        else:
+            area, inds, limit = ask_interactive()
+        a.limit, label, rows = limit, area, []
+        blocked = set()
+        units = [(i, None) for i in inds] + [("キーワード", k) for k in (a.keyword or [])]
+        pre = prefetch_google(area, units, a.limit, a.parallel) if "google" in (a.source or ["google"]) else {}
+        for ui, (ind, kw) in enumerate(units):
+            log(f"\n{area} の " + (f"「{kw}」を名前に含む施設" if kw else ind) + " を地図データから探しています...")
+            for src in a.source or ["google"]:
+                if src in blocked:
+                    continue
+                if src != "osm" and not kw and ind in NO_MAP:
+                    log(f"  [{src}] 「{ind}」は地図で引ける言葉がないため、飛ばします")
+                    continue
+                try:
+                    if src == "osm":
+                        got = osm_source.fetch_keyword(area, kw, log) if kw else osm_source.fetch(area, ind, log)
+                        got = limit_osm_rows(got, a.limit, log)
+                    else:
+                        got = []
+                        subs = subareas.split(area)
+                        if len(subs) == 1:
+                            log(f"  {area} は町名の分割表が無いため、区・市全体を1つの検索で探します。地図は1検索で数十件までしか出ないため、取りこぼしがあります")
+                        for term in ([kw] if kw else MAP_TERMS.get(ind) or ind.split("・")):
+                            for sub in subs:
+                                part = pre[(ui, term, sub)]
+                                if isinstance(part, BaseException):
+                                    raise part
+                                for g in part:
+                                    g["area"] = area  # 町名は検索のためだけに使う。エリアの欄は元の指定のまま
+                                got += part
+                        for g in got:
+                            g["industry"] = kw or ind  # 業種の欄は元の業種名のまま(文面・メール型の選択に使う)
+                except Exception as e:  # ValueError・RuntimeError・playwright の例外・未インストール等。他の取得元の結果は残す
+                    log(f"  [{src}] 止まりました: {e}")
+                    if src == "google":
+                        blocked.add(src)  # ブロックされた可能性。この回はもう Google を叩かない
+                        log("  Googleマップは、この回ではもう使いません")
+                    continue
+                kept = [g for g in got if not out_of_area(g, area)]
+                if len(kept) != len(got):
+                    outside = [g for g in got if out_of_area(g, area)]
+                    RUN_STATS["out_of_area"] += len(outside)
+                    log(f"  [{src}] 住所が「{area}」の外にある店 {len(outside)}件を除きました（例: " + "、".join(f"{g['name'][:12]}［{g.get('address', '')[:18]}］" for g in outside[:3]) + "）")
+                    got = kept
+                log(f"  [{src}] {len(got)}件見つかりました（うちホームページが分かる会社 {sum(1 for g in got if g['url'])}件）")
+                rows += got
+    if a.overture_file:
+        got = overture_source.fetch_file(a.overture_file, area=a.area or "東京都江東区",
+                                         release=a.overture_release, license_text=a.overture_license,
+                                         boundary_geojson=a.boundary_geojson, log=log)
+        rows += got
+        label = (label + "_overture") if label != "overture" else label
+    fetched = len(rows)
+    if fetched == 0:
+        log("\n会社が1件も見つかりませんでした。エリア名を市区町村まで入れる、業種を変える、を試してください。")
+        return 1
+    reject_google_places_text_rows(rows)
+    assign_budget_line_ids(rows)
+    missing = sum(1 for r in rows if not r["url"])
+    if missing:
+        log(f"\nホームページが地図に載っていない会社 {missing}件を、会社名で検索して探します（1件あたり十数秒。電話と住所でその会社のHPかを照合します）...")
+        n, tried = hp_finder.fill(rows, log, want=max(a.limit * 2, 20), candidate_allowed=lambda u: candidate_allowed(u, ng_store), budget=budget)
+        log(f"  {n}件のホームページが分かりました（今回あらたに検索 {tried}件）")
+    size_guess.mark(rows)
+    targets, no_url = dedupe(rows)
+    deduped_before_limit = list(targets)
+    dup = sum(1 for r in rows if r["url"]) - len(targets)
+    if dup > 0:
+        log(f"同じホームページとみなして除いた会社: {dup}件")
+    if a.ng:
+        targets, ng_n = apply_ng(targets, a.ng)
+        log(f"NGリストに該当して除外: {ng_n}件")
+    before = len(targets)
+    targets = [r for r in targets if not is_ng_url(r["url"], ng_store)]  # configured NG source
+    if before != len(targets):
+        log(f"自動NGリストに該当して除外: {before - len(targets)}件")
+    big = [r for r in targets if r["size"] != "中小(推定)"]
+    if big and not a.include_large:
+        targets = [r for r in targets if r["size"] == "中小(推定)"]
+        log(f"大手・チェーンと推定して外した会社: {len(big)}社（例: " + "、".join(f"{r['name']}［{r['size_why']}］" for r in big[:4]) + "）。含めたいときは「大手・チェーンも含める」を入れてください")
+    else:
+        targets.sort(key=lambda r: r["size"] != "中小(推定)")  # 含める場合も、中小を先に調べる
+    cut = max(0, len(targets) - a.limit)
+    targets = targets[:max(1, a.limit)]
+    if cut:
+        log(f"上限{a.limit}社を超えた {cut}社は調べていません（後ろの業種・取得元から落ちます）")
+    log(f"\n{len(targets)}社のホームページで、問い合わせフォームを探します（1社あたり数秒〜十数秒）...")
+    checked = run_checks(targets, resume_checks=a.resume_checks, retry_limit=a.check_retry_limit,
+                         official_research=a.official_research, budget=budget, ng_store=ng_store)
+    checked, rededuped = dedupe_checked_by_url(checked)
+    if rededuped:
+        no_url += rededuped
+        log(f"official HP re-search duplicate removed: {len(rededuped)}")
+    final_ng = [r for r in checked if is_output_ng(r, ng_store)]
+    if final_ng:
+        checked = [r for r in checked if not is_output_ng(r, ng_store)]
+        no_url += final_ng
+        log(f"final NG re-check removed: {len(final_ng)}")
+    dropped = [r for r in checked if r.get("discard")]
+    if dropped:
+        checked = [r for r in checked if not r.get("discard")]
+        no_url += dropped  # 「URLが分からない会社」の表に残す(検索用リンクで手で探せる)
+        log(f"検索で見つけたHPが別会社の疑いで捨てた会社: {len(dropped)}社（例: " + "、".join(f"{r['name']}［{r['discard'][:30]}］" for r in dropped[:3]) + "）")
+    refused = [r for r in checked if r["refuse"]]
+    added = sum(add_auto_ng(r["url"], "refused_form: " + r["refuse_text"][:30], r["name"], ng_store) for r in refused)
+    checked = [r for r in checked if not r["refuse"]]  # お断りの会社は一覧に出さず、NGリストへ入れる
+    if refused:
+        log(f"営業お断りの表示があった会社 {len(refused)}件を一覧から外しました（NGリストに新しく入れたのは {added}件）")
+    summarize_source_funnel(rows, deduped_before_limit, checked, no_url)
+    summarize_contact_states(checked)
+    summarize(fetched, checked, no_url, refused=len(refused))
+    x, c = write_outputs(checked, no_url, label)
+    log(f"\n保存しました:\n  {x}\n  {c}")
+    try:
+        summarize_sendable(c, fetched, checked, no_url)
+    except Exception as e:  # 件数の内訳が出せなくても、収集の結果は保存済み。理由を残す
+        log(f"件数の内訳を出せませんでした: {e!r}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
+
+
