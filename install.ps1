@@ -73,6 +73,44 @@ function Write-NetError($err, $what) {
     Write-Host "（元のメッセージ: $m）"
 }
 
+# ログイン時の自動起動と、デスクトップの起動用ショートカット。パソコンを再起動しても、画面が止まったままにならないようにする
+# 試走(-DryRunRegister)のときは、置き場を FORMLIST_SHORTCUT_ROOT で指定しない限り、何も作らない
+$StartupLnk = "AIまるなげ営業_自動起動.lnk"
+$DesktopLnk = "AIまるなげ営業.lnk"
+function Get-ShortcutDirs {
+    if ($env:FORMLIST_SHORTCUT_ROOT) { return @{ Startup = [IO.Path]::Combine($env:FORMLIST_SHORTCUT_ROOT, "Startup"); Desktop = [IO.Path]::Combine($env:FORMLIST_SHORTCUT_ROOT, "Desktop") } }
+    if ($DryRunRegister) { return $null }
+    return @{ Startup = [Environment]::GetFolderPath("Startup"); Desktop = [Environment]::GetFolderPath("Desktop") }
+}
+function New-Lnk([string]$Path, [string]$Target, [string]$Arguments, [string]$Dir, [int]$Style, [string]$Desc) {
+    New-Item -ItemType Directory -Force -Path (Split-Path $Path) | Out-Null
+    $l = (New-Object -ComObject WScript.Shell).CreateShortcut($Path)
+    $l.TargetPath = $Target; $l.Arguments = $Arguments; $l.WorkingDirectory = $Dir; $l.WindowStyle = $Style; $l.Description = $Desc
+    $l.Save()
+}
+function Remove-Shortcuts {
+    $d = Get-ShortcutDirs
+    if (-not $d) { return }
+    foreach ($p in @([IO.Path]::Combine($d.Startup, $StartupLnk), [IO.Path]::Combine($d.Desktop, $DesktopLnk))) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
+}
+function Set-Shortcuts {
+    $d = Get-ShortcutDirs
+    if (-not $d) { Write-Host "（試走のため、ショートカットは作っていません）"; return $true }
+    try {
+        $exe = (@(Invoke-Py -Rest @("-c", "import sys; print(sys.executable)")) | Select-Object -Last 1).ToString().Trim()
+        $w = [IO.Path]::Combine((Split-Path $exe), "pythonw.exe")
+        if (Test-Path -LiteralPath $w) { $exe = $w }
+        if (-not (Test-Path -LiteralPath $exe)) { throw "Python の場所を確かめられませんでした: $exe" }
+        $app = [IO.Path]::Combine($AppDir, "app.py")
+        New-Lnk ([IO.Path]::Combine($d.Startup, $StartupLnk)) $exe "-X utf8 `"$app`" --no-browser" $AppDir 7 "AIまるなげ営業の画面を、パソコンを開いたときに自動で起動します"
+        New-Lnk ([IO.Path]::Combine($d.Desktop, $DesktopLnk)) $exe "-X utf8 `"$app`"" $AppDir 7 "AIまるなげ営業の画面を開きます（止まっていれば起動します）"
+        return $true
+    } catch {
+        Write-Host "自動起動のショートカットを作れませんでした（$($_.Exception.Message)）。画面が開かないときは、Claude に「営業ツールを起動して」と話しかけてください。"
+        return $false
+    }
+}
+
 function Test-SamePath([string]$a, [string]$b) {
     try { return ([IO.Path]::GetFullPath($a).TrimEnd("\") -ieq [IO.Path]::GetFullPath($b).TrimEnd("\")) } catch { return $false }
 }
@@ -202,6 +240,7 @@ if ($Uninstall) {
     $bad = 0
     if (-not (Stop-ToolServers $AppDir)) { exit 1 }
     $script:Py = Find-Python
+    Remove-Shortcuts
     $reg = [IO.Path]::Combine($AppDir, "mcp_register.py")
     if (-not $script:Py) {
         Write-Host "Python が見つからないので、Claude の登録を自動では外せません。Claude の設定の「開発者」(Developer) から formlist を削除してください。"; $bad = 1
@@ -394,9 +433,11 @@ Push-Location $AppDir
 try { Invoke-Py -Rest $rest | Out-Host; $regCode = $LASTEXITCODE } finally { Pop-Location }
 if ($regCode -ne 0) { Write-Host "Claude への登録で問題が起きました（終了コード $regCode）。$Ask"; exit 1 }
 
+$shortcutOk = Set-Shortcuts
 Write-Host ""
 Write-Host "インストールが終わりました。"
-Write-Host "確かめたこと: $($checked)Claude への登録を書いたこと$(if ($DryRunRegister) { '（試走のため、実際には書いていません）' })。"
+Write-Host "確かめたこと: $($checked)Claude への登録を書いたこと$(if ($DryRunRegister) { '（試走のため、実際には書いていません）' })。$(if ($shortcutOk -and -not $DryRunRegister) { '起動用のショートカットを作ったこと。' })"
+if ($shortcutOk -and -not $DryRunRegister) { Write-Host "パソコンを開くたびに、画面が自動で用意されます。止まっていても、デスクトップの「AIまるなげ営業」を押すと開きます。" }
 if ($SkipDeps) { Write-Host "確かめていないこと: 部品と専用ブラウザ（-SkipDeps のため）。" }
 Write-Host "確かめていないこと: Claude の画面から AIまるなげ営業が見えるか。次の手順で確かめます。"
 Write-Host "1. Claude を完全に終了します（画面右下の「^」の中にある Claude の絵を右クリックして「終了」）"

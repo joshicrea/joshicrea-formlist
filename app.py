@@ -647,6 +647,7 @@ PAGE = (HERE / "ui.html").read_text(encoding="utf-8")  # 画面。デザイン�
 
 
 if __name__ == "__main__":
+    NO_BROWSER = bool(os.environ.get("FORMLIST_NO_BROWSER")) or "--no-browser" in sys.argv  # 画面を開かずに起動する(MCP・ログイン時の自動起動)
     OUT.mkdir(exist_ok=True)
     import socket
     with socket.socket() as s:
@@ -661,7 +662,7 @@ if __name__ == "__main__":
             if not mine:
                 print(f"{PORT}番は、このツールではない別のアプリが使っています。そのアプリを閉じるか、FORMLIST_PORT に8780〜8790の空いている番号を入れて起動してください")
                 sys.exit(1)
-            if not os.environ.get("FORMLIST_NO_BROWSER"):  # MCP から起動したときは画面を開かない
+            if not NO_BROWSER:  # MCP やログイン時の自動起動のときは画面を開かない
                 webbrowser.open(f"http://127.0.0.1:{PORT}/")  # すでに動いている。新しく起動せず、画面だけ開く
             sys.exit(0)
     init_ng_store()
@@ -672,7 +673,7 @@ if __name__ == "__main__":
     srv = Srv(("127.0.0.1", PORT), H)
     url = f"http://127.0.0.1:{PORT}/"
     print(f"ブラウザで {url} を開いてください。終わるときはこの黒い画面を閉じます。")
-    if not os.environ.get("FORMLIST_NO_BROWSER"):
+    if not NO_BROWSER:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     srv.serve_forever()
 
