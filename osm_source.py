@@ -10,7 +10,7 @@ import time
 
 import requests
 
-UA = "IshizukaFormListTool/1.0 (small business lead list; respects rate limits)"
+UA = "AiMarunageEigyoTool/1.0 (small business lead list; respects rate limits)"
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
 OVERPASS_URLS = [
     "https://overpass-api.de/api/interpreter",

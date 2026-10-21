@@ -27,7 +27,7 @@ from bs4 import BeautifulSoup
 import hp_verify
 import netguard
 
-UA = "IshizukaFormListTool/1.0 (checks public contact pages only; no submission)"
+UA = "AiMarunageEigyoTool/1.0 (checks public contact pages only; no submission)"
 TIMEOUT = 15
 INTERVAL = 1.2  # seconds between requests to the same site
 
@@ -38,9 +38,36 @@ EXTERNAL_FORM = re.compile(
     r"tayori\.com|hsforms|forms\.office\.com|mktoweb|pardot|jotform|typeform|"
     r"kintoneapp|questant|secure\.shop-pro\.jp/\?mode=inq|ssl\.form-mailer|f\.msgs\.jp|talkappi", re.I)
 OTHER_PURPOSE = re.compile(r"出店|テナント|出展|広告媒体|広告掲載|媒体|採用|求人|openstore|tenant|recruit|advertis", re.I)
-# matched against the host name only, anchored (x.com must not match livemax.com)
-SOCIAL = re.compile(r"(^|\.)(youtube\.com|youtu\.be|x\.com|twitter\.com|instagram\.com|facebook\.com|tiktok\.com|line\.me|lin\.ee|ameblo\.jp|lit\.link|linktr\.ee|nailbook\.jp|hotpepper\.jp|b-merit\.jp|tol-app\.jp|hpr\.jp|minimo\.jp|rekubi\.com|epark\.jp|ekiten\.jp)$", re.I)
-BAD_MAIL = re.compile(r"privacy|recruit|saiyo|jinji|ir@|example|sentry|wixpress|@.*\.(png|jpg|gif|webp)$", re.I)
+# 会社のホームページではないページの置き場(SNS・予約・掲載・口コミ・地図)。地図に登録のHP・検索で見つけたHP・ポータルの外部リンクの
+# 3か所で同じ表を使う(2026-10-21 破壊レポート 致命傷3: 地図のHP欄が楽天トラベル・じゃらん等だと、施設の電話が載るので照合が通り「送れる」になっていた)。
+# ホスト名の末尾で照合する(x.com が livemax.com に当たらないように、区切りの「.」から)。増やすときは、会社が自分のHPを置かないドメインだけ入れる
+SNS_HOSTS = ("youtube.com", "youtu.be", "x.com", "twitter.com", "instagram.com", "facebook.com", "tiktok.com", "line.me", "lin.ee",
+             "ameblo.jp", "lit.link", "linktr.ee", "note.com", "threads.net")
+PORTAL_HOSTS = (
+    # 美容・サロンの予約・掲載
+    "nailbook.jp", "hotpepper.jp", "b-merit.jp", "tol-app.jp", "hpr.jp", "minimo.jp", "minimodel.jp", "rekubi.com", "epark.jp", "ekiten.jp",
+    "salonboard.com", "ozmall.co.jp", "reserva.be", "airrsv.net", "coubic.com",
+    # 宿・旅行の予約
+    "rakuten.co.jp", "jalan.net", "ikyu.com", "booking.com", "expedia.co.jp", "expedia.com", "hotels.com", "agoda.com", "trip.com",
+    "tripadvisor.jp", "tripadvisor.com", "relux.jp", "yadoplaza.com", "jtb.co.jp", "knt.co.jp", "travel.yahoo.co.jp",
+    # 飲食の掲載
+    "tabelog.com", "gnavi.co.jp", "retty.me", "hitosara.com",
+    # 住宅・不動産の掲載
+    "suumo.jp", "homes.co.jp", "athome.co.jp", "chintai.net",
+    # ブライダルの掲載
+    "zexy.net", "mwed.jp", "weddingpark.net", "hanayume.com",
+    # 地図・電話帳・口コミ
+    "itp.ne.jp", "mapion.co.jp", "navitime.co.jp", "loco.yahoo.co.jp",
+)
+SOCIAL = re.compile(r"(^|\.)(" + "|".join(re.escape(h) for h in SNS_HOSTS + PORTAL_HOSTS) + r")$", re.I)
+
+
+def is_not_company_site(url_or_host):
+    """SNS・予約・掲載・口コミのページか(その会社のホームページとして扱わない)"""
+    u = str(url_or_host or "")
+    host = urlparse(u if "//" in u else "//" + u).netloc.split(":")[0]
+    return bool(host and SOCIAL.search(host))
+BAD_MAIL = re.compile(r"privacy|recruit|saiyo|jinji|\bir@|example|sentry|wixpress|@.*\.(png|jpg|gif|webp)$", re.I)
 REFUSE = re.compile(
     r"(営業(?:目的|電話|メール|活動|行為|の?ご?連絡|の?お?問い?合わせ|のお?電話)|セールス|勧誘|売り?込み|提案目的|宣伝目的|広告目的|sales(?:inquir|call|email|solicit))[^。\n]{0,30}\n?[^。\n]{0,30}"
     r"(お断り|ご遠慮|遠慮願|お控えください|禁止|おやめ|不要です|受け?付け?(し)?て(い|お)りません|受け?付け?(いた)?しません|"
@@ -58,6 +85,8 @@ def refuse_in(text):
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 SKIP_LINK = re.compile(r"予約|reserv|booking|member|login|password|resetp|regist|会員登録|ログイン|mente|maintenance|落とし物|忘れ物|lost|_tel|faq|よくある", re.I)
+SKIP_LINK_HARD = re.compile(r"member|login|password|resetp|regist|会員登録|ログイン|mente|maintenance|落とし物|忘れ物|lost|_tel|faq|よくある", re.I)
+SKIP_LINK_SOFT = re.compile(r"予約|reserv|booking", re.I)  # 「ご予約・お問い合わせ」のように問い合わせの語も並ぶリンクは捨てない
 FALLBACK_PATHS = (
     "/contact/", "/contact.html", "/contact-us/", "/inquiry/", "/inquiry.html",
     "/mailform/", "/mail-form/", "/form/", "/otoiawase/",
@@ -196,8 +225,11 @@ class Site:
 
 
 NOT_INQUIRY = re.compile(r"search|newsletter|mailmag|mail-?magazine|メルマガ|subscribe|login|signin|member|cart|comment|"
-                         r"reserv|booking|yoyaku|予約|entry|recruit|apply|review|survey|enquete|myasp|acmailer|list-manage|benchmark", re.I)
+                         r"recruit|apply|review|survey|enquete|myasp|acmailer|list-manage|benchmark", re.I)
+# 予約・エントリーの印。フォームの文言に問い合わせ・相談の語があれば、問い合わせフォームとして採る(「ご予約・ご相談はこちら」・class=entry-form)
+NOT_INQUIRY_SOFT = re.compile(r"reserv|booking|yoyaku|予約|entry", re.I)
 NOT_INQUIRY_TEXT = re.compile(r"予約|応募|エントリー|アンケート|口コミ|メルマガ|メールマガジン|ログイン|会員登録|資料請求")
+INQUIRY_TEXT = re.compile(r"お問い?合わ?せ|問合せ|問い合わせ|ご?相談|ご?質問|contact|inquiry|toiawase", re.I)
 INQUIRY_FIELDS = re.compile(r"subject|件名|message|content|body|用件|内容|inquiry|toiawase", re.I)  # 氏名・電話だけではメルマガ登録や申込と区別できない
 
 
@@ -207,8 +239,11 @@ def _is_inquiry_form(f):
     if NOT_INQUIRY.search(attrs):
         return False
     shown = f.get_text(" ", strip=True)[:400]
-    if NOT_INQUIRY_TEXT.search(shown) and not STRONG_WORDS.search(shown):
-        return False  # 予約・応募・アンケートなどの文言があり、問い合わせの語が無いフォーム
+    asks = INQUIRY_TEXT.search(shown)
+    if NOT_INQUIRY_SOFT.search(attrs) and not asks:
+        return False  # 予約・エントリーの印があり、問い合わせ・相談の語が無いフォーム
+    if NOT_INQUIRY_TEXT.search(shown) and not asks:
+        return False  # 予約・応募・アンケートなどの文言があり、問い合わせ・相談の語が無いフォーム
     inputs = f.find_all("input")
     if any((i.get("type") or "").lower() in ("password", "search") for i in inputs):
         return False
@@ -263,8 +298,10 @@ def contact_links(soup, page_url):
             continue
         label = a.get_text(" ", strip=True) + " " + (a.get("title") or "") + " " + " ".join(
             i.get("alt", "") for i in a.find_all("img"))
-        if SKIP_LINK.search(label + " " + href):
+        if SKIP_LINK_HARD.search(label + " " + href):
             continue
+        if SKIP_LINK_SOFT.search(label + " " + href) and not STRONG_WORDS.search(label + " " + href):
+            continue  # 予約だけのリンク。「ご予約・お問い合わせ」は採る
         hit_label = STRONG_WORDS.search(label)
         hit_href = CONTACT_WORDS.search(href) or EXTRA_CONTACT_WORDS.search(href)
         if not (hit_label or hit_href):
@@ -325,7 +362,7 @@ def find_line_url(html):
     return m.group(0).rstrip(".,;") if m else ""
 
 
-CHECK_RULES = "r4"  # フォーム判定・照合・URL欄の規則を変えたら必ず上げる。古い規則で出た判定を保存結果から再利用しない(行の指紋に含める)
+CHECK_RULES = "r5"  # フォーム判定・照合・URL欄の規則を変えたら必ず上げる。古い規則で出た判定を保存結果から再利用しない(行の指紋に含める)
 
 
 RECRUIT_TITLE = re.compile(r"求人|採用|募集|リクルート|recruit|career", re.I)  # 迷う題名は要目視へ(安全側)
@@ -387,9 +424,9 @@ def check(url, max_pages=MAX_CONTACT_PAGES, row=None, budget=None, line_id=None)
     res = {"verdict": "見つからず", "form_url": "", "email": "", "refuse": False, "refuse_text": "", "note": "", "overview": "", "ev": "", "ev_why": "", "line_url": ""}
     if not url.startswith("http"):
         url = "http://" + url
-    if SOCIAL.search(urlparse(url).netloc):
+    if is_not_company_site(url):
         res["needs_official_search"] = True
-        res.update(verdict="見つからず", note="登録URLがSNS・動画のページ")
+        res.update(verdict="見つからず", note="登録URLがSNS・予約サイト・掲載サイトのページ（会社のホームページではない）")
         return res
     site = Site(url, budget=budget, line_id=line_id)
     final, html = site.get(url)

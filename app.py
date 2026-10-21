@@ -22,6 +22,10 @@ from urllib.parse import parse_qs, urlparse, quote
 import time
 import filelock
 import ng_list
+import approval
+import message_adoption
+import sales_records
+import send_rules
 import osm_source
 import state
 from ng_state_store import NgStateStore
@@ -37,7 +41,7 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 PY = sys.executable[:-len("pythonw.exe")] + "python.exe" if sys.executable.lower().endswith("pythonw.exe") else sys.executable
 JOB = {"lines": [], "running": False, "name": ""}
 APPROVED = {"key": None}  # 画面で人が「この全文で送ることを承認する」を押した印。AI(MCP)からの本番送信に要る
-PREVIEW = {"key": None}  # 本番の前に「対象と全文の確認」を済ませた印。本番を始めたら消す
+PREVIEW = {"key": None, "names": []}  # 本番の前に「対象と全文の確認」を済ませた印と、その確認に出た会社名。本番を始めたら消す
 LOCK = threading.Lock()
 _NG_STORE = None
 TOKEN = secrets.token_urlsafe(24)  # 起動のたびに変わる。他サイトの画面からの操作を断るためのもので、同じPC上のプロセスは画面を読めば取れる
@@ -48,16 +52,16 @@ GOOGLE_PLACES_TEXT_BLOCK = "Google Places Text Search is not connected. API term
 VERSION = hashlib.sha256(b"".join((HERE / f).read_bytes() for f in ("app.py", "autosend.py", "ng_list.py", "site_checker.py"))).hexdigest()[:12]  # 古い版が動き続けていないかをMCPが照合する(読み込み済みの部品も含める)
 
 
-def run_job(name, args, stdin_text=None, on_ok=None):
+def run_job(name, args, stdin_text=None, on_ok=None, extra_env=None):
     with LOCK:
         if JOB["running"]:
             return False
-        JOB.update(lines=[], running=True, name=name, code=None, proc=None)
+        JOB.update(lines=[], running=True, name=name, code=None, proc=None, started=time.strftime("%Y-%m-%dT%H:%M:%S"))
 
     def work():
         code = None
         try:
-            env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONWARNINGS="ignore")
+            env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONWARNINGS="ignore", **(extra_env or {}))
             p = subprocess.Popen([PY, "-X", "utf8", *args], cwd=HERE, env=env, stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                                  errors="replace", creationflags=NO_WINDOW)
@@ -83,6 +87,22 @@ def run_job(name, args, stdin_text=None, on_ok=None):
     return True
 
 
+def preview_names(lines):
+    """確認(--preview)の出力に出た、送る会社の名前。承認ダイアログに出す"""
+    out = []
+    for line in lines:
+        m = re.match(r"===== 送る文面 (.+?)（業種", line)
+        if m:
+            out.append(m.group(1))
+    return out
+
+
+def set_preview(key):
+    PREVIEW["key"] = key
+    PREVIEW["names"] = preview_names(JOB["lines"])
+    APPROVED["key"] = None
+
+
 def read_csv(path):
     with open(path, encoding="utf-8-sig", newline="") as f:
         return list(csv.DictReader(f))
@@ -90,7 +110,8 @@ def read_csv(path):
 
 def outputs():
     OUT.mkdir(exist_ok=True)
-    return sorted((p.name for p in OUT.glob("フォームリスト_*.csv")), reverse=True)
+    files = [p for p in OUT.glob("フォームリスト_*.csv") if p.stat().st_size > 0]
+    return [p.name for p in sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)]
 
 
 def messages():
@@ -303,6 +324,30 @@ class H(BaseHTTPRequestHandler):
             return False
         return True
 
+    def manual_kit(self, q, ng_store):
+        """自動で送れなかった会社(要手動・手で確かめる)に、会社ごとに置き換えた件名と全文を出す。送るのは本人の手"""
+        p = safe_out(q.get("file", ""))
+        if not p or not SENDER.exists():
+            return self.send(400, {"error": "リストと送信元を先に決めてください"})
+        import autosend
+        sender = json.loads(SENDER.read_text(encoding="utf-8-sig"))
+        manual = {url for (_n, url), r in sales_records.final_states(LOG).items() if r.get("結果") == "要手動"}
+        rows = []
+        for r in read_csv(p):
+            url = r.get("問い合わせフォームURL 無ければメール", "")
+            if not url.startswith("http") or not (url in manual or r.get("フォーム判定") == "要目視"):
+                continue
+            if r.get("営業お断りの表示") == "あり" or (ng_row_hidden(r, ng_store) if ng_store is not None else ng_list.is_ng_row(r, ng_list.load())):
+                continue
+            if send_rules.company_refusal(LOG, r.get("企業名", ""), url, r.get("HP URL", "")):
+                continue
+            rows.append((r.get("企業名", ""), url, r.get("業種", ""), r.get("書き出し", ""), r.get("HP URL", "")))
+        todo, bodies, rejected = autosend.prepare_message_plan(rows[:50], MSG, sender)
+        out = [{"company": t[0], "form": t[1], "subject": message_adoption.effective_sender(t[0], t[1], sender).get("件名", "").replace("{企業名}", t[0]), "message": b}
+               for t, b in zip(todo, bodies)]
+        return self.send(200, {"companies": out, "skipped": [{"company": n, "why": w} for n, _u, w in rejected],
+                               "legal_missing": send_rules.legal_missing(sender), "window": send_rules.window_refusal()})
+
     def targets(self, q, ng_store=None):
         """送信対象の一覧と各社の文面(表示用)。送信の可否はここでは決めない(本番は確認ジョブの印が要る)"""
         import autosend
@@ -334,7 +379,7 @@ class H(BaseHTTPRequestHandler):
             sender = json.loads(SENDER.read_text(encoding="utf-8-sig")) if SENDER.exists() else {}
             return self.send(200, {"industries": list(osm_source.INDUSTRY_TAGS), "sender": sender, "files": outputs(), "messages": messages()})
         if u.path == "/api/job":
-            return self.send(200, {"lines": JOB["lines"][-300:], "running": JOB["running"], "name": JOB["name"], "code": JOB.get("code"), "files": outputs(), "version": VERSION, "here": str(HERE)})
+            return self.send(200, {"lines": JOB["lines"][-300:], "running": JOB["running"], "name": JOB["name"], "code": JOB.get("code"), "files": outputs(), "version": VERSION, "here": str(HERE), "started": JOB.get("started", "")})
         if u.path == "/api/results":
             p = safe_out(q.get("file", ""))
             ng = None if ng_store is not None else ng_list.load()
@@ -352,6 +397,13 @@ class H(BaseHTTPRequestHandler):
             return self.targets(q, ng_store)
         if u.path == "/api/log":
             return self.send(200, read_csv(LOG) if LOG.exists() else [])
+        if u.path == "/api/report":
+            days = int(q["days"]) if str(q.get("days", "")).isdigit() and 1 <= int(q["days"]) <= 365 else 7
+            return self.send(200, sales_records.report(LOG, days))
+        if u.path == "/api/unsure":
+            return self.send(200, sales_records.unsure(LOG))
+        if u.path == "/api/manual_kit":
+            return self.manual_kit(q, ng_store)
         if u.path == "/download":
             p = safe_out(q.get("file", ""))
             if not p:
@@ -482,9 +534,59 @@ class H(BaseHTTPRequestHandler):
             origin = self.headers.get("Origin") or ""
             if origin.replace("http://", "") not in HOSTS:  # 人が開いた画面(ブラウザ)からの操作だけを受ける。ブラウザは必ず送信元を付ける
                 return self.send(403, {"error": "承認は、ツールの画面（ブラウザ）で押してください"})
-            if PREVIEW["key"] is None:
+            with LOCK:
+                key_now, names = PREVIEW["key"], list(PREVIEW.get("names") or [])
+            if key_now is None:
                 return self.send(400, {"error": "先に「対象の会社と、送る文面の全文を確認する」を済ませてください"})
-            APPROVED["key"] = PREVIEW["key"]
+            if str(d.get("key", "")) != key_now[-1]:  # 画面が見せた確認番号と、いま有効な確認が同じときだけ(別の確認の承認にならない)
+                return self.send(409, {"error": "画面の確認番号が古いです。「確認する」を押し直して、全文を読んでください"})
+            # 承認は画面のボタンではなく、OSの確認ダイアログ(HTTPでは押せない)で人に聞く
+            try:
+                sender = json.loads(SENDER.read_text(encoding="utf-8-sig")) if SENDER.exists() else {}
+            except ValueError:
+                sender = {}
+            shown = "\n".join("・" + n for n in names[:10]) + (f"\n ほか {len(names) - 10} 社" if len(names) > 10 else "")
+            body = ("次の %d 社の問い合わせフォームに、画面に表示した文面を送ります。\n%s\n\n送信元: %s %s\n確認番号: %s\n\n"
+                    "画面で全文を読んでいない場合は「いいえ」を押してください。\n「はい」で承認します。承認は1回の送信で使い切ります。"
+                    % (len(names), shown, sender.get("会社名", ""), sender.get("氏名", ""), key_now[-1]))
+            if not approval.ask_human("AIまるなげ営業 本番送信の承認", body):
+                APPROVED["key"] = None
+                return self.send(200, {"ok": False, "declined": True})
+            if PREVIEW["key"] != key_now:  # ダイアログの間に確認が変わった
+                APPROVED["key"] = None
+                return self.send(409, {"error": "確認の内容が変わりました。もう一度「確認する」からやり直してください"})
+            with LOCK:
+                if PREVIEW["key"] != key_now:
+                    APPROVED["key"] = None
+                    return self.send(409, {"error": "確認の内容が変わりました。もう一度「確認する」からやり直してください"})
+                APPROVED["key"] = key_now
+            return self.send(200, {"ok": True})
+        if self.path in ("/api/outcome", "/api/manual_sent", "/api/reply"):
+            name, url = str(d.get("company", "")).strip(), str(d.get("form", "")).strip()
+            if not name:
+                return self.send(400, {"error": "会社名を入れてください"})
+            if self.path == "/api/outcome":
+                if not isinstance(d.get("delivered"), bool):
+                    return self.send(400, {"error": "届いたかどうか(delivered: true/false)を入れてください"})
+                r = sales_records.set_outcome(LOG, name, url, d["delivered"], str(d.get("how", ""))[:200])
+                return self.send(400 if "error" in r else 200, r)
+            if self.path == "/api/manual_sent":
+                return self.send(200, sales_records.manual_sent(LOG, name, url, str(d.get("how", ""))[:200]))
+            r = sales_records.add_reply(name, url, str(d.get("kind", "")), str(d.get("text", "")), str(d.get("memo", ""))[:200])
+            if "error" in r:
+                return self.send(400, r)
+            if d.get("kind") == "不要":  # 送らないでと言われた会社は、記録と同じ操作で送らないリストに入れる(片方だけが抜けないように)
+                where = str(d.get("hp", "")).strip() or url
+                added = (ng_store.add_domain_ng(where, "返事で不要と言われた", name) if ng_store is not None else ng_list.add(where, "返事で不要と言われた", name)) if where else None
+                r["ng_added"] = bool(added)
+                if not where:
+                    r["note"] = "ホームページかフォームのアドレスが無いので、送らないリストには入れていません。formlist_ng_add で入れてください"
+            return self.send(200, r)
+        if self.path == "/api/ticket/consume":  # 送信を受け持つ autosend が、画面が発行した使い切りの鍵を確かめに来る
+            return self.send(200, {"ok": approval.redeem(d.get("token"), d.get("expect"))})
+        if self.path == "/api/approve/cancel":
+            APPROVED["key"] = None
+            approval.revoke_ticket()
             return self.send(200, {"ok": True})
         if self.path == "/api/sample":
             import sample_from_material
@@ -512,6 +614,10 @@ class H(BaseHTTPRequestHandler):
                 args.append("--include-supplemented")
             real = bool(d.get("send"))
             sync_ng_txt(ng_store)
+            if real and ng_store is None:
+                return self.send(409, {"error": "送らない会社の記録(データベース)につながっていないため、本番の送信はできません。ツールを起動し直してください"})
+            if real and NG_MIGRATION["error"]:
+                return self.send(409, {"error": "送らない会社のリストを読み込めなかったため、本番の送信はできません。" + NG_MIGRATION["error"]})
             if real and _NG_SYNC and ng_store is not None and ng_store.migration_status() != "canonical":
                 return self.send(409, {"error": "送らない会社の記録の引っ越しが済んでいないため、本番の送信はできません。" + (NG_MIGRATION["error"] or "ツールを起動し直してください")})
             try:
@@ -520,7 +626,7 @@ class H(BaseHTTPRequestHandler):
                 return self.send(400, {"error": "送る対象を数えられませんでした（送信元・リスト・文面を確かめてください）", "detail": repr(e)[:200]})
             if d.get("preview"):
                 # 確認の出力に、印と同じ確認番号が出たときだけ印を立てる(見せた全文と印を一致させる)
-                return self.send(200, {"started": run_job("確認", args + ["--preview"], on_ok=lambda k=key: (PREVIEW.__setitem__("key", k), APPROVED.__setitem__("key", None)) if f"確認番号: {k[-1]}" in JOB["lines"] else None)})
+                return self.send(200, {"started": run_job("確認", args + ["--preview"], on_ok=lambda k=key: set_preview(k) if f"確認番号: {k[-1]}" in JOB["lines"] else None)})
             if real:
                 if d.get("confirm") != "送信":
                     return self.send(400, {"error": "本番は「送信」と入力してください"})
@@ -528,203 +634,16 @@ class H(BaseHTTPRequestHandler):
                     return self.send(400, {"error": "先に「対象の会社と、送る文面の全文を確認する」を押して、全文を読んでから送ってください（リスト・社数・文面・送信元・送らないリスト・送信済みの会社が変わって、送る会社や文面が確認と違うときも、もう一度確認が要ります）"})
                 if APPROVED["key"] != key:
                     return self.send(400, {"error": "人の承認がありません。ツールの画面を開き、全文を読んで「この全文で送ることを承認する」を押してから、もう一度送ってください（AIは承認を押せません）"})
-                PREVIEW["key"] = None  # 確認は1回の本番ごとに使い切る
+                PREVIEW.update(key=None, names=[])  # 確認は1回の本番ごとに使い切る
                 APPROVED["key"] = None
                 args += ["--send", "--expect", key[-1]]  # 送る本人が、確認時と同じ会社・全文・送信元かを照合し、違えば送らずに止まる
-            return self.send(200, {"started": run_job("本番送信" if real else "試走", args, "送信\n" if real else None)})
+                token = approval.issue_ticket(key[-1])  # 承認のあとにだけ発行する使い切りの鍵。autosend --send はこれが無いと始まらない
+                return self.send(200, {"started": run_job("本番送信", args, "送信\n", extra_env={approval.TICKET_ENV: token, approval.PORT_ENV: str(PORT), approval.UI_TOKEN_ENV: TOKEN})})
+            return self.send(200, {"started": run_job("試走", args, None)})
         self.send(404, {"error": "なし"})
 
 
-PAGE = r"""<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AIまるなげ営業</title>
-<style>
-:root{--bg:#fbf7f5;--card:#fff;--ink:#3a2f2f;--mut:#8a7b7b;--ac:#c4607a;--ac2:#f3dde3;--ok:#2f7d5b;--ng:#b3402f;--line:#e8dcd9;--wb:#fbecc8;--wi:#7a5200}
-@media(prefers-color-scheme:dark){:root{--bg:#1e1a1b;--card:#2a2425;--ink:#f1e8e8;--mut:#b5a5a5;--ac:#e58aa3;--ac2:#4a3239;--line:#443a3b;--wb:#4a3d1a;--wi:#f0d58a}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.7 "Yu Gothic UI","Meiryo",sans-serif}
-header{padding:20px 16px 8px;max-width:980px;margin:auto}h1{margin:0;font-size:22px}header p{margin:4px 0 0;color:var(--mut);font-size:14px}
-nav{max-width:980px;margin:auto;padding:0 16px;display:flex;gap:8px;flex-wrap:wrap}
-nav button{border:1px solid var(--line);background:var(--card);color:var(--ink);padding:10px 18px;border-radius:999px;font:inherit;cursor:pointer}
-nav button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
-main{max-width:980px;margin:auto;padding:12px 16px 60px}section{display:none}section.on{display:block}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin:12px 0}
-.now{border:1px solid var(--ac);background:var(--ac2);border-radius:12px;padding:12px 16px;margin:12px 0;font-size:15px}.now b{color:var(--ac)}
-.now ul{margin:6px 0 0;padding-left:0;list-style:none}.now li{margin:2px 0}
-h2{font-size:17px;margin:0 0 10px}label{display:block;font-size:14px;color:var(--mut);margin:10px 0 4px}
-input[type=text],input[type=number],textarea,select{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit}
-textarea{min-height:130px}.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
-.chips{display:flex;flex-wrap:wrap;gap:8px}.chips label{margin:0;display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:6px 12px;color:var(--ink);cursor:pointer}
-.chips input:checked+span{color:var(--ac);font-weight:700}
-.btn{background:var(--ac);color:#fff;border:0;border-radius:10px;padding:12px 22px;font:inherit;cursor:pointer;margin-top:12px}.btn.sub{background:var(--ac2);color:var(--ink)}.btn:disabled{opacity:.5}
-.btn.sm{padding:5px 12px;margin:0;font-size:13px;border-radius:8px}
-pre{background:#1b1717;color:#e8dcd9;padding:12px;border-radius:10px;max-height:300px;overflow:auto;font-size:13px;white-space:pre-wrap}
-table{border-collapse:collapse;width:100%;font-size:14px}th,td{border-bottom:1px solid var(--line);padding:8px;text-align:left;vertical-align:top}th{color:var(--mut);position:sticky;top:0;background:var(--card)}
-.tw{overflow:auto;max-height:560px}table.rt{table-layout:fixed}table.rt td{overflow-wrap:anywhere}
-.tag{display:inline-block;border-radius:999px;padding:2px 10px;font-size:12px;background:var(--ac2)}.tag.ok{background:#d7efe2;color:#1d5a40}.tag.ng{background:#f6d9d3;color:#8a2c1c}.tag.warn{background:var(--wb);color:var(--wi);border:0;border-radius:999px;padding:2px 10px;font-size:12px}
-.warn{border-left:4px solid var(--ac);background:var(--ac2);padding:10px 14px;border-radius:8px;font-size:14px}.mut{color:var(--mut);font-size:13px}
-.why{font-size:13px;color:var(--mut);margin-top:2px}details.dt summary{cursor:pointer;color:var(--mut);font-size:13px}details.dt div{font-size:13px;color:var(--mut);margin-top:4px}
-.sum{display:flex;gap:10px;flex-wrap:wrap;margin:6px 0}.sum span{border:1px solid var(--line);border-radius:10px;padding:4px 12px;font-size:14px}
-.st{font-size:15px;margin:0 0 8px}
-</style></head><body>
-<header><button type="button" id="quit" style="float:right;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:6px 14px;border-radius:999px;font:inherit;cursor:pointer">ツールを終了する</button><h1>AIまるなげ営業</h1><p>地域と業種から、問い合わせフォームのある会社を探して、リストにします。</p></header>
-<nav><button data-t="a" class="on">1 探す</button><button data-t="b">2 結果を見る</button><button data-t="c">3 送る</button><button data-t="d">送信の記録</button></nav>
-<main>
-<section id="a" class="on">
- <div class="now" id="now_a"></div>
- <div class="card"><h2>どこで、何を探しますか</h2>
-  <div class="row" style="margin-top:8px"><div><label>探す場所（市区町村まで）</label><input id="area" type="text" placeholder="例 東京都江東区"></div>
-  <div><label>調べる会社の上限（多いほど時間がかかります）</label><input id="limit" type="number" value="300" min="1"><div class="mut" id="est"></div></div></div>
-  <label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input type="checkbox" id="large">大手・チェーンの会社も調べる（ふつうは外します。一人サロンや小さな会社を探すときはチェックしないでください）</label>
-  <label>業種（いくつでも）</label><div class="chips" id="inds"></div><p class="mut">迷ったら、戦略書の優先順位どおり「商業施設 → 住宅・不動産 → ホテル・旅館 → ブライダル → 百貨店」の上から、1〜2業種ずつ探すと、結果を読みやすくなります。</p>
-  <label>キーワード（店名・施設名に含まれる語。スペースか「、」で区切ると、いくつでも）</label><input id="kw" type="text" placeholder="例 サロン、フラワー、ケアハウス">
-  <p class="mut">業種を選ばず、キーワードだけでも探せます。地図に載っている店名・施設名から探すので、事業内容では探せません。業種とキーワードを両方入れると、両方で探します。キーワードをいくつか入れると、最大3つずつ同時に探します（同時に探しすぎるとGoogleマップに止められやすいため、3つまでにしています）。</p>
-  <details style="margin-top:14px"><summary>くわしい設定（最初は開かなくて大丈夫です）</summary>
-   <label>探す先（いくつでも）</label>
-   <div id="srcs" class="chips"><label><input type="checkbox" value="google" checked> Googleマップ（件数を絞り、ゆっくり集めます。ホームページの欄がある店が多い）</label> <label><input type="checkbox" value="osm"> 地図データ（OpenStreetMap。ホームページの載っている店は少ない）</label> <label title="Google Places Text Search is not connected"><input type="checkbox" value="google_places_text" disabled> Google Places Text Search (not connected)</label></div>
-   <p class="mut">Googleマップは規約上、自動での取得を認めていません。1回の検索で20件までに絞り、1件ごとに間隔を空けます。ブロックされたら止まります。</p>
-   <label>ポータルサイトのURLから集める（上の場所と業種の代わり）</label><input id="portal" type="text" placeholder="https://...（Indeed・業界ポータルなどの、絞り込み後の一覧ページ）">
-   <label>送らない会社を先に入れる（既存のお客さま・競合のホームページのドメインを、1行に1つ）</label><textarea id="ng" placeholder="example.com"></textarea>
-   <p class="mut">探したあとで「送らない」を押して入れることもできます。</p></details>
-  <button class="btn" id="go">探しはじめる</button></div>
- <div class="card"><h2>進み具合</h2><p class="st" id="st_a"></p><details><summary class="mut">くわしい経過（黒い画面）を見る</summary><pre id="log">まだ何も動いていません</pre></details></div>
-</section>
-<section id="b"><div class="now" id="now_b"></div><div class="card"><h2>できたリスト</h2>
-  <select id="files"></select> <label style="display:inline-flex;gap:6px;margin:0 8px"><input type="checkbox" id="onlyOk" checked>問い合わせ候補だけ表示</label><div style="margin-top:8px"><button class="btn sub sm" id="dl">Excel用にCSVをダウンロード</button></div>
- <div class="sum" id="sum"></div>
- <div class="tw" style="margin-top:8px"><table class="rt" id="res"></table></div>
- <details class="dt" style="margin-top:12px"><summary>送らない会社に入れたもの（ここから戻せます）</summary><div id="nglist"></div></details></div></section>
-<section id="c">
- <div class="now" id="now_c"></div>
- <div class="card"><h2>準備1　送信元（先方に表示される名前と連絡先）</h2><div class="row" id="sender"></div><p class="mut">「必須」の欄は、空だと送れません。フリガナ・電話・住所などは、フォームに同じ欄があるときだけ使います。</p><button class="btn sub" id="saveSender">保存</button></div>
- <div class="card"><h2>準備2　文面</h2><p class="mut">{企業名} と書いた所は、送るとき相手の会社名に自動で置き換わります。{書き出し} は会社ごとの書き出しの一文に（無い会社は消えます）、{署名} は上の署名に置き換わります。この3つの記号はそのまま残してください。それ以外の文章は、直して保存して大丈夫です。業種ごとの文面があれば、その業種の会社にはそちらを使います。送信者の名前・連絡先・配信停止の案内は消さないでください（特定電子メール法）。</p>
-  <label>業種を選ぶ（「標準」はどの業種にも使われます）</label><select id="mind"></select>
-  <details class="dt"><summary>営業資料から、文面のたたき台を作る</summary><p class="why">営業資料の文章を貼ってください。見出し・箇条書き・URLを拾って、下の文面欄にたたき台を入れます。保存するまでは、文面は変わりません。AIは使っていません。必ず自分で読んで直してください。</p><textarea id="mat" style="min-height:120px" placeholder="営業資料の文章をここに貼り付け"></textarea><button class="btn sub" id="mkSample" type="button">たたき台を作って、下に入れる</button></details>
-  <textarea id="mtext" style="min-height:260px"></textarea><button class="btn sub" id="saveMsg">この文面を保存</button></div>
- <div class="card"><h2>練習 → 確認 → 本番</h2>
-  <div class="row"><div><label>送るリスト</label><select id="sfile"></select></div><div><label>今回送る最大の社数（最初は3社くらいが安心です）</label><input id="smax" type="number" value="3" min="1"></div></div>
-  <label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input type="checkbox" id="supp">検索で見つけたホームページの会社にも送る（別の会社のページを拾っている恐れがあります。結果の画面で「確認が要る」の会社を見てから）</label>
-  <p class="warn">対象は、問い合わせフォーム候補が検出され、営業お断りの表示がなく、まだ処理していない会社だけです。フォーム検出は営業送信の許可ではありません。自動入力できない確認画面（画像認証など）や、選ぶ形式の必須項目があるフォームは送らず、「手で送る必要あり」と記録します。</p>
-  <button class="btn sub" id="dry">練習する（フォームに入力して画面を保存するだけ。送りません）</button>
-  <hr style="border:0;border-top:1px solid var(--line);margin:20px 0">
-  <button class="btn" id="prev">対象の会社と、送る文面の全文を確認する（本番の前に必ず押します）</button>
-  <label>本番: 下の一覧と文面を読んで、よければ「送信」と入力して下のボタンを押すと送ります（毎回入力が必要です）</label><input id="confirm" type="text" placeholder="送信"><label>AI(ClaudeやCodex)に送らせるときは、全文を読んだうえで、このボタンを押してください。押すまでAIは送れません</label><button class="btn sub" id="approve" type="button">この全文で送ることを承認する</button>
-  <button class="btn" id="real" style="background:var(--ng)">本番で送る</button></div>
- <div class="card"><h2>送る対象と文面（確認ボタンで出ます）</h2><div id="tg"><p class="mut">まだ確認していません。上の「対象の会社と、送る文面を確認する」を押してください。</p></div></div>
- <div class="card"><h2>進み具合</h2><p class="st" id="st_c"></p><details><summary class="mut">くわしい経過（黒い画面）を見る</summary><pre id="log2">まだ何も動いていません</pre></details></div>
-</section>
-<section id="d"><div class="now" id="now_d"></div><div class="card"><h2>送信の記録</h2><button class="btn sub sm" id="reload">更新</button><div class="sum" id="hsum"></div><div class="tw" style="margin-top:8px"><table class="rt" id="hist"></table></div></div></section>
-</main>
-<script>
-const TOKEN='__TOKEN__';const $=s=>document.querySelector(s);
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const J=(u,o={})=>fetch(u,{...o,headers:{...(o.headers||{}),'X-Token':TOKEN}}).then(async r=>{const d=await r.json().catch(()=>({error:'サーバーから読み取れない応答（'+r.status+'）'}));if(r.status==403){alert(d.error||'拒否されました');if(d.code=='token')location.reload();return {error:d.error}}return d});
-const post=(u,d)=>J(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
-let META={},JOB={lines:[],running:false,name:'',code:null,files:[]},RESROWS=[];
-const SF=['会社名','氏名','フリガナ','メール','電話','郵便番号','住所','件名','資料URL'],NEED=['会社名','氏名','メール','署名'];
-function goto(t){document.querySelector('nav button[data-t="'+t+'"]').click()}
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button,section').forEach(e=>e.classList.remove('on'));b.classList.add('on');$('#'+b.dataset.t).classList.add('on');if(b.dataset.t=='d')hist();if(b.dataset.t=='b')loadRes();banners()});
-function opts(sel,list,cur){sel.innerHTML=list.map(f=>`<option ${f==cur?'selected':''}>${esc(f)}</option>`).join('')}
-function tag(t,k){return `<span class="tag ${k||''}">${esc(t)}</span>`}
-function lk(v,label){try{const u=new URL(v);if(u.protocol=='http:'||u.protocol=='https:')return `<a href="${esc(u.href)}" target="_blank" rel="noopener noreferrer" title="${esc(u.hostname)}">${esc(label)}</a>`}catch(e){}return ''}
-function plain(m){m=String(m||'');
- if(/Timeout/i.test(m))return 'ページが開くのに時間がかかりすぎて、時間切れになりました。時間を置くと確認できることがあります';
- if(/captcha/i.test(m))return '自動入力できない確認画面（画像認証など）があります。手で送る必要があります';
- if(/ConnectionError|ERR_|Max retries|NameResolution/i.test(m))return '接続できませんでした（相手のサイトが止まっているか、通信が不安定です）';
- if(/本文欄が見つからない/.test(m))return '文面を入れる欄が見つかりませんでした。手で送る必要があります';
- if(/送信ボタンが見つからない/.test(m))return '送信ボタンが見つかりませんでした。手で送る必要があります';
- if(/完了画面の文言を確認できず/.test(m))return '送信ボタンは押しましたが、送れたかを画面で確認できませんでした。そのフォームを開いて確かめてください';
- if(/差し込みの取り残し/.test(m))return '文面に {…} や 【】 が残っているため送りませんでした。文面を見直してください';
- return m.replace(/^入力: ?/,'入力できた項目: ').replace('（送信ボタンは押していない）','（練習なので送信ボタンは押していません）').replace(/^error: ?/,'読み込みに失敗: ')}
-function verdict(r){const v=r['フォーム判定']||'',sup=(r['取得元']||'').includes('補完');
- if(v=='フォームあり')return sup?{k:'warn',t:'要確認',why:'ホームページを検索で見つけた会社です。'+(r['HPの照合']?'照合の結果は「'+r['HPの照合']+'」。':'')+'別の会社のページでないかを開いて確かめてください。営業送信可否は未確認です'}:{k:'ok',t:'フォーム検出',why:'問い合わせフォーム候補が見つかりました。営業送信可否は未確認です'};
- if(v=='要目視')return {k:'warn',t:'手で確かめる',why:'このツールでは送りません。ホームページを開いて、問い合わせフォームがあれば、自分で文面を貼って送ります'};
- if(v=='メールのみ')return {k:'ng',t:'対象外',why:'メールアドレスだけ見つかりました（このツールはフォーム候補の確認を優先します）'};
- if(v=='見つからず')return {k:'ng',t:'対象外',why:'問い合わせ候補を確認できませんでした'};
- if(v=='robots禁止')return {k:'ng',t:'対象外',why:'ホームページ側が、自動で読むことを断っています'};
- if(v=='取得失敗')return {k:'ng',t:'対象外',why:'ホームページを読み込めませんでした（時間を置くと読めることがあります）'};
- return {k:'',t:v||'未判定',why:''}}
-function senderMissing(){const s=META.sender||{};const m=NEED.filter(k=>!(s[k]||'').trim()||(s[k]||'').includes('【'));if(!m.includes('署名')&&!/@|\d{2,4}-\d{2,4}-\d{3,4}/.test(s['署名']||''))m.push('署名に連絡先（メールか電話）');return m}
-function est(){const n=Math.max(1,parseInt($('#limit').value)||0);const a=Math.max(1,Math.round((n*3+30)/60)),b=Math.max(1,Math.round((n*15+60)/60));$('#est').textContent=`最大${n}社まで調べます。目安は約${a}〜${b}分です（実測の一例: ホテル・旅館10社で約40秒。会社数や通信で変わります）`}
-$('#limit').oninput=est;
-function banners(){const j=JOB,mine=j.name=='探す';
- const run=(t)=>`<b>いま:</b> ${esc(t)}を実行しています。このままお待ちください。`;
- $('#now_a').innerHTML=j.running&&mine?run('探す処理')+'<br>終わると自動で「2 結果を見る」に移ります。':META.files&&META.files.length?'<b>いま:</b> 探す前の画面です。前に作ったリストは「2 結果を見る」で見られます。<br><b>次:</b> 新しく探すなら、場所と業種を入れて「探しはじめる」を押します。':'<b>いま:</b> 最初の画面です。<br><b>次:</b> 場所と業種を入れて「探しはじめる」を押します。迷ったら「例を入れる」を押してください。';
- const s=RESROWS.length?summ(RESROWS):null;
- $('#now_b').innerHTML=s?`<b>いま:</b> 探した結果です。<br><b>次:</b> 「フォーム検出」${s.ok}社は、問い合わせフォーム候補が見つかった会社です。営業送信可否は未確認なので、必要に応じてホームページを開いて確認してください。「要確認」の会社も、ホームページを開いて見てください。既存のお客さまや、対象にしない会社は「送らない」を押します。よければ「3 送る」へ進みます。 <button class="btn sm" id="go3" type="button">3 送るへ進む</button> ${s.ok>1?`<button class="btn sub sm" id="goall" type="button">「フォーム検出」${Math.min(s.ok,200)}社を確認へ進める</button>`:''}`:'<b>いま:</b> 結果の画面です。リストがまだありません。<br><b>次:</b> 「1 探す」で探してください。';
- const g=$('#go3');if(g)g.onclick=()=>goto('c');const ga=$('#goall');if(ga)ga.onclick=()=>{$('#sfile').value=$('#files').value;$('#smax').value=Math.min(s.ok,200);$('#smax').dispatchEvent(new Event('input'));goto('c')};
- const m=senderMissing();
- const li=[m.length?`<li>× 準備1　送信元が足りません: ${esc(m.join('、'))}</li>`:'<li>○ 準備1　送信元が入っています（保存済み）</li>','<li>・ 準備2　文面を読んで、直すところがあれば保存します</li>','<li>・ 練習　「練習する」で、フォームに入力だけ試せます（送りません）。最初は1回おすすめです</li>',`<li>${STATE.prevOk?'○':'・'} 確認　対象の会社と文面の確認${STATE.prevOk?'が終わりました。読んで良ければ「送信」と入力して本番へ':'を押します（本番の前に必ず）'}</li>`];
- $('#now_c').innerHTML=(j.running&&!mine?run(j.name)+'<br>':'')+'<b>次にやること（上から順に）</b><ul>'+li.join('')+'</ul>';
- $('#now_d').innerHTML='<b>いま:</b> 練習と本番の記録です（練習の記録も入っています）。<br><b>手で送る必要あり:</b> フォームを開き、「3 送る」の文面をコピーして貼り、自分で送信します。<br><b>送れたか確認が要る:</b> 送信ボタンは押しています。相手から自動返信のメールが届いていれば送れています。届かなくても、送れていないとは限りません(自動返信が無い会社や、迷惑メールに入る場合があります)。送り直す前に、送信後の画面の保存(出力/送信画面)を見て、送れたかを確かめてください。'}
-const legacyVerdict=verdict;verdict=function(r){const cc=r['contact_confidence']||'',sp=r['sales_permission']||'';if(sp&&sp!='未確認')return {k:'ng',t:'営業不可候補',why:sp+'。フォームの有無とは別に、人が確認するまで送信許可とは扱いません'};if(cc=='公式HP再探索待ち')return {k:'warn',t:'公式HP再探索待ち',why:'SNS/予約ポータル等のURLです。公式HP再探索はまだ未実施です。この画面では送信対象にしません'};if(cc=='自動確認:フォーム')return {k:'ok',t:'自動確認:フォーム',why:'問い合わせフォーム候補を自動確認しました。営業送信可否は未確認です'};if(cc=='自動確認:メール')return {k:'warn',t:'自動確認:メール',why:'メール先は見つかりました。フォーム送信ではなく、営業可否は未確認です'};if(cc=='候補:要目視')return {k:'warn',t:'候補:要目視',why:'問い合わせ候補はありますが、自動確認できていません。営業可否も未確認です'};if(cc=='未発見')return {k:'ng',t:'未発見',why:'問い合わせ候補を確認できませんでした'};return legacyVerdict(r)}
-const officialVerdict=verdict;verdict=function(r){const cc=r['contact_confidence']||'',d=r['source_detail']||'';if(cc=='公式HP要目視')return {k:'warn',t:'公式HP要目視',why:'公式HPらしい候補はありますが、電話または住所の一致が足りないため元URLのままです。候補URLは詳細を確認してください'};if(cc=='公式HP再探索済み:候補なし')return {k:'ng',t:'公式HP候補なし',why:'公式HP再探索を試しましたが、採用できる候補は見つかりませんでした'};if(cc=='公式HP再探索失敗')return {k:'ng',t:'公式HP再探索失敗',why:'公式HP再探索中に通信または確認エラーがありました。迂回取得はしていません'};if(cc=='公式HP再探索無効')return {k:'ng',t:'公式HP再探索無効',why:'見つかった候補がNGまたは拒否基準に該当したため対象外にしました'};if(cc=='公式HP再探索済み:候補なし'&&/official_site_research:from=/.test(d))return {k:'warn',t:'公式HP再探索未採用',why:'公式HP再探索は実施されましたが、採用できる候補がまだありません'};return officialVerdict(r)}
-const STATE={prevOk:false};let TGN=0;
-function unprev(){if(!STATE.prevOk)return;STATE.prevOk=false;TGN=0;$('#tg').innerHTML='<p class="warn">リスト・社数・文面・送信元のどれかが変わりました。もう一度「対象の会社と、送る文面の全文を確認する」を押してください。</p>';banners()}
-function summ(rows){const c={ok:0,warn:0,ng:0,auto:0,cand:0,missing:0,official:0};rows.forEach(r=>{const k=verdict(r).k;if(k in c)c[k]++;const cc=r['contact_confidence']||'';if(cc=='自動確認:フォーム'||cc=='自動確認:メール')c.auto++;if(r['contact_candidate']=='True'||r['contact_candidate']===true||['自動確認:フォーム','自動確認:メール','候補:要目視'].includes(cc))c.cand++;if(cc=='未発見')c.missing++;if(cc=='公式HP再探索待ち')c.official++});return c}
-async function init(){META=await J('/api/meta');
- const rb=document.createElement('label');rb.style.cssText='display:flex;gap:6px;align-items:center;color:var(--ink);margin-top:10px';rb.innerHTML='<input type="checkbox" id="resumeChecks" checked> 途中で止まっても確認済みの行を再利用する';$('#go').before(rb);
- const ob=document.createElement('label');ob.style.cssText='display:flex;gap:6px;align-items:center;color:var(--ink);margin-top:10px';ob.innerHTML='<input type="checkbox" id="officialResearch" checked> SNSやポータルサイトしか見つからない会社は、公式ホームページを探し直して、連絡先を確かめ直す';$('#go').before(ob);
- $('#inds').innerHTML=META.industries.map(i=>`<label><input type="checkbox" value="${esc(i)}"><span>${esc(i)}</span></label>`).join('');
- $('#sender').innerHTML=SF.map(k=>`<div><label>${k}${NEED.includes(k)?'（必須）':''}</label><input type="text" id="s_${k}" value="${esc(META.sender[k])}"></div>`).join('')+`<div style="grid-column:1/-1"><label>署名（必須・文面の {署名} に入ります。連絡先と、配信停止の案内を含めてください。例: 今後このようなご案内が不要でしたら、メールアドレス宛てに「不要」とご返信ください。以後お送りしません。）</label><textarea id="s_署名" style="min-height:110px">${esc(META.sender['署名'])}</textarea></div>`;
- opts($('#files'),META.files);opts($('#sfile'),META.files);
- const names=['default',...Object.keys(META.messages).filter(k=>k!='default')].concat(META.industries.filter(i=>!(i in META.messages)));
- $('#mind').innerHTML=names.map(n=>`<option value="${esc(n)}">${esc(n=='default'?'標準':n)}${n in META.messages?'':'（まだ無い）'}</option>`).join('');
- showMsg();est();banners()}
-function showMsg(){const k=$('#mind').value;$('#mtext').value=META.messages[k]??META.messages.default}
-$('#mind').onchange=showMsg;
-['#sfile','#smax','#supp'].forEach(x=>{$(x).addEventListener('change',()=>unprev());$(x).addEventListener('input',()=>unprev())});
-$('#approve').onclick=async()=>{const r=await post('/api/approve',{});if(r.error)return alert(r.error);alert('承認しました。AIに「送って」と伝えてください。承認は1回の送信で使い切ります')};
-$('#mkSample').onclick=async()=>{const r=await post('/api/sample',{material:$('#mat').value});if(r.error)return alert(r.error);if($('#mtext').value.trim()&&!confirm('いまの文面欄を、たたき台で置き換えます（保存するまでは元に戻せます）。よろしいですか'))return;$('#mtext').value=r.text;alert('たたき台を入れました。拾えたもの: 題「'+(r.title||'なし')+'」・箇条書き'+r.points.length+'個・URL'+(r.url?'あり':'なし')+'。読んで直してから「この文面を保存」を押してください')};
-$('#saveMsg').onclick=async()=>{const k=$('#mind').value;META.messages[k]=$('#mtext').value;const r=await post('/api/message',{[k]:$('#mtext').value});if(r.error)return alert(r.error);unprev();alert('保存しました')};
-$('#saveSender').onclick=async()=>{const d={};[...SF,'署名'].forEach(k=>d[k]=$('#s_'+k).value);const r=await post('/api/sender',d);if(r.error)return alert(r.error);META.sender={...META.sender,...d};unprev();banners();alert('保存しました')};
-$('#go').onclick=async()=>{const r=await post('/api/search',{area:$('#area').value,limit:$('#limit').value,include_large:$('#large').checked,resume_checks:!$('#resumeChecks')||$('#resumeChecks').checked,official_research:!$('#officialResearch')||$('#officialResearch').checked,portal:$('#portal').value,ng:$('#ng').value,keywords:$('#kw').value,sources:[...document.querySelectorAll('#srcs input:checked')].map(x=>x.value),industries:[...document.querySelectorAll('#inds input:checked')].map(x=>x.value)});
- if(r.error)return alert(r.error);if(!r.started)alert('ほかの処理が動いています。終わるまでお待ちください');else wasRun=true;poll()};
-async function send(real,preview){const d={file:$('#sfile').value,max:$('#smax').value,send:real,preview:!!preview,confirm:$('#confirm').value,supp:$('#supp').checked};
- if(!d.file)return alert('先にリストを作ってください');
- if(!preview){STATE.prevOk=false}
- if(real){const ap=await post('/api/approve',{});if(ap.error)return alert(ap.error)}
- if(real&&!confirm('本番で '+TGN+' 社に送ります。送信元は「'+(META.sender['会社名']||'')+' '+(META.sender['氏名']||'')+'」です。一覧の文面を開いて読みましたか？送り始めたら、途中で文面は変えられません。'))return;
- const r=await post('/api/send',d);if(real)$('#confirm').value='';if(r.error)return alert(r.error);if(!r.started)alert('ほかの処理が動いています');else wasRun=true;poll()}
-$('#dry').onclick=()=>send(false);$('#real').onclick=()=>send(true);$('#prev').onclick=()=>{STATE.prevOk=false;send(false,true)};
-let timer,wasRun=false;
-function paint(id,own){const j=JOB;$(id).textContent=own&&(j.lines.length||j.running)?(j.running?'【'+j.name+'を実行中】\n':'')+j.lines.join('\n'):'まだ何も動いていません';$(id).scrollTop=1e9}
-function status(){const j=JOB,mine=j.name=='探す',last=(j.lines.filter(l=>l.trim()).slice(-1)[0]||'');
- const f=(own)=>!own||!j.name?'まだ何も動いていません':j.running?`【${j.name}】実行中… ${last}`:j.code===0?`【${j.name}】終わりました。`:`【${j.name}】途中で止まりました。くわしい経過の最後の行を見てください。`;
- $('#st_a').textContent=f(mine);$('#st_c').textContent=f(!mine)}
-async function poll(){clearInterval(timer);const t=async()=>{const j=await J('/api/job');if(j.error)return;JOB=j;const mine=j.name=='探す';paint('#log',mine);paint('#log2',!mine);status();banners();
- if(j.running)wasRun=true;
- if(!j.running){clearInterval(timer);const fin=wasRun&&mine&&j.code===0;
-  if(wasRun&&j.code!==0&&j.code!==null)alert('「'+j.name+'」が途中で止まりました。進み具合のくわしい経過に、理由が出ています');
-  opts($('#files'),j.files,fin?j.files[0]:$('#files').value);opts($('#sfile'),j.files,fin?j.files[0]:$('#sfile').value);META.files=j.files;
-  if(wasRun&&j.name=='確認'&&j.code===0){STATE.prevOk=true;loadTargets()}
-  if(wasRun&&j.name=='本番送信'&&j.code===0)goto('d');
-  wasRun=false;banners();if(fin)goto('b')}};t();timer=setInterval(t,1500)}
-async function loadTargets(){const r=await J('/api/targets?file='+encodeURIComponent($('#sfile').value)+'&max='+encodeURIComponent($('#smax').value)+'&supp='+($('#supp').checked?1:0));
- if(r.error){$('#tg').innerHTML=`<p class="warn">${esc(r.error)}</p>`;return}
- TGN=r.length;if(!r.length){$('#tg').innerHTML='<p>送る対象の会社はありません（すでに送った・お断り・「送らない」に入れた会社だけでした）。</p>';return}
- $('#tg').innerHTML=`<p>次の ${r.length} 社に、それぞれの会社名を入れた文面が送られます。送信元は「${esc(META.sender['会社名'])} ${esc(META.sender['氏名'])} ${esc(META.sender['メール'])}」です。文面をすべて読んでから、本番を押してください。</p><div class="tw"><table class="rt"><tr><th style="width:30%">会社</th><th style="width:20%">業種</th><th style="width:18%">フォーム</th><th>文面</th></tr>`+r.map(x=>`<tr><td>${esc(x.name)}</td><td>${esc(x.industry||'指定なし')}</td><td>${lk(x.form,'フォームを開く')}</td><td>${x.warn?'<div style="color:#b00020;font-weight:700">'+esc(x.warn)+'</div>':''}${x.notice?'<div style="color:#8a5a00">'+esc(x.notice)+'</div>':''}<details class="dt"${r.length<=5?' open':''}><summary>文面を見る</summary><div style="white-space:pre-wrap">${esc("件名: "+x.subject+"\n\n"+x.text)}</div></details></td></tr>`).join('')+'</table></div>'}
-async function loadRes(){const f=$('#files').value;if(!f){$('#res').innerHTML='<tr><td>まだリストがありません</td></tr>';RESROWS=[];$('#sum').innerHTML='';banners();return}
- const all=await J('/api/results?file='+encodeURIComponent(f));if(all.error)return;RESROWS=all;const s=summ(all);
- $('#sum').innerHTML=`<span>全${all.length}社</span><span>${tag('フォーム検出','ok')} ${s.ok}社</span><span>${tag('要確認','warn')} ${s.warn}社</span><span>${tag('対象外','ng')} ${s.ng}社${$('#onlyOk').checked?'（今は表示していません）':''}</span>`;
- $('#sum').innerHTML+=`<span>自動確認 ${s.auto}件</span><span>候補込み ${s.cand}件</span><span>未発見 ${s.missing}件</span><span>公式HP再探索待ち ${s.official}件</span>`;
- const rank={ok:0,warn:1,ng:2,'':3};let rows=all.map(r=>({r,v:verdict(r)}));if($('#onlyOk').checked)rows=rows.filter(x=>x.v.k=='ok'||x.v.k=='warn');rows.sort((a,b)=>rank[a.v.k]-rank[b.v.k]);
- $('#res').innerHTML='<tr><th style="width:27%">会社</th><th style="width:38%">検出状態</th><th style="width:20%">開いて確かめる</th><th style="width:15%"></th></tr>'+(rows.length?rows.map(({r,v},i)=>{const form=r['問い合わせフォームURL 無ければメール']||'',mail=r['メールアドレス']||(form.startsWith('http')?'':form);
-  return `<tr><td>${esc(r['企業名'])}<div class="why">${esc(r['業種'])}</div><details class="dt"><summary>くわしく</summary><div>取得元: ${esc(r['取得元'])}<br>メール: ${esc(mail||'なし')}<br>メモ: ${esc(plain(r['判定メモ']))||'なし'}</div></details></td><td>${tag(v.t,v.k)}<div class="why">${esc(v.why)}</div></td><td>${lk(r['HP URL'],'ホームページを開く')}<br>${lk(form,'フォームを開く')}</td><td><button class="btn sub sm ngb" data-i="${i}" type="button">送らない</button></td></tr>`}).join(''):'<tr><td colspan="4">表示できる会社がありません。「問い合わせ候補だけ表示」を外すと、対象外の会社も見えます。</td></tr>');
- document.querySelectorAll('.ngb').forEach(b=>b.onclick=async()=>{const x=rows[+b.dataset.i].r;const form=x['問い合わせフォームURL 無ければメール']||'';
-  const hostOf=v=>{try{return new URL(v).hostname.replace(/^www\./,'')}catch(e){return ''}};const host=hostOf(x['HP URL']||'');
-  const same=host?RESROWS.filter(y=>y!==x&&hostOf(y['HP URL']||'')==host).map(y=>y['企業名']):[];
-  if(!confirm('「'+x['企業名']+'」を送らない会社に入れます。'+(host?'ホームページ（'+host+'）ごと入れるので、':'')+(same.length?'同じホームページの '+same.length+' 社（'+same.slice(0,3).join('、')+(same.length>3?' ほか':'')+'）も送らない会社になります。':'')+'この画面の下の「送らない会社に入れたもの」から、あとで戻せます。よろしいですか'))return;
-  const res=await post('/api/ng',{hp:x['HP URL']||'',form:form,name:x['企業名']});if(res.error)return alert(res.error);loadRes()});
- ngList();banners()}
-async function ngList(){const r=await J('/api/ngscreen');if(r.error)return;$('#nglist').innerHTML=r.length?r.map((l,i)=>`<div style="margin:4px 0">${esc(l.split('#')[0].trim().replace(/^@/,''))} <span class="why">${esc(l.split('「送らない」')[1]||'')}</span> <button class="btn sub sm ngu" data-i="${i}" type="button">戻す</button></div>`).join(''):'<div class="why">まだありません</div>';document.querySelectorAll('.ngu').forEach(b=>b.onclick=async()=>{const res=await post('/api/ng/undo',{line:r[+b.dataset.i]});if(res.error)return alert(res.error);loadRes()})}
-$('#files').onchange=loadRes;$('#onlyOk').onchange=loadRes;$('#dl').onclick=async()=>{const f=$('#files').value;if(!f)return;const r=await fetch('/download?file='+encodeURIComponent(f),{headers:{'X-Token':TOKEN}});const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download=f;a.click()};
-const RES={'試走OK':['練習OK（送信ボタンは押していません）','ok'],'送信済み':['送信済み','ok'],'要手動':['手で送る必要あり','warn'],'不明(要確認)':['送れたか確認が要る','warn'],'入力エラー(要確認)':['入力エラーの表示あり（届いていない可能性が高い。自動では再送しません）','warn'],'送信試行':['送信ボタンを押した（結果が未確認）','warn'],'お断り表示(送らない)':['お断りの表示があり、送らない','ng']};
-async function hist(){const rows=await J('/api/log');if(rows.error)return;const cnt={};rows.forEach(r=>{const n=(RES[r['結果']]||[r['結果']])[0];cnt[n]=(cnt[n]||0)+1});
- $('#hsum').innerHTML=Object.entries(cnt).map(([k,v])=>`<span>${esc(k)} ${v}件</span>`).join('');
- $('#hist').innerHTML=rows.length?'<tr><th style="width:15%">日時</th><th style="width:22%">会社</th><th style="width:20%">結果</th><th>わけ・次にすること</th><th style="width:14%"></th></tr>'+rows.slice().reverse().map(r=>{const m=RES[r['結果']]||[r['結果'],''];return `<tr><td>${esc((r['日時']||'').slice(5))}</td><td>${esc(r['企業名'])}</td><td>${tag(m[0],m[1])}</td><td>${esc(plain(r['メモ']))}</td><td>${lk(r['フォームURL'],'フォームを開く')}</td></tr>`}).join(''):'<tr><td>まだ記録がありません</td></tr>'}
-$('#reload').onclick=hist;
-$('#quit').onclick=async()=>{if(!confirm('ツールを終了します。送信などの処理が動いている場合は止まります。よろしいですか'))return;try{await post('/api/quit',{})}catch(e){}document.body.innerHTML='<p style="padding:40px">終了しました。このタブは閉じてください。再び使うときは、デスクトップの「AIまるなげ営業」を押します。</p>'};
-init();poll();
-</script></body></html>"""
+PAGE = (HERE / "ui.html").read_text(encoding="utf-8")  # 画面。デザインの変更はこのファイルだけで済む
 
 
 if __name__ == "__main__":
@@ -732,6 +651,16 @@ if __name__ == "__main__":
     import socket
     with socket.socket() as s:
         if s.connect_ex(("127.0.0.1", PORT)) == 0:
+            try:
+                import urllib.request
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                with opener.open(f"http://127.0.0.1:{PORT}/api/job", timeout=3) as r:
+                    mine = json.loads(r.read().decode("utf-8")).get("here") in (None, str(HERE))
+            except Exception:
+                mine = False
+            if not mine:
+                print(f"{PORT}番は、このツールではない別のアプリが使っています。そのアプリを閉じるか、FORMLIST_PORT に8780〜8790の空いている番号を入れて起動してください")
+                sys.exit(1)
             if not os.environ.get("FORMLIST_NO_BROWSER"):  # MCP から起動したときは画面を開かない
                 webbrowser.open(f"http://127.0.0.1:{PORT}/")  # すでに動いている。新しく起動せず、画面だけ開く
             sys.exit(0)

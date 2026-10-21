@@ -1,8 +1,7 @@
-"""Isolated NG/state transaction store prototype.
-
-This module is intentionally not wired into the production send path.  It
-requires an explicit SQLite path so tests can exercise the transaction model
-without reading or migrating the real NG list or the real send-state database.
+"""送らない会社と送信状態の正本(SQLite)。実行環境: Windows / Python 3.9+
+画面(app.py)と、画面から起動した autosend.py / formlist.py(--ng-state-db)が使う。
+テキストの NGリスト.txt は取り込み元としてだけ読む(画面の起動時と、探す・確認・本番の前に増えた分を取り込む)。
+DBの置き場は必ず呼び出し側が渡す(テストが本物のDBに触れないため)。
 """
 
 import secrets
@@ -217,7 +216,7 @@ class NgStateStore:
                 parsed, errors, duplicates = self._parse_legacy_ng_snapshot(snapshot)
                 if errors:
                     self.set_migration_status("failed")
-                    raise NgMigrationError("legacy NG list contains unparseable rows")
+                    raise NgMigrationError(self._unparseable_message(snapshot, errors))
                 if not src.exists():
                     self.set_migration_status("failed")
                     raise NgMigrationError("legacy NG list was deleted during migration")
@@ -248,7 +247,7 @@ class NgStateStore:
                 raise NgMigrationError("source no longer matches failed backup snapshot")
             parsed, errors, duplicates = self._parse_legacy_ng_snapshot(snapshot)
             if errors:
-                raise NgMigrationError("legacy NG list contains unparseable rows")
+                raise NgMigrationError(self._unparseable_message(snapshot, errors))
             self.set_migration_status("migrating")
             if after_validate:
                 after_validate()
@@ -357,6 +356,13 @@ class NgStateStore:
             parsed.append((kind, value, reason, company, display_line))
         return parsed, errors, duplicates
 
+    def _unparseable_message(self, snapshot, errors):
+        lines = snapshot.decode("utf-8-sig").splitlines()
+        shown = "、".join(f"{n}行目「{lines[n - 1].strip()[:30]}」" for n in errors[:5]) + (f" ほか{len(errors) - 5}行" if len(errors) > 5 else "")
+        return ("送らない会社のリスト(出力\\NGリスト.txt)に、ホームページのアドレスとして読めない行があります: " + shown +
+                "。その行の先頭にホームページのアドレス(例: example.co.jp)を書くか、行を消してから、ツールを起動し直してください"
+                "(読めない行を飛ばすと、送らないつもりの会社に送ってしまうため、直すまで本番の送信を止めています)。原文: legacy NG list contains unparseable rows")
+
     def _parse_legacy_line(self, raw):
         item = raw.split("#")[0].strip()
         if item.startswith("@"):
@@ -381,11 +387,22 @@ class NgStateStore:
                 company = part.split("=", 1)[1].strip()
         return reason, company
 
-    def add_domain_ng(self, url, reason="", company=""):
+    def _domain_or_shared(self, url):
+        """テキスト版 ng_list.add と同じ規則。広すぎる(co.jp 等)は None、共有サービス(アメブロ・Googleフォーム等)は
+        そのURL1つだけを入れる(1社を断っただけで、同じサービス上の無関係の会社を消さない)"""
         value = ng_list.domain(url)
+        if not value or "." not in value or value in ng_list.TOO_WIDE:
+            return None, None
+        if ng_list._shared(value):
+            u = (url or "").strip()
+            return "form", ng_list.norm_url(u if re.match(r"(?i)https?://", u) else "https://" + u.lstrip("/"))
+        return "domain", value
+
+    def add_domain_ng(self, url, reason="", company=""):
+        kind, value = self._domain_or_shared(url)
         if not value:
             return None
-        return self._add_ng("domain", value, reason, company)
+        return self._add_ng(kind, value, reason, company)
 
     def add_form_ng(self, url, reason="", company=""):
         value = ng_list.norm_url(url)
@@ -394,10 +411,10 @@ class NgStateStore:
         return self._add_ng("form", value, reason, company)
 
     def add_screen_domain_ng(self, url, company=""):
-        value = ng_list.domain(url)
+        kind, value = self._domain_or_shared(url)
         if not value:
             return None
-        return self._add_ng("domain", value, SCREEN_REASON, company, source=SCREEN_SOURCE, nonce=secrets.token_urlsafe(16))
+        return self._add_ng(kind, value, SCREEN_REASON, company, source=SCREEN_SOURCE, nonce=secrets.token_urlsafe(16))
 
     def add_screen_form_ng(self, url, company=""):
         value = ng_list.norm_url(url)
@@ -543,7 +560,7 @@ class NgStateStore:
             c.close()
 
     def is_ng(self, urls):
-        keys = self._candidate_keys(urls)
+        keys = self._ng_lookup_keys(urls)
         if not keys[0] and not keys[1]:
             return False
         c = self._conn()
@@ -575,10 +592,10 @@ class NgStateStore:
                 c.execute("ROLLBACK")
                 return None, ("要手動", "NGリストに該当したため送らない")
             for key in keys:
-                row = c.execute("SELECT state FROM sends WHERE key=?", (key,)).fetchone()
-                if row and row[0] != PREPARED:
+                row = c.execute("SELECT state, updated FROM sends WHERE key=?", (key,)).fetchone()
+                if row and not (row[0] == PREPARED and now - float(row[1] or 0) > state.RECOVER_AFTER):
                     c.execute("ROLLBACK")
-                    return None, ("スキップ", "確保が別実行へ引き継がれたため送らない")
+                    return None, ("スキップ", "このフォームは別の実行が送信中か送信済みのため送らない")
             for key in keys:
                 c.execute(
                     "INSERT OR REPLACE INTO sends VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -746,10 +763,20 @@ class NgStateStore:
     def _candidate_keys(self, urls):
         domains = {ng_list.domain(url) for url in urls if url}
         forms = {ng_list.norm_url(url) for url in urls if url}
+        forms |= {ng_list.norm_url(re.sub(r"(?i)/index\.(html?|php)$", "/", url.split("?")[0].split("#")[0])) for url in urls if url}
         return {d for d in domains if d}, {f for f in forms if f}
 
-    def _is_ng_locked(self, conn, urls):
+    def _ng_lookup_keys(self, urls):
+        """NGの照合用。親ドメインでも当てる(osaka.hotelx.co.jp は hotelx.co.jp のNGで止める)。テキスト版 ng_list._dom_hit と同じ規則"""
         domains, forms = self._candidate_keys(urls)
+        expanded = set(domains)
+        for d in domains:
+            labels = d.split(".")
+            expanded.update(".".join(labels[i:]) for i in range(1, len(labels) - 1))
+        return expanded, forms
+
+    def _is_ng_locked(self, conn, urls):
+        domains, forms = self._ng_lookup_keys(urls)
         for kind, values in (("domain", domains), ("form", forms)):
             for value in values:
                 if conn.execute(

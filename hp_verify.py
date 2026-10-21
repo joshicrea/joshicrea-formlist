@@ -1,10 +1,12 @@
 """検索で見つけたHPが、本当にその会社のものかを、地図が持つ電話番号・住所で照合する。実行環境: Windows / Python 3.9+。
 証拠の強さ(強い順): 電話一致 / 住所一致 / 名前のみ(題名・見出しに会社名) / 不一致。
 電話か住所が一致すれば別会社のHPではない。名前だけの一致は、名前が短い・英単語だけの会社(su・mimi・Prune・庄司など)では採らない。
-陽性対照: 電話 03-5875-8689 の会社が、本文に「03-5875-8689」「０３（５８７５）８６８９」のあるページで電話一致になる。
+陽性対照: 電話 03-1234-5678 の会社が、本文に「03-1234-5678」「０３（１２３４）５６７８」のあるページで電話一致になる。
 陰性対照: 辞書・ニュース・技術記事のページ(電話も住所も会社名も無い)は不一致になる。
 原理的に取りこぼす型: 電話・住所を画像で載せている店(名前のみになる)、地図側に電話・住所が無い会社、
-予約サイトの個別ページ(電話は載るが店のHPではない。電話が多数載る一覧ページは弾くが、1店だけのページは弾けない)。"""
+予約サイトの個別ページ(電話は載るが店のHPではない。電話が多数載る一覧ページは弾くが、1店だけのページは照合では弾けない)。
+  既知の予約・掲載・口コミ・SNSのドメインは、照合の前に site_checker.SOCIAL の表で外す(地図に登録のHPも検索で見つけたHPも)。
+  表に無い掲載サイトの1店ページは、この照合を通ってしまう。"""
 import re
 import unicodedata
 
@@ -219,6 +221,10 @@ def judge_detail(row, text, titles=""):
             return _detail("不一致", facility_why,
                            category="needs_review", tel_hit=tel_hit, addr_status=addr,
                            addr_why=addr_why, title_match=True, facility_specific=False)
+        if tel and phones and tel_hit is False and addr != "一致":  # 会社の電話が分かっていて、ページには別の番号だけが載り、住所の裏づけも無い=同じ名前の別の会社(例: 札幌の同名店)。住所が一致するなら従来どおり名前のみで残す
+            return _detail("不一致", "ページの電話番号が、この会社の電話と違う（同じ名前の別の会社の疑い）",
+                           category="needs_review", tel_hit=False, addr_status=addr,
+                           addr_why=addr_why, title_match=True)
         ok = _industry_ok(row, text)
         if ok is None:
             return _detail("不一致", "題名に会社名はあるが、この業種は本文の言葉で確かめられない（電話か住所の一致が必要）",

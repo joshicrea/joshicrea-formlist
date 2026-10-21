@@ -4,8 +4,12 @@ Bingの検索結果ページ(GETのみ・1件ずつ間隔をあけて)から、�
 会社名の最初の塊と過半の塊が結果の題名か説明に無い結果は採らない(same_company)。
 対照(導入時に実測): 東横INN門前仲町永代橋 -> toyoko-inn.com / コンフォートホテル東京清澄白河 -> choice-hotels.jp。
 原理的に取りこぼす型: 名前が一般名詞だけの会社(「ホテル」「TAKASHO Stay」等)、検索結果が全て予約サイトの会社、検索側の制限(429/チャレンジ画面)。
-その場合は空を返し、呼び出し側が「HP不明」として残す。"""
+その場合は空を返し、呼び出し側が「HP不明」として残す。
+SNS・予約・掲載サイトは、SKIP に加えて site_checker の表(地図のHP欄と同じ表)でも外す。
+記憶(出力/hp_cache.json): 候補を読み込めなかった回の「見つからない」は記憶しない。「見つからない」は日付つきで14日だけ使う
+(2026-10-21 破壊レポート 弱点11: 一時的な通信の失敗の会社が、以後ずっと「HP不明」になっていた)。"""
 import base64
+import datetime as dt
 import json
 import random
 import re
@@ -92,10 +96,15 @@ def _bing(q, budget=None, line_id=None):
         if not m:
             continue
         url = _decode(m.group(1))
-        if not url.startswith("http") or SKIP.search(urlparse(url).netloc):
-            continue
+        if not url.startswith("http") or SKIP.search(urlparse(url).netloc) or _not_company_site(url):
+            continue  # SKIP と、地図のHP欄に使う表(site_checker の SNS・予約・掲載サイト)の両方で外す
         out.append((url.split("?msockid")[0], _norm(re.sub(r"<[^>]+>", "", b))))
     return out
+
+
+def _not_company_site(url):
+    import site_checker  # 遅延: site_checker が hp_verify を、hp_verify がこのファイルを読むため
+    return site_checker.is_not_company_site(url)
 
 
 RULES = "v9"  # 照合の規則(hp_verify・search_one)を変えたら必ず上げる。古い規則で採った結果をキャッシュから再利用しないため
@@ -144,7 +153,31 @@ def search_one(row, candidate_allowed=None, budget=None, line_id=None):
                 fallback = (url, lvl, why)
     if fallback:
         return fallback
+    unread = sum(1 for d in row["_candidate_verify_details"] if d.get("category") == "fetch_failed")
+    if unread:  # 読めなかった候補は「合わない」とは言えない。呼び出し側(fill)はこの結果を記憶しない
+        return "", "取得不可", f"候補{tested}件のうち{unread}件を読み込めなかった（一時的な失敗の可能性）。残りは電話・住所・会社名が合わない"
     return "", "不一致", (f"候補{tested}件のどれも、電話・住所・会社名が合わない" if tested else "検索結果に候補が無い")
+
+
+NOT_FOUND_DAYS = 14  # 「見つからなかった」の記憶を使う日数。過ぎたら検索し直す(見つかったHPの記憶は期限なし)
+
+
+def _fetch_failed(row):
+    """この検索で、候補のページを読み込めなかったものがあるか(通信の失敗・一時的な不具合)"""
+    return any(d.get("category") == "fetch_failed" for d in row.get("_candidate_verify_details", []) or [])
+
+
+def _cache_usable(entry):
+    """記憶した結果を使ってよいか。見つかったHPが掲載サイト等なら使わない(表を増やす前に覚えた結果)。
+    見つからなかった結果は、日付つきで NOT_FOUND_DAYS 日以内のものだけ使う(日付の無い古い記憶は、一時的な失敗の可能性があるので検索し直す)"""
+    if not isinstance(entry, list) or len(entry) < 3:
+        return False
+    if entry[0]:
+        return not _not_company_site(entry[0])
+    try:
+        return (dt.date.today() - dt.date.fromisoformat(str(entry[3]))).days <= NOT_FOUND_DAYS
+    except (IndexError, ValueError):
+        return False
 
 
 def _save_cache(cache):
@@ -179,18 +212,27 @@ def fill(rows, log, pause=(1.2, 2.2), want=None, candidate_allowed=None, budget=
             if want and found >= want:
                 log(f"  HPが{found}件分かったので、残りの検索は止めます（上限の件数を調べるのに十分なため）")
                 break
-            if k not in cache:
+            if not _cache_usable(cache.get(k)):
                 tried += 1
                 try:
-                    cache[k] = list(search_one(r, candidate_allowed=candidate_allowed, budget=budget))
+                    got = list(search_one(r, candidate_allowed=candidate_allowed, budget=budget))
                 except (requests.RequestException, RuntimeError) as e:
                     log(f"  HP検索を中断します（{e}）。ここまでの結果は使います")
                     break
+                if got[0]:
+                    cache[k] = got
+                elif _fetch_failed(r):
+                    cache.pop(k, None)  # 候補を読み込めなかった回の「見つからない」は記憶しない(次の回に検索し直す)
+                    log(f"  {r['name'][:20]}: 候補のホームページを読み込めませんでした（一時的な失敗の可能性）。次の回に検索し直します")
+                    time.sleep(random.uniform(*pause))
+                    continue
+                else:
+                    cache[k] = got[:3] + [dt.date.today().isoformat()]
                 time.sleep(random.uniform(*pause))
                 if tried % 10 == 0:  # 途中で止まっても検索結果を失わず、進み具合が見えるようにする
                     log(f"  HP検索 {tried}件目まで済み（対象 {total}件・1件あたり十数秒かかります）")
                     _save_cache(cache)
-            url, lvl, why = cache[k]
+            url, lvl, why = cache[k][:3]
             if url and candidate_allowed and not candidate_allowed(url):
                 continue
             if url:

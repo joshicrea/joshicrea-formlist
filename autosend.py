@@ -31,6 +31,7 @@ from pathlib import Path
 
 
 import message_adoption
+import send_rules
 
 # Explicit message-only CLI bypasses transport/browser/state imports.
 # Normal module consumers and ordinary CLI retain the existing runtime imports.
@@ -151,7 +152,8 @@ def sent_urls(results_only=False):
     押す前に書く「送信試行」の行は含めない(押していないのに残る行で、対象から永久に落とさないため)"""
     if not LOG.exists():
         return set()
-    kinds = ("送信済み", "不明(要確認)", INPUT_ERROR_RESULT) if results_only else ("送信試行", "送信済み", "不明(要確認)", INPUT_ERROR_RESULT)
+    after = ("届いた(本人確認)", "届いていない(本人確認)", "手で送信済み")  # 送ったあとに本人が記録した結果(sales_records)。自動では送り直さない
+    kinds = ("送信済み", "不明(要確認)", INPUT_ERROR_RESULT) + after if results_only else ("送信試行", "送信済み", "不明(要確認)", INPUT_ERROR_RESULT) + after
     with open(LOG, encoding="utf-8-sig", newline="") as f:
         return {k for r in csv.DictReader(f) if r["結果"] in kinds for k in state.keys_of([r["フォームURL"]])}
 
@@ -483,7 +485,28 @@ def is_done(page):
     """押したあとに新しく出た完了の文言があり、入力欄(本文)がもう無いときだけ完了とみなす。
     入力画面や確認画面のステップ表示(「入力→確認→送信完了」)・案内文の「送信完了」は、押す前から画面にあるので数えない"""
     body = page.inner_text("body")
-    return bool(_new_hits(DONE, body)) and not _new_hits(DONE_NEG, body) and page.locator("textarea:visible").count() == 0
+    return bool(_new_hits(DONE, body)) and not _new_hits(DONE_NEG, body) and page.locator("textarea:visible").count() == 0 and not _submit_still_offered(page)
+
+
+# 完了画面にあってよいボタン(戻る・閉じる・同意・検索・メニュー)。これ以外のボタンが見えている画面は、まだ先がある(確認画面など)とみなす
+SEND_WORD = re.compile(r"送信|送る|問い?合わせる|申し?込む|確定|submit|send", re.I)
+HARMLESS_BUTTON = re.compile(r"トップ|戻る|ホーム|閉じる|メニュー|検索|同意|許可|拒否|cookie|accept|close|menu|search|top|home|back|^ok$|^x$|^×$", re.I)
+
+
+def _submit_still_offered(page):
+    """まだ押すボタンが出ている画面は、完了画面ではない。確認画面のステップ表示の「送信完了」(ボタンの文言が「この内容で問い合わせる」のように送信の語を含まない場合)を、送信済みにしない。
+    見えて押せるボタンのうち、戻る・閉じる・同意・検索・メニュー以外があれば True。画面を読めないときは False(従来の判定に任せる)。
+    完了画面に別のボタンがあって完了と判定できなくなる側(誤って「不明(要確認)」になる)は、自動で再送しないので安全側"""
+    try:
+        labels = page.eval_on_selector_all(
+            "button:not([disabled]), input[type=submit]:not([disabled]), input[type=button]:not([disabled]), [role=button]",
+            "els => els.filter(e => e.offsetParent !== null).map(e => ((e.innerText || e.value || e.getAttribute('aria-label') || '') + '').trim())")
+        links = page.eval_on_selector_all(  # a タグ・画像ボタンは、送信の語を含むものだけ数える(完了画面のふつうのリンクで「不明」にしない)
+            "a, input[type=image]:not([disabled])",
+            "els => els.filter(e => e.offsetParent !== null).map(e => ((e.innerText || e.value || e.getAttribute('alt') || e.getAttribute('aria-label') || '') + '').trim())")
+    except Exception:
+        return False
+    return any(l and not HARMLESS_BUTTON.search(l) for l in labels) or any(l and SEND_WORD.search(l) and not BACK_BTN.search(l) for l in links)
 
 
 # 送信後も本文欄が残っていて、入力エラーの表示がある。「不明」と分けて記録する(先方に届いていない可能性が高いが、自動では再送しない)
@@ -521,11 +544,13 @@ def confirm_button(page, before_url, message=""):
         body_text = page.inner_text("body")
         if not CONFIRM_TEXT.search(body_text):
             return None
+        if _new_hits(DONE, body_text):  # 押したあとに「送信しました」等が新しく出た。受け付け済みの恐れがあるので二度押さない
+            return None
         snippet = re.sub(r"\s+", "", message)[:20]
         if snippet and snippet not in re.sub(r"\s+", "", body_text):  # 確認画面なら、入れた本文がそのまま表示されている
             return None
-        btns = page.locator("button:visible, input[type=submit]:visible, input[type=button]:visible")
-        labels = [(b, (b.inner_text() or b.get_attribute("value") or "").strip()) for b in btns.all()]
+        btns = page.locator("button:visible, input[type=submit]:visible, input[type=button]:visible, input[type=image]:visible, a:visible")
+        labels = [(b, (b.inner_text() or b.get_attribute("value") or b.get_attribute("alt") or "").strip()) for b in btns.all()]
         if not any(BACK_BTN.search(t) for _, t in labels):
             return None
         sends = [b for b, t in labels if re.search(r"送信|送る|submit|send", t, re.I) and not BACK_BTN.search(t)]
@@ -538,7 +563,8 @@ _SEND_GATE = None
 
 
 def set_send_gate(gate):
-    """Opt-in send gate for isolated tests; default runtime keeps state/ng_list path."""
+    """送らない会社と送信状態の正本(DB)を関門にする。画面(app.py)から起動したときは必ずこれを使う(--ng-state-db)。
+    None のときはテキストのNGリストと送信状態.db(コマンドから試すとき・テスト用)"""
     global _SEND_GATE
     prev = _SEND_GATE
     _SEND_GATE = gate
@@ -579,7 +605,7 @@ def _gate_ng_result():
     return "要手動", "送信の直前にNGリストへ追加されていたため送らない"
 
 
-def send_one(page, name, url, sender, message, do_send):
+def send_one(page, name, url, sender, message, do_send, hp=""):
     if do_send:
         message_adoption.validate_send(name, url, message, sender)
     else:
@@ -605,7 +631,7 @@ def send_one(page, name, url, sender, message, do_send):
         return "要手動", "件名に差し込みの取り残しがある"
     ok, memo = fill_form(page, sender, message)
     SHOTS.mkdir(parents=True, exist_ok=True)
-    shot = SHOTS / (re.sub(r'[\\/:*?"<>|#\s]', "_", name)[:30] + ".png")
+    shot = SHOTS / (time.strftime("%Y%m%d_%H%M%S_") + re.sub(r'[\\/:*?"<>|#\s]', "_", name)[:30] + ".png")
     page.screenshot(path=str(shot), full_page=True)
     if not ok:
         return "要手動", memo
@@ -614,7 +640,7 @@ def send_one(page, name, url, sender, message, do_send):
     btn = find_submit(page)
     if btn is None:
         return "要手動", "送信ボタンが見つからない"
-    if _gate_is_ng(gate, [url, page.url]):  # 長い送信の途中で追加されたNGも、押す直前に見る
+    if _gate_is_ng(gate, [url, page.url, hp]):  # 長い送信の途中で追加されたNGも、押す直前に見る(会社のHPのドメインも)
         return _gate_ng_result()
     if set(state.keys_of([url, page.url])) & (sent_urls(results_only=True) | state.blocked_keys()):  # 画面版・コマンド版のどちらで押したものも、送信ログの結果行で止める
         return "スキップ", "このフォームは送信ログに結果(送信済み・不明・入力エラー)があるため送らない"
@@ -625,7 +651,7 @@ def send_one(page, name, url, sender, message, do_send):
     log_row([now(), name, url, "送信試行", "送信ボタンを押す直前に記録(二重送信を防ぐ)"])  # 書けなければここで止まり、送らない(状態は「準備」のまま=押していない)
     targets_now = [url, page.url]
     STATE["targets"] = targets_now
-    if _gate_is_ng(gate, targets_now):  # ログ書き込みの間に追加されたNGも、押す直前にもう一度見る
+    if _gate_is_ng(gate, targets_now + [hp]):  # ログ書き込みの間に追加されたNGも、押す直前にもう一度見る
         return _gate_ng_result()
     started, refusal = _gate_start_click(gate, targets_now, token)
     if not started:  # ログ書き込み等に時間がかかり、確保が別の実行へ引き継がれていたら押さない
@@ -702,6 +728,16 @@ def block_ws(ws):
     return None
 
 
+def plain_failure(e):
+    """押す前に止まった理由を、利用者の言葉と原文で"""
+    raw = repr(e)[:120]
+    if "Timeout" in raw:
+        return "ページを開けないか、時間内に表示されませんでした。手で開いて送ってください。原文: " + raw
+    if "ERR_NAME_NOT_RESOLVED" in raw or "ERR_CONNECTION" in raw or "net::" in raw:
+        return "このページにつながりませんでした(アドレスが変わったか、サイトが止まっている)。原文: " + raw
+    return "途中で止まりました。手で開いて送ってください。原文: " + raw
+
+
 def positive_int(s):
     """--max は1以上の整数だけ。負数は Python のスライスで「最後の1社以外」になり、大量送信になる"""
     if not re.fullmatch(r"\d+", s.strip()) or int(s) < 1:
@@ -770,7 +806,24 @@ def main():
     if miss:
         print("sender.json に必要な項目がないか、見本のままです:", miss)
         return 1
-    todo = (targets(a.csv, a.include_supplemented, gate=gate) if gate is not None else targets(a.csv, a.include_supplemented))[: a.max]
+    todo = targets(a.csv, a.include_supplemented, gate=gate) if gate is not None else targets(a.csv, a.include_supplemented)
+    if a.send or a.preview:  # 同じ会社へ送りすぎない(09 送信ルール2)。確認と本番で同じ絞り方にする(確認番号を合わせるため)
+        kept = []
+        for row in todo:
+            why = send_rules.company_refusal(LOG, row[0], row[1], row[4])
+            if why:
+                print(f"同じ会社のため対象外: {row[0]}  {why}")
+            else:
+                kept.append(row)
+        todo = kept
+        left = send_rules.DAILY_LIMIT - send_rules.pressed_today(LOG)
+        if left <= 0:
+            print(f"きょうはすでに{send_rules.DAILY_LIMIT}社に送っています(1日の上限)。あした以降に送ってください")
+            return 6
+        if len(todo) > left:
+            print(f"1日の上限({send_rules.DAILY_LIMIT}社)まで残り{left}社のため、{left}社に絞ります")
+            todo = todo[:left]
+    todo = todo[: a.max]
     print(f"対象 {len(todo)}社（フォームあり・お断り表示なし・送信ログに無い{'・検索で補ったHPを含む' if a.include_supplemented else '・検索で補ったHPは除く'}）")
     if not todo:
         return 0
@@ -792,6 +845,9 @@ def main():
         except message_adoption.AdoptionError as exc:
             print(str(exc))
             return 4
+    legal = send_rules.legal_missing(sender)
+    if a.preview and legal:
+        print("注意: 署名に次の表示がありません。このままでは本番で送れません(特定電子メール法): " + "、".join(legal))
     if a.preview:
         for (name, url, ind, opener, _hp), body in zip(todo, bodies):
             print(f"\n===== 送る文面 {name}（業種「{ind or '指定なし'}」）=====")
@@ -801,6 +857,18 @@ def main():
         print(f"確認番号: {got}")
         return 0
     if a.send:
+        # 本番は、ツールの画面で人が承認したあとに発行される使い切りの鍵が要る。コマンドの直接実行では送れない
+        import approval
+        if legal:
+            print("署名に次の表示がないため、送りません(特定電子メール法): " + "、".join(legal) + "。送信元の署名を直してから、もう一度「確認する」からやり直してください")
+            return 1
+        late = send_rules.window_refusal()
+        if late:
+            print(late)
+            return 6
+        if not (a.expect and approval.consume_ticket(approval.env_token(), a.expect)):
+            print("本番の送信は、ツールの画面（または AI から formlist_send）で、人が全文を確認して承認したあとにだけ始められます。このコマンドからは送れません")
+            return 5
         for (name, url, ind, opener, _hp), body in zip(todo, bodies):
             print(f"\n===== 送る文面 {name}（業種「{ind or '指定なし'}」）=====")
             print("件名: " + message_adoption.effective_sender(name, url, sender).get("件名", "").replace("{企業名}", name))
@@ -831,13 +899,13 @@ def main():
                     ctx.route("**/*", block_internal)
                     ctx.route_web_socket("**/*", block_ws)
                     page = ctx.new_page()
-                    res, memo = send_one(page, name, url, sender, body, a.send)
+                    res, memo = send_one(page, name, url, sender, body, a.send, hp)
                 except LogError as e:  # 記録が書けないまま送ると、次の回にもう一度送る。ここで止める
                     print("送信ログに書けません（Excelで開いていませんか）。二重送信を防ぐため、ここで止めます:", e)
                     br.close()
                     return 2
                 except Exception as e:  # 1社の失敗で止めない。原文を残す
-                    res, memo = ("不明(要確認)", "送信ボタンを押した後に止まった: " + repr(e)[:90]) if STATE["clicked"] else ("要手動", repr(e)[:120])
+                    res, memo = ("不明(要確認)", "送信ボタンを押した後に止まりました。届いたかは手で確かめてください。原文: " + repr(e)[:90]) if STATE["clicked"] else ("要手動", plain_failure(e))
                     if STATE["clicked"] and STATE.get("token"):
                         gate = STATE.get("gate")
                         targets_for_mark = STATE.get("targets") if gate is not None else [url]
@@ -853,9 +921,13 @@ def main():
             if res.startswith("お断り"):
                 if ng_list.add(hp or url, "営業お断り表示(フォーム画面)「" + memo[:30] + "」", name):
                     print("  営業お断りの会社として NGリストに追加しました")
+                if gate is not None:
+                    gate.add_domain_ng(hp or url, "営業お断り表示(フォーム画面)", name)
             elif res == "要手動" and ("captcha" in memo or "本文欄が見つからない" in memo):  # 一時的な失敗(Timeout等)は入れない
                 if ng_list.add_form(url, "自動で送れない: " + memo[:20], name):
                     print("  このフォームをNGリストに追加しました（今後は一覧に出しません）")
+                if gate is not None:
+                    gate.add_form_ng(url, "自動で送れない", name)
             if a.send and i < len(todo):
                 time.sleep(random.uniform(30, 60))
         br.close()

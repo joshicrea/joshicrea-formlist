@@ -7,8 +7,11 @@ Source interface (osm_source と同じ):
 source は "google"。Yahoo!マップは2026-10-10に外した。
 
 注意:
-- Google マップは robots.txt と利用規約が自動取得を認めていない。件数を絞り、1件ごとに間隔を空けて、
-  検索1回あたり limit 件(既定20)までしか見ない。ブロックされたら止まる(回避はしない)。
+- Google マップは robots.txt と利用規約が自動取得を認めていない。1件ごとに間隔を空けて、検索1回あたり limit 件までしか見ない
+  (limit は呼び出し側の「調べる会社数の上限」がそのまま渡る。formlist からは50〜200。町名に分ける地域では、町名の数だけ検索する)。
+  ブロックされたら止まる(回避はしない)。
+- 取りこぼし(読めなかった店・上限の件数に届く前に一覧が止まった検索・結果1件で施設ページに直行した検索)は RUN_COUNTS に数え、
+  formlist が探索の内訳に出す。
 - Yahoo!マップは外した。map.yahoo.co.jp/robots.txt が /proxy を Disallow しており、検索結果の元になる通信 /proxy/search はそこに当たる
   (2026-10-10 に robots.txt を取得して確認)。以前のこの説明「robots.txt 上は許可」は誤りだった。
 """
@@ -16,6 +19,7 @@ import re
 import time
 import unicodedata
 import datetime as dt
+from threading import Lock
 from urllib.parse import quote, unquote, urlsplit
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -24,6 +28,27 @@ PAUSE = 1.5
 DETAIL_SETTLE_MS = 800  # 詳細欄の見出しと項目が出たあと、電話・住所・ホームページの欄が揃うまで待つ時間
 BLOCK_HEAVY = False  # True で、画像・動画・フォントの読み込みを止める(地図のタイルや写真は、読むのに要らない)
 MAX_SCROLL_ATTEMPTS = 30
+
+# この回(1プロセス)の地図の検索で、取れた数と取りこぼした数。並列で取るので足すときは鍵を取る
+RUN_COUNTS = {}
+_COUNT_LOCK = Lock()
+
+
+def tally(**kw):
+    with _COUNT_LOCK:
+        for k, v in kw.items():
+            RUN_COUNTS[k] = RUN_COUNTS.get(k, 0) + v
+
+
+# 施設の詳細欄から、見出し・公式サイト・電話・住所を読む(一覧のカードを開いたときと、施設ページに直行したときで共用)
+DETAIL_JS = r"""() => {
+  const g = s => [...document.querySelectorAll(s)];
+  const web = g("a[data-item-id='authority']")[0];
+  const lab = id => { const e = g("[data-item-id^='" + id + "']")[0]; return e ? (e.getAttribute('aria-label') || e.innerText || '').replace(/^[^:：]*[:：]\s*/, '').trim() : ''; };
+  return {names: g('h1').map(e => e.innerText).map(x => x.replace(/^\s*(スポンサー|広告)\s*/, '').trim()).filter(x => x && x !== '結果'),
+          name: '',
+          url: web ? web.href : '', href: location.href, tel: lab('phone'), address: lab('address')};
+}"""
 
 
 def _row(name, term, area, url, source, ref, tel="", address=""):
@@ -185,6 +210,56 @@ RETRY_BAD_RATE = 0.5  # 1つの検索語で、候補のこの割合以上が読�
 RETRY_MIN_CARDS = 4
 
 
+class GoogleBlocked(RuntimeError):
+    """Google に確認画面・回数制限で止められた。続けて叩かない"""
+
+
+class TransientFetchError(RuntimeError):
+    """この1検索だけの失敗(通信・一時的な不具合)。ほかの検索は続けてよい"""
+
+
+def _classify_failed_page(pg):
+    """結果の一覧が出なかった画面を見て、blocked(確認画面・回数制限)/ empty(結果0件)/ place(1件だけで施設ページへ直行)/ other に分ける"""
+    try:
+        url = pg.url or ""
+        text = (pg.inner_text("body", timeout=3000) or "")[:3000]
+    except Exception:
+        return "other"
+    if "/sorry/" in url or "unusual traffic" in text or "通常と異なるトラフィック" in text or "ロボットではありません" in text:
+        return "blocked"
+    if "/maps/place/" in url:
+        return "place"  # 結果が1件だけのときは、一覧を経ずに施設ページへ移る
+    if "一致する結果が見つかりませんでした" in text or "No results found" in text or "見つかりませんでした" in text:
+        return "empty"
+    return "other"
+
+
+def _clean_name(info, label):
+    """詳細欄の見出しから会社名を選び、広告枠の「スポンサー」の行を外す"""
+    if info.get("names"):  # 見出しの候補が取れていれば、そこから選ぶ(無ければ従来の name をそのまま使う)
+        info["name"] = pick_name(info["names"], label)
+    info["name"] = " ".join(l.strip() for l in (info.get("name") or "").splitlines() if l.strip() and l.strip() not in ("スポンサー", "広告", "Sponsored", "Ad"))
+    return info
+
+
+def _read_place_page(pg, term, area_name, q, log):
+    """結果が1件だけで施設ページに直行したとき、その施設を1行として読む。読めなければ None(取りこぼしとして数える)"""
+    try:
+        pg.wait_for_selector("[data-item-id]", timeout=12000)
+        pg.wait_for_timeout(DETAIL_SETTLE_MS)
+        info = _clean_name(pg.evaluate(DETAIL_JS), "")
+    except Exception as e:
+        log(f"  「{q}」は結果が1件だけで施設ページに直接移りましたが、読めませんでした（原文: {_err_text(e, pg)}）")
+        return None
+    if not usable_name(info.get("name", "")):
+        return None
+    row = _row(info["name"], term, area_name, info.get("url", ""), "Googleマップ", info.get("href", ""), info.get("tel", ""), info.get("address", ""))
+    pid = place_id_of(info.get("href", ""))
+    if pid:
+        row["place_id"] = pid
+    return row
+
+
 def fetch_google(area_name, term, log, limit=20):
     """検索語1つぶんの取得。候補の半分以上が読めなかったときは(Googleマップが詳細欄を開かなくなる・一時的な失敗)、やり直す。
     やり直してもだめなら、丸ごと失敗したことを警告に出す(一覧が黙って小さくなるのを防ぐ)"""
@@ -197,10 +272,13 @@ def fetch_google(area_name, term, log, limit=20):
         stats2 = {}
         rows2 = _fetch_google_once(area_name, term, log, limit, stats2)
         if len(rows2) > len(rows):
-            rows = rows2
+            rows, stats = rows2, stats2
             n, bad = stats2.get("n", 0), stats2.get("skipped", 0)
         if n >= RETRY_MIN_CARDS and bad >= n * RETRY_BAD_RATE:
             log(f"  [警告] 「{term}」は、やり直しても候補{n}件のうち{bad}件が読めませんでした。この検索語の結果は少ないままです(Googleマップ側の一時的な制限の可能性)")
+    tally(searches=1, rows=len(rows), cards=stats.get("n", 0), unreadable=stats.get("skipped", 0), bad_name=stats.get("bad_name", 0),
+          cut_short=stats.get("cut_short", 0), place_read=stats.get("place_read", 0), place_missed=stats.get("place_missed", 0),
+          empty=stats.get("empty", 0))  # やり直したときは、使った方の回だけを数える
     return rows
 
 
@@ -224,12 +302,34 @@ def _fetch_google_once(area_name, term, log, limit=20, stats=None):
                     last = e
                     pg.wait_for_timeout(4000)
             else:
-                raise RuntimeError(f"Google マップが開けない・結果が出ない(ブロックの可能性): {last!r}")
+                kind = _classify_failed_page(pg)
+                if kind == "blocked":
+                    raise GoogleBlocked(f"Google マップに「普段と違う通信」として止められました（確認画面）。時間をおいて、同じ場所を連続で探さないでください: {last!r}")
+                if kind == "place":
+                    row = _read_place_page(pg, term, area_name, q, log)
+                    if row:
+                        if stats is not None:
+                            stats.update(place_read=1)
+                        log(f"  「{q}」は、結果が1件だけで施設ページに直接移りました。その1件を取りました")
+                        return [row]
+                    if stats is not None:
+                        stats.update(place_missed=1)
+                    log(f"  「{q}」は、結果が1件だけで施設ページに直接移り、その1件を読めませんでした（取りこぼし1件）。町名を広げて探し直すと取れることがあります")
+                    return []
+                if kind == "empty":
+                    if stats is not None:
+                        stats.update(empty=1)
+                    log(f"  「{q}」は、Googleマップで結果が0件でした（失敗ではありません）")
+                    return []
+                raise TransientFetchError(f"Google マップが開けない・結果が出ない（通信の失敗か、一時的な不具合です）: {last!r}")
             cards = pg.locator("a.hfpxzc")
             card_scroll = _count_cards_with_scroll(pg, cards, limit)
             n = min(card_scroll["count"], limit)
             if card_scroll["status"] != "limit_reached":
-                log(f"  Google Maps partial load: status={card_scroll['status']} reason={card_scroll['reason']} attempts={card_scroll['attempts']} count={card_scroll['count']}")
+                why = {"no_new_cards_after_scroll": "下まで送っても新しい店が出なくなった", "scroll_attempt_limit_reached": "送る回数の上限に達した",
+                       "count_failed": "店の数を数えられなかった"}.get(card_scroll["reason"], card_scroll["reason"])
+                log(f"  「{q}」は、上限{limit}件に届く前に一覧が{card_scroll['count']}件で止まりました（{why}。店がそれだけしか無い場合と、地図がそれ以上出さない場合があり、見分けられません。"
+                    f"原文: status={card_scroll['status']} reason={card_scroll['reason']} attempts={card_scroll['attempts']}）")
             seen = set()
             skipped = dup = bad_name = 0
             error_samples = []
@@ -247,14 +347,7 @@ def _fetch_google_once(area_name, term, log, limit=20, stats=None):
                         pg.wait_for_function("a => [...document.querySelectorAll('h1')].some(e => e.innerText.trim() === a.l) && (!a.p || decodeURIComponent(location.href).toLowerCase().includes(a.p))", arg={"l": label.strip(), "p": pid}, timeout=12000)
                         pg.wait_for_selector("[data-item-id]", timeout=12000)
                         pg.wait_for_timeout(DETAIL_SETTLE_MS)
-                        info = pg.evaluate("""() => {
-                          const g = s => [...document.querySelectorAll(s)];
-                          const web = g("a[data-item-id='authority']")[0];
-                          const lab = id => { const e = g("[data-item-id^='" + id + "']")[0]; return e ? (e.getAttribute('aria-label') || e.innerText || '').replace(/^[^:：]*[:：]\\s*/, '').trim() : ''; };
-                          return {names: g('h1').map(e => e.innerText).map(x => x.replace(/^\s*(スポンサー|広告)\s*/, '').trim()).filter(x => x && x !== '結果'),
-                                  name: '',
-                                  url: web ? web.href : '', href: location.href, tel: lab('phone'), address: lab('address')};
-                        }""")
+                        info = pg.evaluate(DETAIL_JS)
                         if pid and pid not in unquote(info.get("href", "")).lower():  # 読み終えた詳細欄が、今のカードの施設ではない(前の施設の電話・住所が残っている)
                             got_id = place_id_of(info.get("href", ""))
                             info = None
@@ -263,11 +356,8 @@ def _fetch_google_once(area_name, term, log, limit=20, stats=None):
                     except Exception as e:
                         last_err = _err_text(e, pg)  # 原文を残す(ブロックと通常の欠損を後から区別するため)
                         pg.wait_for_timeout(2000)
-                if info:
-                    if info.get("names"):  # 見出しの候補が取れていれば、そこから選ぶ(無ければ従来の name をそのまま使う)
-                        info["name"] = pick_name(info["names"], label)
                 if info:  # 広告枠の見出しは「スポンサー」の行が先頭に付く。会社名には入れない
-                    info["name"] = " ".join(l.strip() for l in info["name"].splitlines() if l.strip() and l.strip() not in ("スポンサー", "広告", "Sponsored", "Ad"))
+                    info = _clean_name(info, label)
                 if not info:
                     skipped += 1
                     if len(error_samples) < 3:
@@ -287,7 +377,7 @@ def _fetch_google_once(area_name, term, log, limit=20, stats=None):
                 time.sleep(PAUSE)
             log(f"  Googleマップ: 候補{n}件のうち 取得{len(rows)}件・読めず{skipped}件・名前が使えず除外{bad_name}件・重複{dup}件")
             if stats is not None:
-                stats.update(n=n, skipped=skipped)
+                stats.update(n=n, skipped=skipped, bad_name=bad_name, cut_short=0 if card_scroll["status"] == "limit_reached" else 1)
             for sample in error_samples:
                 log(f"    読めなかった例: {sample}")
         finally:

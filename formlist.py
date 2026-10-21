@@ -13,6 +13,7 @@ import csv
 import datetime as dt
 import hashlib
 import re
+import unicodedata
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -406,7 +407,7 @@ def should_research_official_site(r, res):
         "minimodel.jp", "ekiten.jp", "google.com", "sites.google.com", "docs.google.com",
         "forms.gle", "b-merit.jp", "reserva.be", "airrsv.net",
     )
-    if any(host == h or host.endswith("." + h) for h in soft_hosts):
+    if any(host == h or host.endswith("." + h) for h in soft_hosts) or site_checker.is_not_company_site(host):
         return True
     return not res.get("contact_candidate") and res.get("verdict") not in ("robots禁止", "取得失敗")
 
@@ -597,13 +598,18 @@ def write_budget_stop_diagnostic(rows):
     raise FileExistsError(f"could not create unique http budget diagnostic file for {stamp}")
 
 
-def run_checks(rows, workers=4, resume_checks=False, retry_limit=2, official_research=False, budget=None, ng_store=None):
+def run_checks(rows, workers=4, resume_checks=False, retry_limit=2, official_research=False, budget=None, ng_store=None, stop_check=None):
+    """stop_check(止める指示を見る関数)が真になったら、まだ調べていない会社は調べずに外す(戻りに入れない。件数は RUN_STATS["not_checked_stopped"])"""
     assign_budget_line_ids(rows)
     done = [0]
     budget_stop_rows = []
     budget_stop_lock = Lock()
 
     def one(r):
+        if stop_check and stop_check():
+            with budget_stop_lock:
+                RUN_STATS["not_checked_stopped"] = RUN_STATS.get("not_checked_stopped", 0) + 1
+            return None
         _clear_budget_stop_state(r)
         record_comparison_audit(r)
         checkpoint_status = ""
@@ -638,7 +644,7 @@ def run_checks(rows, workers=4, resume_checks=False, retry_limit=2, official_res
 
     try:
         with ThreadPoolExecutor(max_workers=workers) as ex:  # different sites in parallel, same site sequential
-            return list(ex.map(one, rows))
+            return [x for x in ex.map(one, rows) if x is not None]
     except HttpBudgetExceeded:
         try:
             path = write_budget_stop_diagnostic(budget_stop_rows)
@@ -771,6 +777,10 @@ def write_outputs(checked, no_url, label):
     for r in no_url:
         q = quote_plus(f'{r["name"]} {r["area"]}')
         ws2.append(safe_output_row([r["name"], r["industry"], r["area"], f"https://www.google.com/search?q={q}", r["osm_ref"]]))
+    ws3 = wb.create_sheet("このリストで確かめていないこと")
+    for line in NOT_CHECKED:
+        ws3.append([line])
+    ws3.column_dimensions["A"].width = 120
     wb.save(base.with_suffix(".xlsx"))
     with open(base.with_suffix(".csv"), "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
@@ -780,12 +790,106 @@ def write_outputs(checked, no_url, label):
 
 
 RUN_STATS = {"out_of_area": 0}
+import os as _os
+
+
+def summary_name(port=None):
+    """複数のサーバーが同時に探すので、内訳の印はサーバー(ポート)ごとに分ける"""
+    return f"最後の探索_内訳_{port or _os.environ.get('FORMLIST_PORT') or 8780}.json"
+
+
+SUMMARY_FILE = summary_name()
+
+
+RUN_ID = {"started": "", "id": ""}
+
+OUTCOME_MESSAGE = {
+    "running": "探している途中です。この印のまま探す処理が終わっていたら、途中で止まった(止めた・異常終了した)回です。",
+    "ok": "会社が見つかりました。",
+    "zero": "Googleマップの検索は失敗せず、取りこぼしの記録もありませんが、会社は0件でした。",
+    "all_outside": "地図では会社が見つかりましたが、住所が指定の地域と合わず、全部「エリア外」として外しました。0件ではありません。地名の書き方を確かめて、市区町村まで1つずつ「、」で区切って入れ直してください（例: 東京都江東区、東京都墨田区）。",
+    "missed": "失敗はありませんが、読めなかった店・名前を読めなかった店・施設ページに直行して読めなかった検索があり、残った会社は0件でした。0件と言い切れません。時間をおいて探し直してください。",
+    "failed": "取得に失敗しました。これは「0件」ではありません。通信の失敗か、Googleに止められた可能性があります。",
+    "partial": "一部の検索が失敗しましたが、取れた分で続けました。取りこぼしがあります。",
+    "stopped": "止める指示で、途中で止めました。調べ終わった分だけをリストにしています（リストが無い回もあります）。",
+}
+
+# このリストで確かめていないこと(結果の出力自身に書く。勝利条件10)
+NOT_CHECKED = [
+    "Googleマップは1回の検索で最後まで出さないことがあります。読めなかった店・上限の件数に届く前に一覧が止まった検索の数は、探した記録の内訳(map)にあります",
+    "「フォームあり」は、そのホームページが会社のものかを確かめる前の判定を含みます。送ってよいかは「HPの照合」の列と、自動送信の対象かどうかで決まります",
+    "予約・掲載・口コミ・SNSのページは、表にあるものだけを外しています。表に無い掲載サイトの1店ページは、会社のホームページとして残ることがあります",
+    "大手・チェーンかどうかは、名前と同じホームページの店の数だけで推定しています（売上・従業員数は見ていません）",
+    "エリア外かどうかは住所の文字で判定しています。住所が無い店は判定していません",
+    "営業お断りの表示は、文字で書かれたものだけを見ています（画像の中の文字は見ていません）",
+    "画面の描画に頼るフォーム、ログインが要るページ、確認の画像(CAPTCHA)だけのページは、フォームの有無を確かめられていません",
+]
+
+
+def map_counts():
+    """この回の地図の検索の、取れた数と取りこぼした数(map_browser_source が数えたもの)"""
+    c = dict(map_browser_source.RUN_COUNTS)
+    return {"searches": c.get("searches", 0), "rows": c.get("rows", 0), "unreadable": c.get("unreadable", 0),
+            "cut_short": c.get("cut_short", 0), "place_missed": c.get("place_missed", 0), "place_read": c.get("place_read", 0),
+            "empty": c.get("empty", 0), "bad_name": c.get("bad_name", 0)}
+
+
+def missed_total(m=None):
+    m = m or map_counts()
+    return m["unreadable"] + m["place_missed"] + m["bad_name"]  # cut_short(一覧が上限前に止まった)は、店がそれだけしか無い場合と見分けられないので数えない
+
+
+def write_run_summary(outcome, **extra):
+    """この回の探索の結果を、MCP・画面が読めるJSONで残す。0件(本当に無かった)と失敗(止められた・通信の失敗)を分けるための印。
+    outcome: running(探している途中) / ok(会社が見つかった) / zero(失敗も取りこぼしも無く0件) / all_outside(取れたが全部エリア外) /
+             missed(失敗は無いが取りこぼしがあり0件) / failed(失敗があり、取れた会社が無い) / partial(失敗があり、取れた分だけで続けた) / stopped(止める指示で止めた)
+    run_id・started はこの回の印。読む側は、探す処理を始めた時刻より古い started の印を、この回のものとして使わない"""
+    import json
+    data = {"outcome": outcome, "message": OUTCOME_MESSAGE.get(outcome, ""), "run_id": RUN_ID["id"], "started": RUN_ID["started"],
+            "finished": dt.datetime.now().isoformat(timespec="seconds") if outcome != "running" else "",
+            "out_of_area": RUN_STATS.get("out_of_area", 0), "fetch_failed": RUN_STATS.get("fetch_failed", 0),
+            "duplicate_places": RUN_STATS.get("duplicate_places", 0), "map": map_counts(), "missed": missed_total(),
+            "area_notes": RUN_STATS.get("area_notes", []), "not_checked": NOT_CHECKED, **extra}
+    try:
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
+        import filelock
+        path = OUT_DIR / summary_name()
+        with filelock.locked(path):
+            filelock.atomic_write(path, json.dumps(data, ensure_ascii=False, indent=2))
+    except Exception as e:  # 印が書けなくても、収集の結果そのものは壊さない
+        log(f"（探索の内訳の印を書けませんでした: {e!r}）")
 
 
 def out_of_area(r, area):
-    """行の住所が、指定した区・市の外にある(Googleが近くの別の区の店も返す)。住所が無い・エリアに区市町村が無いときは判定しない(False)"""
-    m = re.search(r"[^都道府県]+?[区市町村]$", area or "")
-    return bool(m and r.get("address") and m.group(0) not in r["address"])
+    """行の住所が、指定した区・市の外にある(Googleが近くの別の区の店も返す)。住所が無い・エリアに区市町村が無いときは判定しない(False)。
+    住所に都道府県があれば、それも指定と合うかを見る(東京都港区の指定で、大阪市港区の店を残さない)。ヶ/ケ・ヵ/カは同じ字として比べる"""
+    scopes = subareas.area_scopes(area)
+    if not scopes or not r.get("address"):
+        return False
+    return not subareas.address_in(r["address"], scopes)
+
+
+def dedupe_places(rows):
+    """町名・検索語をまたいで同じ店が何回も出たものを、1行にまとめる(Googleマップは町名で探しても近くの店を返す)。
+    鍵は施設の識別子(place_id)、無ければ 名前+ホームページ+住所。大手・チェーンの推定と件数の集計より前に通す
+    (2026-10-21 破壊レポート 致命傷2: 豊洲・東雲・有明の3検索に出た1店が「同じホームページが3件」でチェーン扱いになっていた)。
+    戻り: (まとめた後の行, まとめて消した件数)"""
+    seen, out = set(), []
+    for r in rows:
+        pid = r.get("place_id") or r.get("google_place_id")
+        if not pid and r.get("source") != "Googleマップ":
+            out.append(r)  # 貼り付けリスト・ポータル・OSM の行はここでは触らない(同じHPの重複は dedupe が記録つきで外す)
+            continue
+        if pid:
+            key = ("id", str(pid))
+        else:
+            key = ("name", unicodedata.normalize("NFKC", str(r.get("name", ""))).strip().lower(), str(r.get("url", "")).strip().lower().rstrip("/"),
+                   hp_verify._addr_norm(r.get("address", "")))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out, len(rows) - len(out)
 
 
 def limit_osm_rows(rows, limit, log):
@@ -871,48 +975,146 @@ def summarize(fetched, checked, no_url, refused=0):
 
 
 PARALLEL_MAX = 5  # Googleマップへの同時アクセスの上限。増やすほどブロックされやすい
+BLOCK_MINUTES = 30  # Googleに止められたら、この時間はどのサーバーも新しい地図の検索を始めない(暫定値。止められた時間の実測は無い)
+TRANSIENT_IN_A_ROW = 3  # 地図の結果が出ない失敗がこの回数続いたら、制限の可能性があるとして残りの検索を止める
+SECONDS_PER_CARD = 1.5 + 0.8  # map_browser_source の PAUSE + DETAIL_SETTLE_MS。所要時間の目安だけに使う
 
 
-def prefetch_google(area, units, limit, workers):
+class BlockedElsewhere(map_browser_source.GoogleBlocked):
+    """同時に動いている別のサーバーがGoogleに止められた印を見て、この検索を始めなかった(印を書き直して時間を延ばさない)"""
+
+
+def block_file():
+    return OUT_DIR / "google_止められた.json"
+
+
+def mark_google_blocked(reason):
+    """Googleに止められた印を、出力フォルダに残す。同時に動いている別のサーバーも、これを読んで新しい検索を始めない"""
+    import json
+    import filelock
+    now = dt.datetime.now()
+    data = {"since": now.isoformat(timespec="seconds"), "until": (now + dt.timedelta(minutes=BLOCK_MINUTES)).isoformat(timespec="seconds"),
+            "port": _os.environ.get("FORMLIST_PORT") or "8780", "reason": str(reason)[:200]}
+    try:
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
+        with filelock.locked(block_file()):
+            filelock.atomic_write(block_file(), json.dumps(data, ensure_ascii=False, indent=2))
+    except Exception as e:  # 印が書けなくても、この回の止め方は変えない
+        log(f"（Googleに止められた印を書けませんでした: {e!r}）")
+
+
+def google_block_active():
+    """Googleに止められた印がまだ有効なら、その終わる時刻の文字列。無ければ空"""
+    import json
+    try:
+        d = json.loads(block_file().read_text(encoding="utf-8-sig"))
+        until = dt.datetime.fromisoformat(d["until"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
+    return d["until"] if until > dt.datetime.now() else ""
+
+
+def stop_file(port=None):
+    """止める指示の印。MCP・画面がこのファイルを置くと、探す処理は次の区切り(検索1回・会社1社)で止まる"""
+    return OUT_DIR / f"探す_止める_{port or _os.environ.get('FORMLIST_PORT') or 8780}.flag"
+
+
+def stop_requested():
+    try:
+        return stop_file().exists()
+    except OSError:
+        return False
+
+
+def clear_stop():
+    try:
+        stop_file().unlink()
+    except OSError:
+        pass
+
+
+def prefetch_google(area, units, limit, workers, block_check=None, stop_check=None):
     """Googleマップの検索を、検索語(業種・キーワード)×町名の単位で並列に取る。戻りは {(単位の番号, 検索語, 町): 行の一覧 か 例外}。
-    どれか1つが例外で止まったら、まだ始めていない検索は実行しない(ブロックされたときに叩き続けないため)。
+    どれか1つがGoogleに止められたら、まだ始めていない検索は実行しない(ブロックされたときに叩き続けないため)。
+    地図の結果が出ない失敗が TRANSIENT_IN_A_ROW 回続いたときも、制限の可能性として止める。
+    block_check: 別のサーバーがGoogleに止められた印を見る関数(有効なら真)。stop_check: 止める指示を見る関数。
+    同じ検索語×町名は1回だけ取る(業種「サロン」と「美容・コスメ」の両方にある「美容室」など)。戻りの行は単位ごとに別の辞書の写し。
     ブラウザは1検索ごとに自前で開いて閉じるので、スレッド間で共有するものは無い"""
     import random
     import time
     from threading import Event
     stop = Event()
+    lock = Lock()
+    streak = [0]
     subs = subareas.split(area)
-    jobs = []
+    keys = []
     for ui, (ind, kw) in enumerate(units):
         if not kw and ind in NO_MAP:
             continue
         for term in ([kw] if kw else MAP_TERMS.get(ind) or ind.split("・")):
             for sub in subs:
-                jobs.append((ui, term, sub))
+                keys.append((ui, term, sub))
+    jobs = list(dict.fromkeys((term, sub) for _ui, term, sub in keys))
 
     def run(job):
-        ui, term, sub = job
+        term, sub = job
         if stop.is_set():
             return job, RuntimeError("ほかの検索が止まったため、この検索は実行しませんでした")
+        if stop_check and stop_check():
+            stop.set()
+            return job, RuntimeError("止める指示があったため、この検索は実行しませんでした")
+        if block_check and block_check():
+            stop.set()
+            return job, BlockedElsewhere("同時に動いている別の検索がGoogleに止められたため、この検索は実行しませんでした。時間をおいて探し直してください")
         time.sleep(random.uniform(0, 2))  # 同時に始めた検索が、同じ瞬間にGoogleへ集中しないようにずらす
         try:
-            return job, map_browser_source.fetch("google", sub, term, log, limit=limit)
-        except Exception as e:
-            stop.set()
+            got = map_browser_source.fetch("google", sub, term, log, limit=limit)
+        except map_browser_source.GoogleBlocked as e:
+            stop.set()  # 確認画面・回数制限。まだ始めていない検索は実行しない
             return job, e
+        except Exception as e:
+            with lock:
+                streak[0] += 1
+                if streak[0] >= TRANSIENT_IN_A_ROW and not stop.is_set():
+                    stop.set()
+                    log(f"  地図の結果が出ない失敗が{streak[0]}回続きました。Googleの制限の可能性があるため、残りの検索は始めません")
+            return job, e  # この1検索だけの失敗。続いていなければ、ほかの町名・検索語は続ける
+        with lock:
+            streak[0] = 0
+        return job, got
 
     workers = max(1, min(PARALLEL_MAX, workers))
-    if len(jobs) > 1 and workers > 1:
-        log(f"\n{len(jobs)}件の検索（検索語×町名）を、最大{workers}本ずつ並行して取得します")
+    if jobs:
+        minutes = max(1, round(len(jobs) * limit * SECONDS_PER_CARD / workers / 60))
+        log(f"\n{len(jobs)}件の検索（検索語×町名）を、最大{workers}本ずつ並行して取得します。1検索で最大{limit}件の店を1件ずつ開くため、"
+            f"地図だけでおよそ{minutes}分かかることがあります（店が少ない検索は早く終わります。このあとホームページの検索とフォームの確認が続きます）")
+        RUN_STATS["estimate_minutes"] = minutes
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        return dict(ex.map(run, jobs))
+        got = dict(ex.map(run, jobs))
+    return {(ui, term, sub): (got[(term, sub)] if isinstance(got[(term, sub)], BaseException) else [dict(g) for g in got[(term, sub)]])
+            for ui, term, sub in keys}
 
 
 def main(budget=None):
+    """探す処理の本体。途中の予期しない例外でも、この回の内訳の印を failed で書いてから上げる(前の回の印を残さない)"""
+    RUN_ID["started"] = dt.datetime.now().isoformat(timespec="seconds")
+    RUN_ID["id"] = f"{RUN_ID['started']}#{_os.getpid()}"
+    RUN_STATS.clear()
+    RUN_STATS["out_of_area"] = 0
+    map_browser_source.RUN_COUNTS.clear()
+    try:
+        return _main(budget)
+    except BaseException as e:
+        if not isinstance(e, SystemExit):
+            write_run_summary("failed", error=f"{type(e).__name__}: {str(e)[:200]}")
+        raise
+
+
+def _main(budget=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--area")
     ap.add_argument("--industry", action="append")
-    ap.add_argument("--keyword", action="append", help="会社名・施設名に含まれる語(何個でも)")
+    ap.add_argument("--keyword", action="append", help="Googleマップで探す言葉(何個でも)。Googleマップでは名前での絞り込みはしない(地図データ osm では名前に含むものだけ)")
     ap.add_argument("--limit", type=positive_int, default=200)
     ap.add_argument("--parallel", type=int, default=3, help="Googleマップを同時に何本取るか(1〜5。既定3。増やすとブロックされやすい)")
     ap.add_argument("--source", action="append", choices=["osm", "google", "google_places_text"], help="地図の取得元(何個でも。既定google。Yahoo!マップは外した)")
@@ -929,6 +1131,9 @@ def main(budget=None):
     ap.add_argument("--check-retry-limit", type=int, default=2, help="--resume-checks 時の取得再試行上限")
     ap.add_argument("--official-research", action="store_true", help="SNS/portal/no-contact URLs are re-searched for an official HP, then checked again")
     a = ap.parse_args()
+    blocked = set()  # Googleに止められた取得元。ポータル指定の回でも、最後の内訳を書くために先に用意する
+    clear_stop()  # 前の回に置かれたまま残った止める指示で、この回を止めない
+    write_run_summary("running", area=a.area)  # 前の回の印を、この回の結果と取り違えさせない
     ng_store = open_ng_state_store(a.ng_state_db)
 
     if a.source and "google_places_text" in a.source:
@@ -940,6 +1145,7 @@ def main(budget=None):
             rows, label = portal_source.fetch(a.portal, a.limit, log), "ポータル_" + urlparse(a.portal).netloc
         except RuntimeError as e:
             log(f"止まりました: {e}")
+            write_run_summary("failed", area=a.portal, fetched=0, error=str(e)[:200])
             return 1
     elif a.input or a.overture_file:
         rows = read_input_file(a.input) if a.input else []
@@ -950,11 +1156,20 @@ def main(budget=None):
         else:
             area, inds, limit = ask_interactive()
         a.limit, label, rows = limit, area, []
-        blocked = set()
+        RUN_STATS["area_notes"] = subareas.notes(area)
+        for note in RUN_STATS["area_notes"]:
+            log(f"  [地名] {note}")
+        for ind in inds:
+            if ind not in INDUSTRIES and ind not in MAP_TERMS:
+                log(f"  [業種] 「{ind}」は業種の一覧にありません。この言葉をそのままGoogleマップで探します（地図で引きにくい言葉だと、関係の薄い店が混ざるか、ほとんど出ません）")
         units = [(i, None) for i in inds] + [("キーワード", k) for k in (a.keyword or [])]
-        pre = prefetch_google(area, units, a.limit, a.parallel) if "google" in (a.source or ["google"]) else {}
+        until = google_block_active() if "google" in (a.source or ["google"]) else ""
+        if until:
+            blocked.add("google")
+            log(f"\nGoogleマップは、同時に動いていた別の検索がGoogleに止められたため、{until[11:16]}ごろまで使いません。時間をおいて探し直してください")
+        pre = prefetch_google(area, units, a.limit, a.parallel, block_check=google_block_active, stop_check=stop_requested) if "google" in (a.source or ["google"]) and not until else {}
         for ui, (ind, kw) in enumerate(units):
-            log(f"\n{area} の " + (f"「{kw}」を名前に含む施設" if kw else ind) + " を地図データから探しています...")
+            log(f"\n{area} で " + (f"「{kw}」を探しています（Googleマップでは名前での絞り込みはしません。関係の薄い店も混ざります）..." if kw else f"{ind} を地図データから探しています..."))
             for src in a.source or ["google"]:
                 if src in blocked:
                     continue
@@ -970,14 +1185,32 @@ def main(budget=None):
                         subs = subareas.split(area)
                         if len(subs) == 1:
                             log(f"  {area} は町名の分割表が無いため、区・市全体を1つの検索で探します。地図は1検索で数十件までしか出ないため、取りこぼしがあります")
+                        failed, first_cause, total = [], None, 0
                         for term in ([kw] if kw else MAP_TERMS.get(ind) or ind.split("・")):
                             for sub in subs:
                                 part = pre[(ui, term, sub)]
+                                total += 1
                                 if isinstance(part, BaseException):
-                                    raise part
+                                    failed.append((term, sub, part))
+                                    if first_cause is None and not str(part).startswith("ほかの検索が止まった"):
+                                        first_cause = part  # 連鎖で止まった分ではなく、最初に失敗した原因の原文を残す
+                                    continue
                                 for g in part:
                                     g["area"] = area  # 町名は検索のためだけに使う。エリアの欄は元の指定のまま
                                 got += part
+                        if failed:
+                            RUN_STATS["fetch_failed"] = RUN_STATS.get("fetch_failed", 0) + len(failed)
+                            log(f"  [{src}] {total}件の検索のうち {len(failed)}件が失敗しました。取れた分は残します。失敗した検索: " + "、".join(f"{sub}（{type(e).__name__}）" for _t, sub, e in failed[:5]) + (" ほか" if len(failed) > 5 else ""))
+                            if first_cause is not None:
+                                log(f"  [{src}] 最初の失敗の原文: {first_cause}")
+                            hit = next((e for _t, _s, e in failed if isinstance(e, map_browser_source.GoogleBlocked)), None)
+                            if hit is not None:
+                                if src not in blocked and not isinstance(hit, BlockedElsewhere):
+                                    mark_google_blocked(hit)  # 同時に動いている別のサーバーにも知らせる
+                                blocked.add(src)
+                                log(f"  Googleに止められたため、この回ではGoogleマップをもう使いません（ほかのサーバーも{BLOCK_MINUTES}分は新しく探しません）。取れた分だけで続けます")
+                            if not got:
+                                raise first_cause or failed[0][2]
                         for g in got:
                             g["industry"] = kw or ind  # 業種の欄は元の業種名のまま(文面・メール型の選択に使う)
                 except Exception as e:  # ValueError・RuntimeError・playwright の例外・未インストール等。他の取得元の結果は残す
@@ -1000,18 +1233,45 @@ def main(budget=None):
                                          boundary_geojson=a.boundary_geojson, log=log)
         rows += got
         label = (label + "_overture") if label != "overture" else label
+    rows, dup_places = dedupe_places(rows)
+    RUN_STATS["duplicate_places"] = dup_places
+    if dup_places:
+        log(f"\n同じ店が複数の町名・検索語に出た分 {dup_places}件を、1件にまとめました")
+    m = map_counts()
+    if m["searches"]:
+        log(f"\n地図の検索 {m['searches']}回: 取れた店 {m['rows']}件 / 読めなかった店 {m['unreadable']}件・名前を読めなかった店 {m['bad_name']}件 / 上限の件数に届く前に一覧が止まった検索 {m['cut_short']}回 / "
+            f"結果1件で施設ページに直行して読めなかった検索 {m['place_missed']}回 / 結果0件の検索 {m['empty']}回")
     fetched = len(rows)
     if fetched == 0:
-        log("\n会社が1件も見つかりませんでした。エリア名を市区町村まで入れる、業種を変える、を試してください。")
+        failed_runs = RUN_STATS.get("fetch_failed", 0) > 0 or bool(blocked)
+        if stop_requested():
+            outcome = "stopped"
+            log("\n止める指示で止めました。")
+        elif failed_runs:
+            outcome = "failed"
+            log("\n会社が取れませんでした。これは「該当なし」ではなく、取得の失敗（通信の失敗かGoogleに止められた）です。上の失敗の原文を確かめて、時間をおいて探し直してください。")
+        elif RUN_STATS.get("out_of_area"):
+            outcome = "all_outside"
+            log(f"\n地図では {RUN_STATS['out_of_area']}件見つかりましたが、住所が「{a.area}」と合わず、全部エリア外として外しました。0件ではありません。"
+                "地名の書き方を確かめてください（例: 東京都江東区、東京都墨田区）。")
+        elif missed_total(m):
+            outcome = "missed"
+            log("\n残った会社は0件ですが、読めなかった店・施設ページに直行して読めなかった検索があります。0件とは言い切れません。時間をおいて探し直してください。")
+        else:
+            outcome = "zero"
+            log("\n会社が1件も見つかりませんでした。エリア名を市区町村まで入れる、業種を変える、を試してください。")
+        write_run_summary(outcome, area=a.area, fetched=0, blocked=sorted(blocked))
         return 1
     reject_google_places_text_rows(rows)
     assign_budget_line_ids(rows)
     missing = sum(1 for r in rows if not r["url"])
-    if missing:
+    if missing and stop_requested():
+        log(f"\n止める指示があったため、ホームページが分からない会社 {missing}件の検索はしません")
+    elif missing:
         log(f"\nホームページが地図に載っていない会社 {missing}件を、会社名で検索して探します（1件あたり十数秒。電話と住所でその会社のHPかを照合します）...")
         n, tried = hp_finder.fill(rows, log, want=max(a.limit * 2, 20), candidate_allowed=lambda u: candidate_allowed(u, ng_store), budget=budget)
         log(f"  {n}件のホームページが分かりました（今回あらたに検索 {tried}件）")
-    size_guess.mark(rows)
+    size_guess.mark(rows)  # 町名をまたいだ同じ店は、上の dedupe_places で先に1件にしてある
     targets, no_url = dedupe(rows)
     deduped_before_limit = list(targets)
     dup = sum(1 for r in rows if r["url"]) - len(targets)
@@ -1036,7 +1296,9 @@ def main(budget=None):
         log(f"上限{a.limit}社を超えた {cut}社は調べていません（後ろの業種・取得元から落ちます）")
     log(f"\n{len(targets)}社のホームページで、問い合わせフォームを探します（1社あたり数秒〜十数秒）...")
     checked = run_checks(targets, resume_checks=a.resume_checks, retry_limit=a.check_retry_limit,
-                         official_research=a.official_research, budget=budget, ng_store=ng_store)
+                         official_research=a.official_research, budget=budget, ng_store=ng_store, stop_check=stop_requested)
+    if RUN_STATS.get("not_checked_stopped"):
+        log(f"止める指示で止めました。まだ調べていなかった {RUN_STATS['not_checked_stopped']}社はリストに入れていません")
     checked, rededuped = dedupe_checked_by_url(checked)
     if rededuped:
         no_url += rededuped
@@ -1065,6 +1327,11 @@ def main(budget=None):
         summarize_sendable(c, fetched, checked, no_url)
     except Exception as e:  # 件数の内訳が出せなくても、収集の結果は保存済み。理由を残す
         log(f"件数の内訳を出せませんでした: {e!r}")
+    failed_some = RUN_STATS.get("fetch_failed", 0) > 0 or bool(blocked)
+    outcome = "stopped" if RUN_STATS.get("not_checked_stopped") or stop_requested() else ("partial" if failed_some else "ok")
+    write_run_summary(outcome, area=a.area, fetched=fetched, checked=len(checked), no_url=len(no_url),
+                      dropped_other_company=len(dropped), refused=len(refused), blocked=sorted(blocked), list_file=Path(c).name,
+                      not_checked_stopped=RUN_STATS.get("not_checked_stopped", 0))
     return 0
 
 
