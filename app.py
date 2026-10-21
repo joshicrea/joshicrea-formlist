@@ -355,7 +355,7 @@ class H(BaseHTTPRequestHandler):
         if not p or not SENDER.exists():
             return self.send(400, {"error": "リストと送信元を先に決めてください"})
         try:
-            mx = count(q.get("max"), 20, 1, 200)
+            mx = count(q.get("max"), 20, 1, 300)
             sender = json.loads(SENDER.read_text(encoding="utf-8-sig"))
             todo = autosend.targets(str(p), q.get("supp") == "1", gate=ng_store)[:mx]
             todo, bodies, rejected = autosend.prepare_message_plan(todo, str(MSG), sender)
@@ -422,7 +422,7 @@ class H(BaseHTTPRequestHandler):
             d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
             assert isinstance(d, dict)
             lim = count(d.get("limit"), 200, 1, 1000)
-            mx = count(d.get("max"), 20, 1, 200)
+            mx = count(d.get("max"), 20, 1, 300)
             par = count(d.get("parallel"), 3, 1, 5)
         except Exception:
             return self.send(400, {"error": "入力の形が正しくありません（数は1以上の整数で入れてください）"})

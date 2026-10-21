@@ -882,6 +882,17 @@ def main():
         ctx = page = None
         results = []
         for i, (name, url, ind, opener, hp) in enumerate(todo, 1):
+            if a.send:  # 1社ごとに、時刻・1日の上限・同じ会社の間隔をもう一度見る(待ち時間や並行実行の間に変わるため)
+                stop = send_rules.window_refusal()
+                if not stop and send_rules.pressed_today(LOG) >= send_rules.DAILY_LIMIT:
+                    stop = f"1日の上限({send_rules.DAILY_LIMIT}社)に達しました"
+                if stop:
+                    print(f"{stop}。残りの会社には送らず、ここで止めます")
+                    break
+                again = send_rules.company_refusal(LOG, name, url, hp)
+                if again:
+                    print(f"[{i}/{len(todo)}] 同じ会社のため送りません: {name}  {again}")
+                    continue
             STATE["clicked"] = False
             STATE["gate"] = _SEND_GATE
             STATE["token"] = None

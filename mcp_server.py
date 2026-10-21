@@ -41,7 +41,7 @@ mcp = FastMCP("formlist", instructions="""AIまるなげ営業（営業部）。
 会社探し→ホームページの照合→文面→全文の確認→本人の承認（画面の外の確認ダイアログ）→送信、の順を守る。
 本人が全文を見て「送って」と明示するまで、formlist_send の本番（send=true）を呼ばない。承認を代わりに押さない。""")
 _LOADED = hashlib.sha256((HERE / "mcp_server.py").read_bytes()).hexdigest()  # 起動したときの版。ディスクの版と違えば、古いMCPが動いている
-Count = Annotated[int, Field(ge=1, le=200)]  # 0 を渡すとサーバー側で既定の20社に化けるので、最初から断る
+Count = Annotated[int, Field(ge=1, le=300)]  # 0 を渡すとサーバー側で既定の20社に化けるので、最初から断る
 
 
 def _pythonw():
