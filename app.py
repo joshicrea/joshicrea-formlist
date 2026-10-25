@@ -24,6 +24,7 @@ import filelock
 import ng_list
 import approval
 import message_adoption
+import proposal_links
 import sales_records
 import send_rules
 import osm_source
@@ -40,6 +41,13 @@ assert 8780 <= PORT <= 8790, PORT
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 PY = sys.executable[:-len("pythonw.exe")] + "python.exe" if sys.executable.lower().endswith("pythonw.exe") else sys.executable
 JOB = {"lines": [], "running": False, "name": ""}
+def opener_draft(overview):
+    """書き出しの下書き。ホームページのタイトルに書いてあることだけを引く(見ていないことは書かない)。タイトルが無ければ空"""
+    t = re.split(r"\s*/\s*", (overview or "").strip(), maxsplit=1)[0]
+    t = re.split(r"\s*[|｜]\s*", t, maxsplit=1)[0].strip()[:30]
+    return f"ホームページの「{t}」を拝見しました。" if len(t) >= 4 else ""
+
+
 APPROVED = {"key": None}  # 画面で人が「この全文で送ることを承認する」を押した印。AI(MCP)からの本番送信に要る
 PREVIEW = {"key": None, "names": []}  # 本番の前に「対象と全文の確認」を済ませた印と、その確認に出た会社名。本番を始めたら消す
 LOCK = threading.Lock()
@@ -342,7 +350,10 @@ class H(BaseHTTPRequestHandler):
             if send_rules.company_refusal(LOG, r.get("企業名", ""), url, r.get("HP URL", "")):
                 continue
             rows.append((r.get("企業名", ""), url, r.get("業種", ""), r.get("書き出し", ""), r.get("HP URL", "")))
-        todo, bodies, rejected = autosend.prepare_message_plan(rows[:50], MSG, sender)
+        try:
+            todo, bodies, rejected = autosend.prepare_message_plan(rows[:50], MSG, sender)
+        except RuntimeError as e:
+            return self.send(400, {"error": str(e)})
         out = [{"company": t[0], "form": t[1], "subject": message_adoption.effective_sender(t[0], t[1], sender).get("件名", "").replace("{企業名}", t[0]), "message": b}
                for t, b in zip(todo, bodies)]
         return self.send(200, {"companies": out, "skipped": [{"company": n, "why": w} for n, _u, w in rejected],
@@ -363,6 +374,8 @@ class H(BaseHTTPRequestHandler):
                      "subject": autosend.message_adoption.effective_sender(n, u, sender).get("件名", "").replace("{企業名}", n),
                      "warn": _send_warn(body), "notice": _send_notice(body),
                      "text": body} for (n, u, ind, op, hp), body in zip(todo, bodies)]
+        except RuntimeError as e:  # 計測用の鍵が無い等、原因が分かっているものは原文のまま見せる
+            return self.send(400, {"error": str(e)})
         except Exception as e:
             return self.send(400, {"error": "対象を読めませんでした。リストのファイルをExcelで開いたままにしていないか確かめて、もう一度「確認する」を押してください", "detail": repr(e)[:200]})
         return self.send(200, rows)
@@ -392,7 +405,10 @@ class H(BaseHTTPRequestHandler):
             if not f or not str(f).endswith(".csv"):
                 return self.send(404, {"error": "リストが見つかりません"})
             rows = read_csv(f)
-            return self.send(200, {"total": len(rows), "missing": [{"name": r.get("企業名", ""), "industry": r.get("業種", ""), "hp": r.get("HP URL", "")} for r in rows if not (r.get("書き出し") or "").strip()][:200]})
+            total = len(rows)
+            if parse_qs(u.query).get("only_form", [""])[0] == "1":  # 画面用: 送る対象になりうる(フォーム検出・お断りなし)会社だけ
+                rows = [r for r in rows if r.get("フォーム判定") == "フォームあり" and r.get("営業お断りの表示") != "あり"]
+            return self.send(200, {"total": total, "missing": [{"name": r.get("企業名", ""), "industry": r.get("業種", ""), "hp": r.get("HP URL", ""), "draft": opener_draft(r.get("HP概要", ""))} for r in rows if not (r.get("書き出し") or "").strip()][:200]})
         if u.path == "/api/targets":
             return self.targets(q, ng_store)
         if u.path == "/api/log":
@@ -402,6 +418,14 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, sales_records.report(LOG, days))
         if u.path == "/api/unsure":
             return self.send(200, sales_records.unsure(LOG))
+        if u.path == "/api/opens":
+            tpl = str((json.loads(SENDER.read_text(encoding="utf-8-sig")) if SENDER.exists() else {}).get("資料URL", ""))
+            if proposal_links.MARK not in tpl:
+                return self.send(200, {"companies": [], "total": 0, "note": "送信元の資料URLに {識別} が入っていないため、会社ごとの開封は数えていません"})
+            try:
+                return self.send(200, proposal_links.report(tpl, send_log=LOG))
+            except RuntimeError as e:
+                return self.send(502, {"error": str(e)})
         if u.path == "/api/manual_kit":
             return self.manual_kit(q, ng_store)
         if u.path == "/download":
@@ -502,8 +526,13 @@ class H(BaseHTTPRequestHandler):
             if bad:
                 return self.send(400, {"error": "送信元にない項目です: " + "、".join(bad[:5])})
             url = str(d.get("資料URL", "")).strip()
-            if url and not re.fullmatch(r"https?://[^\s{}【】]+", url):
+            if url and not (re.fullmatch(r"https?://[^\s{}【】]+", url) or proposal_links.TEMPLATE_OK.fullmatch(url)):  # {識別} は https://ホスト/階層/?t={識別} の形だけ許す
                 return self.send(400, {"error": "資料URLは https:// か http:// で始まる、空白のないURLにしてください（先方にそのまま届きます）"})
+            if proposal_links.MARK in url:
+                try:
+                    proposal_links._secret()
+                except RuntimeError as e:  # 鍵が無いまま保存すると、プレビューと送信で初めて止まる
+                    return self.send(400, {"error": str(e)})
             old.update({k: str(v) for k, v in d.items()})  # 画面に出ない項目を消さず、決めた項目だけ文字で受ける
             SENDER.write_text(json.dumps(old, ensure_ascii=False, indent=1), encoding="utf-8")
             return self.send(200, {"ok": True})

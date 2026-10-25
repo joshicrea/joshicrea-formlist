@@ -128,7 +128,7 @@ th{color:var(--mut);font-size:14px;position:sticky;top:0;background:var(--bg);z-
   <div class="row" id="sender"></div><button class="btn sub" id="saveSender">保存</button></details>
  <details class="card fold" id="msgBox"><summary><span class="h2">準備2　文面</span><span class="sumtxt">見る・直すときに開きます。送る前の確認でも全文が出ます。</span></summary>
   <p class="hint">{企業名}・{書き出し}・{署名} の3つは消さずに残してください。送るとき、相手の会社名・会社ごとの書き出し・署名に置き換わります。</p>
-  <details class="dt"><summary>文面のくわしい決まり</summary><div>{書き出し} は会社ごとの書き出しの一文に置き換わり、書き出しが無い会社では消えます。それ以外の文章は、直して保存して大丈夫です。業種ごとの文面があれば、その業種の会社にはそちらを使います。送信者の名前・連絡先・配信停止の案内は消さないでください（特定電子メール法）。</div></details>
+  <details class="dt"><summary>文面のくわしい決まり</summary><div>{書き出し} は会社ごとの書き出しの一文に置き換わります。書き出しが空の会社には送りません。書き出しは「3 送る」の「書き出しが空の会社」で入れます。それ以外の文章は、直して保存して大丈夫です。業種ごとの文面があれば、その業種の会社にはそちらを使います。送信者の名前・連絡先・配信停止の案内は消さないでください（特定電子メール法）。</div></details>
   <label for="mind">どの業種の文面か（「標準」はどの業種にも使われます）</label><select id="mind"></select>
   <details class="dt"><summary>営業資料から、文面のたたき台を作る</summary><p class="why">営業資料の文章を貼ってください。見出し・箇条書き・URLを拾って、下の文面欄にたたき台を入れます。保存するまでは、文面は変わりません。AIは使っていません。必ず自分で読んで直してください。</p><textarea id="mat" style="min-height:120px" placeholder="営業資料の文章をここに貼り付け"></textarea><button class="btn sub" id="mkSample" type="button">たたき台を作って、下に入れる</button></details>
   <label for="mtext">文面</label><textarea id="mtext" style="min-height:300px"></textarea><button class="btn sub" id="saveMsg">この文面を保存</button></details>
@@ -137,6 +137,7 @@ th{color:var(--mut);font-size:14px;position:sticky;top:0;background:var(--bg);z-
   <div class="row"><div><label for="sfile">送るリスト</label><select id="sfile"></select></div><div><label for="smax">今回送る最大の社数</label><input id="smax" type="number" value="3" min="1"><p class="hint">最初は3社くらいが安心です。</p></div></div>
   <label class="check"><input type="checkbox" id="supp"><span>検索で見つけたホームページの会社にも送る<span class="hint d">別の会社のページを拾っている恐れがあります。「2 結果を見る」で「要確認」の会社を開いて確かめてから入れます。</span></span></label>
   <details class="dt"><summary>どの会社が送る対象になるか</summary><div>対象は、問い合わせフォーム候補が検出され、営業お断りの表示がなく、まだ処理していない会社だけです。フォーム検出は営業送信の許可ではありません。自動入力できない確認画面（画像認証など）や、選ぶ形式の必須項目があるフォームは送らず、「手で送る必要あり」と記録します。</div></details>
+  <div id="opbox"></div>
   <h3 class="sh"><span class="n">2</span>練習（しなくても先へ進めます）</h3>
   <p class="hint">フォームに入力して画面を保存するだけです。送信ボタンは押しません。最初は1回おすすめです。</p>
   <button class="btn sub" id="dry">練習する</button>
@@ -165,7 +166,7 @@ let META={},JOB={lines:[],running:false,name:'',code:null,files:[]},RESROWS=[];
 const SF=['会社名','氏名','フリガナ','メール','電話','郵便番号','住所','件名','資料URL'],NEED=['会社名','氏名','メール','署名'];
 const REC=['商業施設','住宅・不動産','ホテル・旅館','ブライダル','百貨店'];// 戦略書の優先順位
 function goto(t){document.querySelector('nav button[data-t="'+t+'"]').click()}
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button,section').forEach(e=>e.classList.remove('on'));b.classList.add('on');$('#'+b.dataset.t).classList.add('on');if(b.dataset.t=='d')hist();if(b.dataset.t=='b')loadRes();banners();window.scrollTo(0,0)});
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button,section').forEach(e=>e.classList.remove('on'));b.classList.add('on');$('#'+b.dataset.t).classList.add('on');if(b.dataset.t=='d')hist();if(b.dataset.t=='b')loadRes();if(b.dataset.t=='c')loadOp();banners();window.scrollTo(0,0)});
 function opts(sel,list,cur){sel.innerHTML=list.map(f=>`<option ${f==cur?'selected':''}>${esc(f)}</option>`).join('')}
 function tag(t,k){return `<span class="tag ${k||''}">${esc(t)}</span>`}
 function lk(v,label){try{const u=new URL(v);if(u.protocol=='http:'||u.protocol=='https:')return `<a href="${esc(u.href)}" target="_blank" rel="noopener noreferrer" title="${esc(u.hostname)}">${esc(label)}</a>`}catch(e){}return ''}
@@ -226,6 +227,14 @@ async function init(){META=await J('/api/meta');
 function showMsg(){const k=$('#mind').value;$('#mtext').value=META.messages[k]??META.messages.default}
 $('#mind').onchange=showMsg;
 ['#sfile','#smax','#supp'].forEach(x=>{$(x).addEventListener('change',()=>unprev());$(x).addEventListener('input',()=>unprev())});
+$('#sfile').addEventListener('change',()=>loadOp());
+// 書き出しが空の会社には送れない。画面で、会社ごとの一文を入れられるようにする
+async function loadOp(){const f=$('#sfile').value,box=$('#opbox');if(!f){box.innerHTML='';return}
+ const r=await J('/api/openings?only_form=1&file='+encodeURIComponent(f));if(r.error){box.innerHTML='';return}
+ const m=r.missing||[];if(!m.length){box.innerHTML=r.total?'<p class="hint">書き出しは、送れる会社すべてに入っています。</p>':'';return}
+ const show=m.slice(0,20);
+ box.innerHTML=`<div class="aibox"><h4>書き出しが空の会社 ${m.length}社</h4><p class="hint">文面の {書き出し} に入る、会社ごとの一文です。空の会社には送れません。「ホームページを開く」でお店を見て、1〜2文で書きます。今回送る社数ぶん、上から書けば足ります。下書きが入っている会社は、読んで、直してから保存します。ホームページを見て、事実と合っているかを確かめてください。書いたら「書き出しを保存」を押します。</p>`+show.map(x=>`<div style="margin:10px 0"><b>${esc(x.name)}</b> ${lk(x.hp,'ホームページを開く')}<textarea class="opin" data-n="${esc(x.name)}" style="min-height:60px" placeholder="例 お店のホームページで、季節ごとのメニューを拝見しました。">${esc(x.draft||'')}</textarea></div>`).join('')+(m.length>show.length?`<p class="hint">ほかに${m.length-show.length}社あります。上の会社を保存すると、次の会社が出ます。</p>`:'')+'<button class="btn sub" id="saveOp" type="button">書き出しを保存</button></div>';
+ $('#saveOp').onclick=async()=>{const ops={};document.querySelectorAll('.opin').forEach(t=>{if(t.value.trim())ops[t.dataset.n]=t.value.trim()});if(!Object.keys(ops).length)return alert('書き出しが入っていません');const res=await post('/api/openings',{file:f,openings:ops});if(res.error)return alert(res.error);unprev();alert(res.updated+'社の書き出しを保存しました');loadOp()}}
 function curKey(){for(let i=JOB.lines.length-1;i>=0;i--){const m=/確認番号: (\S+)/.exec(JOB.lines[i]);if(m)return m[1]}return STATE.pkey||''}
 async function askApprove(){const r=await post('/api/approve',{key:curKey()});if(r.error){alert(r.error);return false}if(!r.ok){alert('承認されませんでした（確認の画面で「はい」が押されませんでした）。送りません');return false}return true}
 $('#approve').onclick=async()=>{if(await askApprove())alert('承認しました。AIに「送って」と伝えてください。承認は1回の送信で使い切ります')};

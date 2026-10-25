@@ -220,6 +220,56 @@ def _verdict(r):
             "robots禁止": ("送れない", "相手が自動で読むことを断っている"), "取得失敗": ("送れない", "読み込めなかった")}.get(v, (v or "未判定", ""))
 
 
+UPDATE_URL = "https://raw.githubusercontent.com/joshicrea/joshicrea-formlist/master/"
+UPDATE_FILES = ("app.py", "autosend.py", "ng_list.py", "site_checker.py", "mcp_server.py", "send_rules.py")
+_UPDATE_CACHE = {}  # {"at": 取った時刻, "result": 照合の結果}。1時間は取り直さない
+
+
+def _fetch_public(name):
+    """公開リポジトリのファイルを取る(3秒で諦める)。テストでは差し替える。OSのプロキシ設定はそのまま使う"""
+    with urllib.request.urlopen(UPDATE_URL + name, timeout=3) as r:
+        if r.status != 200:
+            raise RuntimeError(f"応答 {r.status}")
+        return r.read()
+
+
+def _norm(b):
+    return b.removeprefix(b"\xef\xbb\xbf").replace(b"\r\n", b"\n")  # 改行の違い(CRLF/LF)だけで「古い」と出さない
+
+
+def _update_check():
+    """手元の本体ファイルが公開リポジトリの最新と同じか。取れなかったときは「未確認」で、「最新」とは言わない"""
+    if _UPDATE_CACHE and time.time() - _UPDATE_CACHE["at"] < 3600:
+        return _UPDATE_CACHE["result"]
+    stale, failed = [], []
+
+    def one(name):
+        try:
+            body = _fetch_public(name)
+            if not body or not body.strip() or body.lstrip().startswith(b"<"):  # 空・HTML(プロキシやログインの画面)は本物の応答ではない
+                return name, None
+            return name, _norm(body) == _norm((HERE / name).read_bytes())
+        except Exception:
+            return name, None
+
+    with ThreadPoolExecutor(len(UPDATE_FILES)) as ex:
+        for name, same in ex.map(one, UPDATE_FILES):
+            if same is None:
+                failed.append(name)
+            elif not same:
+                stale.append(name)
+    if stale:
+        r = {"state": "古い", "stale_files": stale, "message": "新しい版があります。導入の1行をもう一度実行してください。送信元・文面・送らないリスト・できたリストは残ります"}
+    elif failed:
+        r = {"state": "未確認", "stale_files": [], "message": "公開されている最新の版と照合できませんでした(通信できない・社内ネットワークで止められた等)。最新かどうかは分かりません。ツールはこのまま使えます"}
+    else:
+        r = {"state": "最新", "stale_files": [], "message": "公開されている最新の版と同じです"}
+    if failed:
+        r["unchecked_files"] = failed
+    _UPDATE_CACHE.update(at=time.time(), result=r)
+    return r
+
+
 @mcp.tool()
 def formlist_guide() -> dict:
     """営業部の手引き。接続したら最初に呼ぶ。役割分担・進める順番・してはいけないこと・失敗したときの伝え方が入っている。この手順で利用者を案内する。"""
@@ -232,14 +282,16 @@ def formlist_guide() -> dict:
 
 @mcp.tool()
 def formlist_status() -> dict:
-    """いま動いている処理（探す・確認・練習・本番送信）と、最後の経過・終了コード、作成済みのリスト一覧、ツールの版（別のパソコンと同じ版か照合する印）を返す。"""
+    """いま動いている処理（探す・確認・練習・本番送信）と、最後の経過・終了コード、作成済みのリスト一覧、ツールの版（別のパソコンと同じ版か照合する印）を返す。
+    update は公開されている最新の版との照合(最新/古い/未確認)。古いときは message をそのまま利用者に伝える。未確認を「最新」と言い換えない。"""
     _, j = api("GET", "/api/job")
     others = []
     for port in POOL[1:]:
         if _alive(port):
             _, oj = _on(port, api, "GET", "/api/job")
             others.append({"server": port, **_on(port, _brief, oj, 8)})
-    out = {**_brief(j), "version": j.get("version"), "screen": f"http://127.0.0.1:{_port()}/", "files": j.get("files", [])[:10], "other_servers": others}
+    out = {**_brief(j), "version": j.get("version"), "screen": f"http://127.0.0.1:{_port()}/", "files": j.get("files", [])[:10], "other_servers": others,
+           "update": _update_check()}
     if hashlib.sha256((HERE / "mcp_server.py").read_bytes()).hexdigest() != _LOADED:  # 更新後もClaudeが古いMCPを動かし続けている
         out["warning"] = "このMCPは更新前の古い版のまま動いています。利用者にClaudeを完全に終了して(タスクトレイも)開き直してもらってください。開き直すまで、新しい手引きと道具が使えません"
     _, unsure = api("GET", "/api/unsure")
@@ -601,6 +653,17 @@ def formlist_report(days: int = 7) -> dict:
     """営業の報告(期間内): 送った社数・結果の内訳・届いたと確かめた数・返事の数と種類・届いたか確かめが要る会社・14日たって返事の無い会社(別の窓口へ1回まで連絡してよい)。
     件数が少ないうちは割合を出さない。毎週1回、利用者に報告する。"""
     _, d = api("GET", f"/api/report?days={int(days)}")
+    return d
+
+
+@mcp.tool()
+def formlist_opens() -> dict:
+    """会社ごとに、提案書のリンクが開かれたかを返す(送信元の資料URLに {識別} を入れて送った会社が対象)。
+    status: 開いた合図あり(JavaScriptが動いた)／開いた(送信直後・自動確認の可能性)／触れただけ(自動確認の可能性)／未開封／未送信。
+    「開いた」は人が必ず開いた証明ではない(JavaScriptを動かす自動確認も出しうる)。読んだかも分からない。運用者が送信後に自分で試した分も数える。
+    開いた会社は返事が来る見込みが高いので、毎週の報告に添える。開いたのに連絡の無い会社への送り直しは、
+    送信の関門(同じ会社は14日で2回まで)の範囲で、文面を利用者に全文見せてから。通信できないときは理由が返る(0件と取り違えない)。"""
+    code, d = api("GET", "/api/opens")
     return d
 
 

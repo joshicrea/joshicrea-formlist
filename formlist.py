@@ -177,21 +177,35 @@ def read_input_file(path):
     return rows
 
 
+def _same_store(a, b):
+    """同じホームページの2行が同じ店か。同じ電話、または同じ名前と住所なら同じ店。
+    電話か住所が両方にあって食い違えば別の店(本部のHPを共有する別店舗)。見分ける材料が片方に無いときは同じ店とみなす(今までどおり畳む)"""
+    ta, tb = (hp_verify.tel_digits(r.get("tel", "") or r.get("phone", "")) for r in (a, b))
+    if ta and ta == tb:
+        return True
+    aa, ab = (hp_verify.addr_key(r.get("address", "")) or hp_verify._addr_norm(r.get("address", "")) for r in (a, b))
+    if aa and ab:
+        name = lambda r: re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(r.get("name", "")))).lower()
+        return aa == ab and name(a) == name(b)
+    return not (ta and tb)
+
+
 def dedupe(rows):
+    """同じホームページの行のうち、同じ店の行だけを1行に畳む(畳んだ行は duplicate_removed に記録)。
+    本部のHPを共有する別店舗は畳まない(同じフォームに届くかの扱いは送信側の判断)"""
     seen, out, no_url = {}, [], []
     for r in rows:
         if not r["url"]:
             no_url.append(r)
             continue
-        p = urlparse(r["url"] if r["url"].startswith("http") else "http://" + r["url"])
-        key = (p.netloc.lower().removeprefix("www."), p.path.rstrip("/"))
-        if key in seen:
-            kept = seen[key]
+        same = seen.setdefault(canonical_url_key(r), [])
+        kept = next((k for k in same if _same_store(k, r)), None)
+        if kept:
             dup = f'{r.get("name", "")} / {r.get("source", "")}'.strip(" /")
             old = kept.get("duplicate_removed", "")
             kept["duplicate_removed"] = (old + " | " if old else "") + dup
             continue
-        seen[key] = r
+        same.append(r)
         out.append(r)
     return out, no_url
 
@@ -845,11 +859,14 @@ def write_run_summary(outcome, **extra):
              missed(失敗は無いが取りこぼしがあり0件) / failed(失敗があり、取れた会社が無い) / partial(失敗があり、取れた分だけで続けた) / stopped(止める指示で止めた)
     run_id・started はこの回の印。読む側は、探す処理を始めた時刻より古い started の印を、この回のものとして使わない"""
     import json
+    warnings = list(map_browser_source.RUN_WARNINGS)  # やり直しても半数以上読めなかった検索語。MCP の結果が読む not_checked の最後にも足す
     data = {"outcome": outcome, "message": OUTCOME_MESSAGE.get(outcome, ""), "run_id": RUN_ID["id"], "started": RUN_ID["started"],
             "finished": dt.datetime.now().isoformat(timespec="seconds") if outcome != "running" else "",
             "out_of_area": RUN_STATS.get("out_of_area", 0), "fetch_failed": RUN_STATS.get("fetch_failed", 0),
             "duplicate_places": RUN_STATS.get("duplicate_places", 0), "map": map_counts(), "missed": missed_total(),
-            "area_notes": RUN_STATS.get("area_notes", []), "not_checked": NOT_CHECKED, **extra}
+            "area_notes": RUN_STATS.get("area_notes", []), "not_checked": NOT_CHECKED + warnings, "term_warnings": warnings, **extra}
+    if warnings and outcome != "running":  # 画面のログの最後に出す(途中のログに埋もれさせない)
+        log("\n[警告] 読めなかった店が多い検索語があります:\n" + "\n".join("  " + w for w in warnings))
     try:
         OUT_DIR.mkdir(parents=True, exist_ok=True)
         import filelock
@@ -1102,6 +1119,7 @@ def main(budget=None):
     RUN_STATS.clear()
     RUN_STATS["out_of_area"] = 0
     map_browser_source.RUN_COUNTS.clear()
+    map_browser_source.RUN_WARNINGS.clear()
     try:
         return _main(budget)
     except BaseException as e:
@@ -1276,7 +1294,7 @@ def _main(budget=None):
     deduped_before_limit = list(targets)
     dup = sum(1 for r in rows if r["url"]) - len(targets)
     if dup > 0:
-        log(f"同じホームページとみなして除いた会社: {dup}件")
+        log(f"同じホームページで同じ店(同じ電話、または同じ名前と住所)として1行にまとめた会社: {dup}件")
     if a.ng:
         targets, ng_n = apply_ng(targets, a.ng)
         log(f"NGリストに該当して除外: {ng_n}件")

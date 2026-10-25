@@ -31,6 +31,7 @@ MAX_SCROLL_ATTEMPTS = 30
 
 # この回(1プロセス)の地図の検索で、取れた数と取りこぼした数。並列で取るので足すときは鍵を取る
 RUN_COUNTS = {}
+RUN_WARNINGS = []  # やり直しても半数以上読めなかった検索語の警告文。formlist が内訳JSON・ログの最後に出す
 _COUNT_LOCK = Lock()
 
 
@@ -276,6 +277,8 @@ def fetch_google(area_name, term, log, limit=20):
             n, bad = stats2.get("n", 0), stats2.get("skipped", 0)
         if n >= RETRY_MIN_CARDS and bad >= n * RETRY_BAD_RATE:
             log(f"  [警告] 「{term}」は、やり直しても候補{n}件のうち{bad}件が読めませんでした。この検索語の結果は少ないままです(Googleマップ側の一時的な制限の可能性)")
+            with _COUNT_LOCK:
+                RUN_WARNINGS.append(f"検索語「{term}」({area_name})は、やり直しても候補{n}件中{bad}件が読めませんでした。この検索語の店は一覧に少ししか入っていません。時間をおいて探し直してください")
     tally(searches=1, rows=len(rows), cards=stats.get("n", 0), unreadable=stats.get("skipped", 0), bad_name=stats.get("bad_name", 0),
           cut_short=stats.get("cut_short", 0), place_read=stats.get("place_read", 0), place_missed=stats.get("place_missed", 0),
           empty=stats.get("empty", 0))  # やり直したときは、使った方の回だけを数える

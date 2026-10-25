@@ -31,6 +31,7 @@ from pathlib import Path
 
 
 import message_adoption
+import proposal_links
 import send_rules
 
 # Explicit message-only CLI bypasses transport/browser/state imports.
@@ -93,7 +94,8 @@ def render(text, name, opener, sender):
         raise EmptyOpenerError("書き出しが空欄のため、この会社の文面生成を停止しました")
     text = text.replace("{企業名}", name).replace("{署名}", sender.get("署名", "")).replace("{書き出し}", opener.strip())
     if sender.get("資料URL"):  # 空のときは置き換えない: {資料URL}が残り、送信前の「差し込みの取り残し」で止まる
-        text = text.replace("{資料URL}", sender["資料URL"])
+        # 資料URLに {識別} があれば、会社ごとの専用リンクにする(開かれたかを会社単位で数えるため)
+        text = text.replace("{資料URL}", proposal_links.url_for(sender["資料URL"], name))
     return re.sub(r"\n{3,}", "\n\n", text).strip() + "\n"
 
 
@@ -644,6 +646,20 @@ def send_one(page, name, url, sender, message, do_send, hp=""):
         return _gate_ng_result()
     if set(state.keys_of([url, page.url])) & (sent_urls(results_only=True) | state.blocked_keys()):  # 画面版・コマンド版のどちらで押したものも、送信ログの結果行で止める
         return "スキップ", "このフォームは送信ログに結果(送信済み・不明・入力エラー)があるため送らない"
+    db = gate.db_path if gate is not None else state.DB  # 1日の上限の枠は、送信状態と同じDBで数える(同時に動く別の実行と共有する)
+    slot = send_rules.reserve_daily(db, LOG, name, url)
+    if slot is None:
+        return DAILY_FULL, f"1日の上限({send_rules.DAILY_LIMIT}社)に達したため送らない(同時に動いている別の実行の分を含む)"
+    try:
+        return _press(page, name, url, message, hp, gate, btn, memo, shot)
+    finally:
+        send_rules.settle_daily(db, slot, STATE["clicked"])  # 押さずに終わった枠は戻し、押した(押したかもしれない)枠は数え続ける
+
+
+DAILY_FULL = "上限(送らない)"
+
+
+def _press(page, name, url, message, hp, gate, btn, memo, shot):
     token, refusal = _gate_reserve(gate, [url, page.url], name)
     if not token:  # 別のプロセスが同じフォームを送信中か送信済み
         return refusal
@@ -665,6 +681,10 @@ def send_one(page, name, url, sender, message, do_send, hp=""):
     note = ""
     nxt = confirm_button(page, before, message)  # 確認画面の判定を、完了の判定より先に行う(確認画面の案内文の「送信完了」を完了にしない)
     stuck = False
+    if nxt is not None and _gate_is_ng(gate, targets_now + [page.url, hp]):  # 確認画面にいるあいだに別経路で追加されたNGも、本送信の直前に見る
+        final = ("要手動", memo + " 確認画面の送信ボタンを押す直前にNGリストへ追加されていたため、2回目(本送信)を押していない")
+        _gate_mark(gate, targets_now, final[0], final[1], token)
+        return final
     if nxt is not None:  # 確認画面だと識別できたときだけ、もう一段押す
         try:
             STATE["before_text"] = page.inner_text("body")  # 確認画面の案内文・ステップ表示も「押す前」に含める
@@ -929,6 +949,9 @@ def main():
                 print("送信ログに書けません（Excelで開いていませんか）。二重送信を防ぐため、ここで止めます:", e)
                 br.close()
                 return 2
+            if res == DAILY_FULL:
+                print("1日の上限に達したため、残りの会社には送らず、ここで止めます")
+                break
             if res.startswith("お断り"):
                 if ng_list.add(hp or url, "営業お断り表示(フォーム画面)「" + memo[:30] + "」", name):
                     print("  営業お断りの会社として NGリストに追加しました")

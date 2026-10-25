@@ -7,14 +7,20 @@
 数値の出どころ: 14日と2回は 09 の送信ルール2「同じ企業へは1回だけ。返信が無ければ14日後に別の窓口へ1回まで」。
           9時〜18時は 09 の送信ルール6「平日の日中」をこの時間と読んだもの。1日の上限は 09 に無く、営業方針の値。2026-10-21 に運用者が「1日数百件にアプローチしたい」と決め、20社から300社へ上げた(送信の間隔30〜60秒のまま、9〜18時で最大およそ650社まで送れる)。
 守備範囲: 祝日は見ていない(平日の扱いになる)。会社名の表記違い(株式会社の有無以外)と、別ドメインの同じ会社は同じ会社と分からない。
-          数えるのは このパソコンの送信ログだけ(別のパソコンで送った分は数えない)。
+          数えるのは このパソコンの送信ログと送信状態のDBだけ(別のパソコンで送った分は数えない)。
+          同時に動く複数の送信は、押す直前に reserve_daily でDB上の枠を1社ずつ確保するので、上限を超えない。
 """
 import csv
 import datetime as dt
 import re
+import secrets
+import sqlite3
+import time
+from pathlib import Path
 from urllib.parse import urlparse
 
 import ng_list
+import state
 
 ENFORCE_WINDOW = True  # テストが時刻に左右されないよう、conftest が切る
 HOURS = (9, 18)
@@ -67,11 +73,63 @@ def _when(r):
         return None
 
 
+def _pressed_pairs(log, now=None):
+    today = (now or dt.datetime.now()).date()
+    return {(r.get("企業名"), r.get("フォームURL")) for r in _rows(log)
+            if r.get("結果") in PRESSED and (_when(r) or dt.datetime.min).date() == today}
+
+
 def pressed_today(log, now=None):
     """きょう押した社数(同じ会社・フォームの重複は1社)"""
-    today = (now or dt.datetime.now()).date()
-    return len({(r.get("企業名"), r.get("フォームURL")) for r in _rows(log)
-                if r.get("結果") in PRESSED and (_when(r) or dt.datetime.min).date() == today})
+    return len(_pressed_pairs(log, now))
+
+
+def _quota_conn(db):
+    Path(db).parent.mkdir(parents=True, exist_ok=True)
+    c = sqlite3.connect(str(db), timeout=30, isolation_level=None)
+    c.execute("CREATE TABLE IF NOT EXISTS daily_slots (token TEXT PRIMARY KEY, day TEXT, company TEXT, url TEXT, pressed INTEGER, created REAL)")
+    return c
+
+
+def reserve_daily(db, log, name, url):
+    """押す直前に、1日の上限の枠を1社ぶん確保する。確保できたら印(文字列)、上限なら None。
+    同時に動く複数の送信が、それぞれ「きょうの数<上限」を見てから押して上限を超えるのを、DBの BEGIN IMMEDIATE で1本ずつにして防ぐ。
+    数えるのは 送信ログのきょう押した会社 と DBの押した枠・確保中の枠 の和(同じ会社・フォームは1社。ログとDBの両方にあっても二重に数えない)。
+    押さずに止まったまま settle_daily が呼ばれなかった確保(強制終了など)は、state.RECOVER_AFTER 秒で数えなくなる"""
+    today = dt.date.today().isoformat()
+    c = _quota_conn(db)
+    try:
+        c.execute("BEGIN IMMEDIATE")
+        held = c.execute("SELECT company, url FROM daily_slots WHERE day=? AND (pressed=1 OR created>?)",
+                         (today, time.time() - state.RECOVER_AFTER)).fetchall()
+        used = {tuple(r) for r in held} | _pressed_pairs(log) | {(name, url)}
+        if len(used) > DAILY_LIMIT:
+            c.execute("ROLLBACK")
+            return None
+        token = secrets.token_hex(8)
+        c.execute("INSERT INTO daily_slots VALUES (?, ?, ?, ?, 0, ?)", (token, today, name, url, time.time()))
+        c.execute("COMMIT")
+        return token
+    except sqlite3.Error:
+        try:
+            c.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        raise
+    finally:
+        c.close()
+
+
+def settle_daily(db, token, pressed):
+    """確保した枠の始末。押した(押したかもしれない)なら数え続け、押さずに終わったなら戻す"""
+    c = _quota_conn(db)
+    try:
+        if pressed:
+            c.execute("UPDATE daily_slots SET pressed=1 WHERE token=?", (token,))
+        else:
+            c.execute("DELETE FROM daily_slots WHERE token=?", (token,))
+    finally:
+        c.close()
 
 
 def company_key(name):
