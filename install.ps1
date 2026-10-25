@@ -401,7 +401,7 @@ try {
         Write-Host "本人専用の設定を取り込みました（新しく入れたファイル: $added。すでに本人が直していたものは、そのままです）"
     }
     if (Test-SampleSender $senderPath) {
-        $profileNote = "送信元はまだ見本のままです。担当者から「$ProfilePrefix」で始まる zip が届いていれば、開かずに「ダウンロード」フォルダに保存して、同じ手順をもう一度実行してください。届いていなければ、あとで Claude に「送信元を入れたい」と話しかけて入れます。"
+        $profileNote = "送信元はまだ見本のままです。Claude Code に、担当者から届いた「設定の文」を貼って送ると、送信元と文面が入ります（導入と使い方の「2 最初の1回だけ」）。"
     }
     Write-Host "配置しました: $AppDir"
 } finally {
