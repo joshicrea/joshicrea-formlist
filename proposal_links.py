@@ -34,7 +34,9 @@ import filelock
 HERE = Path(__file__).resolve().parent
 LINKS = HERE / "出力" / "資料リンク.csv"
 SEND_LOG = HERE / "出力" / "送信ログ.csv"
-KEY_FILE = Path.home() / ".claude" / "secretary" / "formlist_計測キー.txt"
+KEY_FILE = HERE / "計測キー.txt"  # 保存先。更新(install.ps1)でも消さない。設定の文の「計測キー」から入る
+LEGACY_KEY_FILE = Path.home() / ".claude" / "secretary" / "formlist_計測キー.txt"  # 運用者の古い置き場(読むだけ)
+KEY_OK = re.compile(r"[0-9A-Za-z_-]{32,128}")
 COLS = ["企業名", "識別子", "作成日時"]
 MARK = "{識別}"
 IMMEDIATE_SEC = 180
@@ -72,14 +74,23 @@ def _read(path):
 
 def _secret():
     k = os.environ.get("FORMLIST_TRACK_KEY", "").strip()
-    if not k:
-        try:
-            k = KEY_FILE.read_text(encoding="utf-8").strip()
-        except OSError:
-            k = ""
-    if len(k) < 32:
-        raise RuntimeError(f"計測用の鍵が見つかりません({KEY_FILE} か環境変数 FORMLIST_TRACK_KEY)。鍵が無いと、開封を数えられない専用リンクになるため、作りません")
+    for f in (KEY_FILE, LEGACY_KEY_FILE):
+        if not k:
+            try:
+                k = f.read_text(encoding="utf-8").strip()
+            except OSError:
+                k = ""
+    if not KEY_OK.fullmatch(k):
+        raise RuntimeError("計測用の鍵がまだ入っていません。担当者から届いた設定の文を、Claude Code に貼って送ると入ります。鍵が無いと、開封を数えられない専用リンクになるため、資料URLは保存しません")
     return k.encode("utf-8")
+
+
+def save_key(key):
+    """計測キーを保存する(sender.json には書かない・応答にも出さない)。形が違えば ValueError。"""
+    key = str(key).strip()
+    if not KEY_OK.fullmatch(key):
+        raise ValueError("計測キーは、英数字と - _ だけの32〜128文字です。設定の文のとおりに貼ってください")
+    KEY_FILE.write_text(key, encoding="utf-8")
 
 
 def _mint(secret):

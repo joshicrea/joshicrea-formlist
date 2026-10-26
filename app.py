@@ -521,18 +521,23 @@ class H(BaseHTTPRequestHandler):
             return self.send(400, {"error": "この会社は送らないリストに入れられませんでした（ホームページの情報が足りません）"})
         if self.path == "/api/sender":
             old = json.loads(SENDER.read_text(encoding="utf-8-sig")) if SENDER.exists() else {}
-            keep = ("会社名", "氏名", "フリガナ", "メール", "電話", "郵便番号", "住所", "件名", "署名", "資料URL")
+            keep = ("会社名", "氏名", "フリガナ", "メール", "電話", "郵便番号", "住所", "件名", "署名", "資料URL", "計測キー")
             bad = [k for k in d if k not in keep]
             if bad:
                 return self.send(400, {"error": "送信元にない項目です: " + "、".join(bad[:5])})
+            new_key = d.pop("計測キー", None)  # 鍵は sender.json に入れず、応答にも出さない。ほかの検査が全部通ってから保存する
+            if new_key is not None and not proposal_links.KEY_OK.fullmatch(str(new_key).strip()):
+                return self.send(400, {"error": "計測キーは、英数字と - _ だけの32〜128文字です。設定の文のとおりに貼ってください"})
             url = str(d.get("資料URL", "")).strip()
             if url and not (re.fullmatch(r"https?://[^\s{}【】]+", url) or proposal_links.TEMPLATE_OK.fullmatch(url)):  # {識別} は https://ホスト/階層/?t={識別} の形だけ許す
                 return self.send(400, {"error": "資料URLは https:// か http:// で始まる、空白のないURLにしてください（先方にそのまま届きます）"})
-            if proposal_links.MARK in url:
+            if proposal_links.MARK in url and new_key is None:
                 try:
                     proposal_links._secret()
                 except RuntimeError as e:  # 鍵が無いまま保存すると、プレビューと送信で初めて止まる
                     return self.send(400, {"error": str(e)})
+            if new_key is not None:
+                proposal_links.save_key(new_key)
             old.update({k: str(v) for k, v in d.items()})  # 画面に出ない項目を消さず、決めた項目だけ文字で受ける
             SENDER.write_text(json.dumps(old, ensure_ascii=False, indent=1), encoding="utf-8")
             return self.send(200, {"ok": True})

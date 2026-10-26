@@ -29,7 +29,7 @@ $Root = [IO.Path]::Combine($env:USERPROFILE, ".claude", "formlist")
 if ($TargetRoot) { $Root = $TargetRoot }
 $AppDir = [IO.Path]::Combine($Root, "app")
 # 更新しても消さないもの（本人の設定と、これまでの結果）
-$KeepNames = @("sender.json", "message_adoptions.json", "出力", "文面")
+$KeepNames = @("sender.json", "message_adoptions.json", "出力", "文面", "計測キー.txt")
 $Ports = @(8780, 8781, 8782)
 $ProfilePrefix = "AIまるなげ営業_本人設定"
 $Manifest = ".install_files.txt"
@@ -47,7 +47,7 @@ function Find-Python {
             if (-not $cmd) { continue }
             try {
                 if ($c -eq "py") { $out = & $cmd.Source -3 --version 2>&1 } else { $out = & $cmd.Source --version 2>&1 }
-                if ($LASTEXITCODE -eq 0 -and "$out" -match "Python 3\.(\d+)" -and [int]$Matches[1] -ge 9) { return $cmd.Source }
+                if ($LASTEXITCODE -eq 0 -and "$out" -match "Python 3\.(\d+)" -and [int]$Matches[1] -ge 10) { return $cmd.Source }
             } catch {}
         }
     } finally { $ErrorActionPreference = $prev }

@@ -98,8 +98,8 @@ def run_cli(name: str, args: list, dry: bool) -> str:
     scope = ["--scope", "user"] if name == "claude" else []
     try:
         # 登録済みなら一度外してから入れ直す（フォルダが変わったときに古い場所を指さないため）
-        subprocess.run([exe, "mcp", "remove", "formlist"] + scope, capture_output=True, text=True, timeout=60)
-        r = subprocess.run([exe, "mcp", "add", "formlist"] + scope + ["--"] + args, capture_output=True, text=True, timeout=60)
+        subprocess.run([exe, "mcp", "remove", "formlist"] + scope, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+        r = subprocess.run([exe, "mcp", "add", "formlist"] + scope + ["--"] + args, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return f"失敗: {name} の応答が60秒ありませんでした。{name} を開いたまま、もう一度実行してください"
     if r.returncode != 0:
@@ -114,7 +114,7 @@ def remove_cli(name: str, dry: bool) -> str:
     if dry:
         return f"(dry-run) {name} mcp remove formlist"
     try:
-        r = subprocess.run([exe, "mcp", "remove", "formlist"] + (["--scope", "user"] if name == "claude" else []), capture_output=True, text=True, timeout=60)
+        r = subprocess.run([exe, "mcp", "remove", "formlist"] + (["--scope", "user"] if name == "claude" else []), capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return f"失敗: {name} の応答が60秒ありませんでした"
     if r.returncode == 0:
@@ -149,6 +149,11 @@ def main():
         print("\nどれにも登録できませんでした。Claudeをお使いのアプリの「コネクタ」や「MCP」の設定に、次を入れてください。")
         print(json.dumps({"mcpServers": {"formlist": ENTRY}}, ensure_ascii=False, indent=2))
         return 1
+    if any(v.startswith("登録しました") for v in results.values()):
+        for k, v in results.items():
+            if v.startswith("失敗"):
+                print(f"注意: {k} には登録できませんでした。ほかに登録できたので、このまま進みます")
+        return 0
     return 1 if any(v.startswith("失敗") for v in results.values()) else 0
 
 

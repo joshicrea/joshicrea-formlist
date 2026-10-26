@@ -442,13 +442,17 @@ def _chromium_missing():
         return ""
     code = "from playwright.sync_api import sync_playwright\nwith sync_playwright() as p: print(p.chromium.executable_path)"
     try:
-        r = subprocess.run([sys.executable, "-X", "utf8", "-c", code], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        # stdin を DEVNULL にする: MCP サーバーの標準入力(閉じない管)を引き継ぐと、Playwright の起動が40秒以上かかり、60秒で時間切れになる
+        # (実測 2026-10-26: 引き継ぎ 40.1秒 / DEVNULL 2.9秒。新しいパソコンで「Chromium が入っていません」と誤って出た)
+        r = subprocess.run([sys.executable, "-X", "utf8", "-c", code], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+                           stdin=subprocess.DEVNULL, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         path = (r.stdout or "").strip().splitlines()[-1:] or [""]
         if r.returncode == 0 and Path(path[0]).exists():
             _CHROMIUM_OK = True
             return ""
         why = (r.stderr or r.stdout or "").strip()[-300:]
+    except subprocess.TimeoutExpired:
+        return ""  # 確認が終わらないだけでは「入っていない」と言い切れない。そのまま探しはじめて、本当に無ければ探す処理が原文で止まる
     except Exception as e:
         why = repr(e)
     return ("会社を探すのに使うブラウザの部品(Chromium)が入っていません。導入の1行(install.ps1)をもう一度実行すると入ります。"
@@ -510,7 +514,7 @@ def formlist_sender_get() -> dict:
 
 @mcp.tool()
 def formlist_sender_set(fields: dict) -> dict:
-    """送信元の項目を更新する（渡した項目だけ変わる）。使える項目: 会社名 氏名 フリガナ メール 電話 郵便番号 住所 件名 署名 資料URL（文面の {資料URL} に入る。https:// で始まるURL。費用を載せた資料は置かない）。
+    """送信元の項目を更新する（渡した項目だけ変わる）。使える項目: 会社名 氏名 フリガナ メール 電話 郵便番号 住所 件名 署名 資料URL（文面の {資料URL} に入る。https:// で始まるURL。費用を載せた資料は置かない）と 計測キー（資料URLの {識別} 用。担当者から届いた設定の文に書いてあるものを、そのまま渡す。保存して、画面にも応答にも出さない。先に渡してから資料URLを渡す）。
     署名は顧客に届く。変更内容の全文をユーザーに見せ、承認を得てから保存する。署名には連絡先と配信停止の案内を含める。
     保存すると確認済みの印は無効になり、formlist_preview からやり直しになる。それ以外の項目名は断る。"""
     code, d = api("POST", "/api/sender", fields)
