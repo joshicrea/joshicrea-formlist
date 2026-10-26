@@ -74,8 +74,23 @@ def remove_desktop(path: Path, dry: bool) -> str:
     return f"外しました: {path}"
 
 
-def run_cli(name: str, args: list, dry: bool) -> str:
+def find_exe(name: str):
+    """PATH に無いときは、VS Code 系エディタ(Cursor など)の Claude Code 拡張に同梱された claude を探す(2026-10-26 新しいパソコンで PATH に無く登録に失敗した)。
+    陽性対照: test_mcp_register_find.py。原理的に取りこぼす型: 上のフォルダ以外に入れた claude / 拡張が古く同梱が無い版"""
     exe = shutil.which(name)
+    if exe or name != "claude":
+        return exe
+    home = Path(os.environ.get("USERPROFILE") or Path.home())
+    hits = []
+    for base in (".cursor", ".vscode", ".vscode-insiders", ".windsurf", ".vscode-oss"):
+        hits += (home / base / "extensions").glob("anthropic.claude-code-*/resources/native-binary/claude*")
+    hits += [home / ".claude" / "local" / "claude.exe", home / ".claude" / "local" / "claude"]
+    hits = [h for h in hits if h.is_file() and h.suffix in ("", ".exe")]
+    return str(max(hits, key=lambda h: h.stat().st_mtime)) if hits else None
+
+
+def run_cli(name: str, args: list, dry: bool) -> str:
+    exe = find_exe(name)
     if not exe:
         return f"未導入（{name} が見つかりません）"
     if dry:
@@ -93,7 +108,7 @@ def run_cli(name: str, args: list, dry: bool) -> str:
 
 
 def remove_cli(name: str, dry: bool) -> str:
-    exe = shutil.which(name)
+    exe = find_exe(name)
     if not exe:
         return f"未導入（{name} が見つかりません）"
     if dry:
