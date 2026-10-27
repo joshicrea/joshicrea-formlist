@@ -10,6 +10,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import subprocess
 import sys
@@ -28,7 +29,9 @@ import proposal_links
 import sales_records
 import send_rules
 import osm_source
+import ports
 import state
+import updater
 from ng_state_store import NgStateStore
 
 HERE = Path(__file__).resolve().parent
@@ -57,7 +60,66 @@ HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
 GOOGLE_PLACES_TEXT_BLOCK = "Google Places Text Search is not connected. API terms, billing, and storage/export approval are unverified, so this UI stops before starting a job and does not auto-fallback."
 
 
+BUILD = updater.build()  # 読み込んだ時点の、全ファイルの印。ディスクの印と違えば、更新したあとで起動し直していない
+UPDATE_BUSY = threading.Lock()
+UPDATE_CACHE = {}  # {"at": 時刻, "result": 照合の結果}。5分は取り直さない(画面を開くたびに公開側へ問い合わせない)
 VERSION = hashlib.sha256(b"".join((HERE / f).read_bytes() for f in ("app.py", "autosend.py", "ng_list.py", "site_checker.py"))).hexdigest()[:12]  # 古い版が動き続けていないかをMCPが照合する(読み込み済みの部品も含める)
+
+
+def _pythonw():
+    exe = sys.executable
+    return exe[:-len("python.exe")] + "pythonw.exe" if exe.lower().endswith("python.exe") else exe
+
+
+def replace_other_copy(port):
+    """別のフォルダの、このツールの古いコピーを止める(何も動いていないときだけ)。止められたら True"""
+    import urllib.request
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(f"http://127.0.0.1:{port}/", timeout=5) as r:
+            m = re.search(r"const TOKEN='([^']+)'", r.read().decode("utf-8"))
+        if not m:
+            return False
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/quit", data=b'{"if_idle": true}', method="POST",
+                                     headers={"X-Token": m.group(1), "Content-Type": "application/json"})
+        opener.open(req, timeout=5).read()
+    except Exception:
+        return False
+    for _ in range(20):
+        time.sleep(0.5)
+        if ports.can_bind(port):
+            return True
+    return False
+
+
+def start_peer():
+    """別の条件で同時に探すために、もう1つ画面のサーバーを別の番号で立てる。(番号, None) か (None, 理由) を返す。
+    先に空いている番号に立てる。空きが無ければ、何も動いていない自分のサーバーを使う。3つとも動いていれば断る"""
+    here = str(HERE)
+    seen = {}
+    for pt in ports.POOL:
+        if pt != PORT:
+            seen[pt] = ports.state(pt, here)
+    for pt, st in seen.items():
+        if st != "free":
+            continue
+        OUT.mkdir(exist_ok=True)
+        with open(OUT / "app_起動ログ.txt", "ab") as log:
+            subprocess.Popen([_pythonw(), "-X", "utf8", str(HERE / "app.py")], cwd=HERE,
+                             env=dict(os.environ, FORMLIST_NO_BROWSER="1", FORMLIST_PORT=str(pt), PYTHONIOENCODING="utf-8"),
+                             stdin=subprocess.DEVNULL, stdout=log, stderr=log, creationflags=NO_WINDOW)
+        for _ in range(40):
+            time.sleep(0.5)
+            if ports.state(pt, here) == "ours":
+                return pt, None
+        return None, f"{pt}番の画面を立ち上げられませんでした。出力フォルダの app_起動ログ.txt の末尾を確かめてください"
+    for pt, st in seen.items():
+        j = ports.job(pt) if st == "ours" else None
+        if j is not None and not j.get("running"):
+            return pt, None
+    if any(st == "ours" for st in seen.values()):
+        return None, f"同時に探せるのは{len(ports.POOL)}つまでです（パソコンが重くなり、Googleにも止められやすくなるため）。どれかが終わってから、もう一度押してください"
+    return None, "別の画面を立てる番号（" + "・".join(str(x) for x in ports.POOL) + "）が、ほかのアプリに使われています。使っているアプリを閉じるか、パソコンを再起動してから、もう一度お試しください"
 
 
 def run_job(name, args, stdin_text=None, on_ok=None, extra_env=None):
@@ -128,6 +190,15 @@ def messages():
         src = HERE / "文面ひな形" / "default.txt"
         (MSG / "default.txt").write_text(src.read_text(encoding="utf-8") if src.exists() else "{企業名} ご担当者さま\n", encoding="utf-8")
     return {p.stem: p.read_text(encoding="utf-8-sig") for p in sorted(MSG.glob("*.txt"))}
+
+
+def message_info():
+    """業種ごとに、専用の文面があるか(無ければ「標準」が使われる)。新しい分類に無い名前の文面(古い業種名で作ったもの)は orphans に出す"""
+    import industries
+    have = {p.stem for p in MSG.glob("*.txt")} if MSG.exists() else set()
+    names = list(osm_source.INDUSTRY_TAGS)
+    return {"industries": {n: ("専用" if n in have else "標準") for n in names},
+            "orphans": [{"name": n, "to": industries.LEGACY.get(n, "")} for n in sorted(have) if n != "default" and n not in names and not n.startswith("承認")]}
 
 
 def fingerprint():
@@ -382,7 +453,9 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
-        if not self.guard(u.path.startswith("/api/") or u.path == "/download"):
+        # /api/whoami だけは、トークン無しで答える(MCP・導入・ショートカットが「この番号で動いているのは自分のツールか」を確かめる入口)。
+        # 返すのは、フォルダ・版・番号・動作中かだけ。会社名・文面・ログは返さない。Host/Origin の検査は他と同じ
+        if not self.guard((u.path.startswith("/api/") and u.path != "/api/whoami") or u.path == "/download"):
             return
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         ng_store = _NG_STORE
@@ -390,9 +463,24 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, PAGE.replace("__TOKEN__", TOKEN), "text/html; charset=utf-8")
         if u.path == "/api/meta":
             sender = json.loads(SENDER.read_text(encoding="utf-8-sig")) if SENDER.exists() else {}
-            return self.send(200, {"industries": list(osm_source.INDUSTRY_TAGS), "sender": sender, "files": outputs(), "messages": messages()})
+            return self.send(200, {"industries": list(osm_source.INDUSTRY_TAGS), "sender": sender, "files": outputs(), "messages": messages(), "message_info": message_info()})
+        if u.path == "/api/whoami":
+            return self.send(200, {"tool": "formlist", "here": str(HERE), "version": VERSION, "build": BUILD, "port": PORT, "running": JOB["running"], "name": JOB["name"]})
+        if u.path == "/api/summary":
+            # この画面(番号)の、最後の探索の内訳(段階別の件数・結果・理由)。画面の「結果を見る」が読む
+            try:
+                p = OUT / f"最後の探索_内訳_{PORT}.json"  # formlist.py は読み込みに十数秒かかるので、ここでは読み込まない(名前の決め方は formlist.summary_name と同じ)
+                return self.send(200, json.loads(p.read_text(encoding="utf-8-sig")) if p.exists() else {})
+            except Exception as e:
+                return self.send(200, {"error": f"内訳を読めませんでした: {e!r}"[:200]})
+        if u.path == "/api/update":
+            now = time.time()
+            if not UPDATE_CACHE or now - UPDATE_CACHE["at"] > 300 or q.get("force"):
+                UPDATE_CACHE.update(at=now, result=updater.check())
+            busy = JOB["running"] or any((ports.job(p) or {}).get("running") for p in ports.POOL if p != PORT)
+            return self.send(200, {**UPDATE_CACHE["result"], "busy": bool(busy), "restart_needed": updater.build() != BUILD, "build": BUILD})
         if u.path == "/api/job":
-            return self.send(200, {"lines": JOB["lines"][-300:], "running": JOB["running"], "name": JOB["name"], "code": JOB.get("code"), "files": outputs(), "version": VERSION, "here": str(HERE), "started": JOB.get("started", "")})
+            return self.send(200, {"lines": JOB["lines"][-300:], "running": JOB["running"], "name": JOB["name"], "code": JOB.get("code"), "files": outputs(), "version": VERSION, "build": BUILD, "here": str(HERE), "started": JOB.get("started", ""), "port": PORT})
         if u.path == "/api/results":
             p = safe_out(q.get("file", ""))
             ng = None if ng_store is not None else ng_list.load()
@@ -461,8 +549,8 @@ class H(BaseHTTPRequestHandler):
                 args.append("--resume-checks")
             if d.get("official_research"):
                 args.append("--official-research")
-            if d.get("include_large"):
-                args.append("--include-large")
+            if d.get("include_large") is False:  # 既定は含める。画面で「大手・チェーンも含める」を外したときだけ外す
+                args.append("--exclude-large")
             if d.get("portal"):
                 args += ["--portal", d["portal"]]
             else:
@@ -495,6 +583,47 @@ class H(BaseHTTPRequestHandler):
                 ng.write_text(d["ng"], encoding="utf-8")
                 args += ["--ng", str(ng)]
             return self.send(200, {"started": run_job("探す", args)})
+        if self.path == "/api/stop":
+            # 手で止める。「探す」だけ止める(印のファイルを置くと、探す処理が次の区切り(検索1回・会社1社)で止まり、調べ終えた分でリストを作る)。送信は止めない
+            if not (JOB["running"] and JOB["name"] == "探す"):
+                return self.send(200, {"stopped": False, "note": "止める「探す」処理は動いていません"})
+            OUT.mkdir(exist_ok=True)
+            (OUT / f"探す_止める_{PORT}.flag").write_text(time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
+            return self.send(200, {"stopped": True, "note": "止める指示を出しました。調べ終えた分でリストを作って終わります（数十秒かかります）"})
+        if self.path == "/api/plan":
+            # 始める前の見積もり(Googleマップの検索が何件・何分か)
+            import plan
+            kws = [k for k in re.split(r"[\s、,，]+", d.get("keywords", "")) if k]
+            return self.send(200, plan.plan_searches(str(d.get("area", "")).strip(), d.get("industries") or [], kws, lim))
+        if self.path == "/api/newtab":
+            pt, why = start_peer()
+            if pt is None:
+                return self.send(409, {"error": why})
+            return self.send(200, {"url": f"http://127.0.0.1:{pt}/", "port": pt})
+        if self.path == "/api/update":
+            # 最新版へ入れ替えて、起動し直す。探す・送るの最中(どのサーバーでも)は断る。入れ替えは、検査に全部通ったときだけ(updater.py)
+            if JOB["running"] or any((ports.job(p) or {}).get("running") for p in ports.POOL if p != PORT):
+                return self.send(409, {"error": "探す・送る処理の最中は、更新できません。終わってから、もう一度この画面を開いてください"})
+            if not UPDATE_BUSY.acquire(blocking=False):
+                return self.send(409, {"error": "ほかの画面が、いま更新しています。数秒待ってください"})
+            try:
+                try:
+                    r = updater.apply()
+                except ValueError as e:
+                    return self.send(200, {"updated": [], "error": str(e)})
+                except Exception as e:
+                    return self.send(500, {"updated": [], "error": f"更新に失敗しました（{type(e).__name__}: {e}）。前の版のまま使えます"})
+                UPDATE_CACHE.clear()
+                if not r["updated"] and updater.build() == BUILD:
+                    return self.send(200, {"updated": [], "restart": False})
+                self.send(200, {"updated": r["updated"], "restart": True})
+                if JOB.get("proc"):
+                    JOB["proc"].terminate()
+                updater.relaunch(PORT, r["backup"], version=r.get("version", ""))
+                threading.Timer(0.5, lambda: os._exit(0)).start()
+                return
+            finally:
+                UPDATE_BUSY.release()
         if self.path == "/api/quit":
             if JOB["running"] and (JOB["name"] == "本番送信" or d.get("if_idle")):
                 return self.send(409, {"error": f"「{JOB['name']}」の最中は終了できません。終わってから押してください"})
@@ -637,6 +766,25 @@ class H(BaseHTTPRequestHandler):
             for k, v in d.items():
                 (MSG / f"{k}.txt").write_text(v, encoding="utf-8")
             return self.send(200, {"ok": True})
+        if self.path in ("/api/message/move", "/api/message/delete"):
+            # 業種の文面の引き継ぎ(古い名前→新しい分類。コピーなので元は残る)と、削除(専用をやめて「標準」に戻す。消さずに 文面/_削除済み に移す)
+            info = message_info()
+            src = str(d.get("from") or d.get("name") or "")
+            known = set(info["industries"]) | {o["name"] for o in info["orphans"]}
+            if src == "default" or src not in known or not (MSG / f"{src}.txt").exists():
+                return self.send(400, {"error": "その文面は、ありません（「標準」は削除も引き継ぎもできません）"})
+            if self.path.endswith("/delete"):
+                bin_dir = MSG / "_削除済み"
+                bin_dir.mkdir(exist_ok=True)
+                os.replace(MSG / f"{src}.txt", bin_dir / f"{src}_{time.strftime('%Y%m%d_%H%M%S')}.txt")
+                return self.send(200, {"ok": True, "note": f"「{src}」の専用の文面をやめました。この業種には「標準」の文面が使われます（前の文面は 文面/_削除済み に残してあります）"})
+            to = str(d.get("to") or "")
+            if to not in info["industries"]:
+                return self.send(400, {"error": "引き継ぎ先は、いまの業種の一覧から選んでください"})
+            if (MSG / f"{to}.txt").exists():
+                return self.send(409, {"error": f"「{to}」には、すでに専用の文面があります。上書きしません。先にそちらをやめるか、中身を直してください"})
+            shutil.copy2(MSG / f"{src}.txt", MSG / f"{to}.txt")
+            return self.send(200, {"ok": True, "note": f"「{src}」の文面を、「{to}」の専用の文面にコピーしました（元の文面も残してあります）。顧客に届く文面なので、中身を読んで、必要なら直して保存してください"})
         if self.path == "/api/send":
             p = safe_out(d.get("file", ""))
             if not p or not SENDER.exists():
@@ -686,19 +834,20 @@ if __name__ == "__main__":
     import socket
     with socket.socket() as s:
         if s.connect_ex(("127.0.0.1", PORT)) == 0:
-            try:
-                import urllib.request
-                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                with opener.open(f"http://127.0.0.1:{PORT}/api/job", timeout=3) as r:
-                    mine = json.loads(r.read().decode("utf-8")).get("here") in (None, str(HERE))
-            except Exception:
-                mine = False
-            if not mine:
+            st = ports.state(PORT, str(HERE))
+            if st == "other_copy":  # 別のフォルダに入れた、このツールの古いコピーが居座っている。何も動いていなければ、止めて入れ替える(番号を変えない=画面のURLを変えない)
+                if replace_other_copy(PORT):
+                    st = "free"
+                else:
+                    print(f"{PORT}番では、別のフォルダのこのツールが動いています。処理の最中の可能性があるため、止めていません。そちらの画面で「ツールを終了する」を押してから、もう一度起動してください")
+                    sys.exit(1)
+            if st == "foreign":
                 print(f"{PORT}番は、このツールではない別のアプリが使っています。そのアプリを閉じるか、FORMLIST_PORT に8780〜8790の空いている番号を入れて起動してください")
                 sys.exit(1)
-            if not NO_BROWSER:  # MCP やログイン時の自動起動のときは画面を開かない
-                webbrowser.open(f"http://127.0.0.1:{PORT}/")  # すでに動いている。新しく起動せず、画面だけ開く
-            sys.exit(0)
+            if st == "ours":
+                if not NO_BROWSER:  # MCP やログイン時の自動起動のときは画面を開かない
+                    webbrowser.open(f"http://127.0.0.1:{PORT}/")  # すでに動いている。新しく起動せず、画面だけ開く
+                sys.exit(0)
     init_ng_store()
     _NG_SYNC = True
     ensure_ng_migrated(_NG_STORE)

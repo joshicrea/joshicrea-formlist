@@ -23,7 +23,9 @@ from pydantic import Field
 
 HERE = Path(__file__).resolve().parent
 MAIN_PORT = 8780
-POOL = [8780, 8781, 8782]  # 同時に立てる画面サーバーの上限。1つが最大3本のブラウザを動かすので、増やすとPCが重くなる
+import ports
+import updater
+from ports import POOL  # 同時に立てる画面サーバーの番号と上限(定義は ports.py。1つが最大3本のブラウザを動かすので、増やすとPCが重くなる)
 TOKENS = {}  # ポートごとの、画面から取ったトークン
 _ctx = threading.local()  # このスレッドが今どのサーバーを呼んでいるか。指定が無ければ画面で使う8780
 
@@ -99,12 +101,8 @@ def _can_bind(port):
 
 def _ours(port):
     """そのポートで動いているのが、このフォルダのツールか"""
-    try:
-        with _OPEN.open(f"http://127.0.0.1:{port}/api/job", timeout=3) as r:
-            j = json.loads(r.read().decode("utf-8"))
-        return isinstance(j, dict) and j.get("here") in (None, str(HERE)) and "lines" in j
-    except Exception:
-        return False
+    j = ports.job(port)  # トークンが要らない /api/whoami で確かめる(/api/job で確かめると、動いている自分のツールを別のアプリと取り違える)
+    return j is not None and j.get("here") in (None, str(HERE))
 
 
 def _resolve_main():
@@ -135,10 +133,14 @@ def _ensure():
         j = json.loads(text)
     except ValueError:
         raise RuntimeError(f"{_port()}番から、このツールの応答が返りませんでした（別のアプリが使っている可能性があります）: {text[:120]}")
-    mine = hashlib.sha256(b"".join((HERE / f).read_bytes() for f in ("app.py", "autosend.py", "ng_list.py", "site_checker.py"))).hexdigest()[:12]
     if j.get("here") not in (None, str(HERE)):
         raise RuntimeError("別のフォルダのフォームリスト作成ツールが動いています。そちらを終了してから呼び直してください: " + str(j.get("here")))
-    if j.get("version") != mine:
+    # 画面のサーバーが読み込んだ版(build)が、ディスクの版と違えば、古いまま動いている。build を知らない古い画面なら、従来の4ファイルの印で見る
+    if "build" in j:
+        stale = j["build"] != updater.build()
+    else:
+        stale = j.get("version") != hashlib.sha256(b"".join((HERE / f).read_bytes() for f in ("app.py", "autosend.py", "ng_list.py", "site_checker.py"))).hexdigest()[:12]
+    if stale:
         code, _ = _raw("POST", "/api/quit", {"if_idle": True})  # 何も動いていないときだけ、サーバー側が受ける
         if code != 200:
             raise RuntimeError("古い版の app.py が処理を実行中です。終わってから呼び直してください")
@@ -220,54 +222,37 @@ def _verdict(r):
             "robots禁止": ("送れない", "相手が自動で読むことを断っている"), "取得失敗": ("送れない", "読み込めなかった")}.get(v, (v or "未判定", ""))
 
 
-UPDATE_URL = "https://raw.githubusercontent.com/joshicrea/joshicrea-formlist/master/"
-UPDATE_FILES = ("app.py", "autosend.py", "ng_list.py", "site_checker.py", "mcp_server.py", "send_rules.py")
 _UPDATE_CACHE = {}  # {"at": 取った時刻, "result": 照合の結果}。1時間は取り直さない
 
 
-def _fetch_public(name):
-    """公開リポジトリのファイルを取る(3秒で諦める)。テストでは差し替える。OSのプロキシ設定はそのまま使う"""
-    with urllib.request.urlopen(UPDATE_URL + name, timeout=3) as r:
-        if r.status != 200:
-            raise RuntimeError(f"応答 {r.status}")
-        return r.read()
-
-
-def _norm(b):
-    return b.removeprefix(b"\xef\xbb\xbf").replace(b"\r\n", b"\n")  # 改行の違い(CRLF/LF)だけで「古い」と出さない
-
-
 def _update_check():
-    """手元の本体ファイルが公開リポジトリの最新と同じか。取れなかったときは「未確認」で、「最新」とは言わない"""
+    """手元の本体ファイルが公開リポジトリの最新(manifest.json)と同じか。取れなかったときは「未確認」で、「最新」とは言わない"""
     if _UPDATE_CACHE and time.time() - _UPDATE_CACHE["at"] < 3600:
         return _UPDATE_CACHE["result"]
-    stale, failed = [], []
-
-    def one(name):
-        try:
-            body = _fetch_public(name)
-            if not body or not body.strip() or body.lstrip().startswith(b"<"):  # 空・HTML(プロキシやログインの画面)は本物の応答ではない
-                return name, None
-            return name, _norm(body) == _norm((HERE / name).read_bytes())
-        except Exception:
-            return name, None
-
-    with ThreadPoolExecutor(len(UPDATE_FILES)) as ex:
-        for name, same in ex.map(one, UPDATE_FILES):
-            if same is None:
-                failed.append(name)
-            elif not same:
-                stale.append(name)
-    if stale:
-        r = {"state": "古い", "stale_files": stale, "message": "新しい版があります。導入の1行をもう一度実行してください。送信元・文面・送らないリスト・できたリストは残ります"}
-    elif failed:
-        r = {"state": "未確認", "stale_files": [], "message": "公開されている最新の版と照合できませんでした(通信できない・社内ネットワークで止められた等)。最新かどうかは分かりません。ツールはこのまま使えます"}
-    else:
-        r = {"state": "最新", "stale_files": [], "message": "公開されている最新の版と同じです"}
-    if failed:
-        r["unchecked_files"] = failed
+    c = updater.check()
+    r = {"state": c["state"], "stale_files": c["files"], "message": c["message"]}
+    if c["state"] == "古い":
+        r["message"] = "新しい版があります。ツールの画面を開くと、自動で更新されます（formlist_update でも更新できます）。送信元・文面・送らないリスト・できたリストは残ります"
     _UPDATE_CACHE.update(at=time.time(), result=r)
     return r
+
+
+@mcp.tool()
+def formlist_update() -> dict:
+    """公開されている最新の版へ更新する(探す・送る処理が動いていないときだけ)。画面のサーバーは自動で起動し直される。
+    mcp_server.py が更新に含まれていたときは、Claude を完全に終了して(タスクトレイも)開き直すまで、新しい道具は使えない。結果の need_restart_claude を、そのまま利用者に伝える。"""
+    code, d = api("POST", "/api/update", {})
+    if code != 200 or not isinstance(d, dict):
+        return {"updated": [], "error": (d or {}).get("error", f"更新できませんでした（応答 {code}）")}
+    _UPDATE_CACHE.clear()
+    if d.get("error"):
+        return {"updated": d.get("updated", []), "error": d["error"]}
+    out = {"updated": d.get("updated", []), "restart_screen": bool(d.get("restart"))}
+    if "mcp_server.py" in out["updated"]:
+        out["need_restart_claude"] = "更新に、Claude の道具の本体(mcp_server.py)が含まれています。Claude を完全に終了して(画面右下の「^」の中の Claude も)開き直すまで、新しい道具は使えません"
+    if not out["updated"]:
+        out["message"] = "すでに最新です"
+    return out
 
 
 @mcp.tool()
@@ -343,14 +328,14 @@ def _start_search_on_free_server(body):
 
 @mcp.tool()
 def formlist_search(area: str, industries: list[str] | None = None, keywords: str = "", sources: list[str] | None = None,
-                    limit: int = 50, include_large: bool = False, wait_seconds: int = 90) -> dict:
+                    limit: int = 50, include_large: bool = True, wait_seconds: int = 90) -> dict:
     """会社を探してフォームリストを作る。area は「東京都江東区」のように市区町村まで。industries は
     ホテル・旅館／百貨店／商業施設／ブライダル／観光施設／住宅・不動産／結婚相談所／自動車・保険／携帯ショップ／美容・コスメ／アパレル／
     ライフスタイル雑貨／食品・生産者直売／教育機関／福祉施設／自治体・地域団体／メーカー／企業の社内イベント／サロン から選ぶ。
     戦略書の優先順位は 商業施設 → 住宅・不動産 → ホテル・旅館 → ブライダル → 百貨店。sources は google（既定）/osm。Yahoo!マップは外した。
     一人サロン・小さな会社なら「サロン」。一覧に無い業種は industries に入れず、keywords に語として入れる。
     limit は調べる会社数の上限。かかる時間の見込みは、始めた直後の経過(last_lines)と、終わったあとの summary.estimate_minutes に出る。利用者には見込みを伝え、やめたいと言われたら formlist_stop を呼ぶ。
-    大手・チェーンと推定した会社は既定で外す（include_large=true で含める）。一人サロン・小さな会社を探すときは include_large は false のまま。wait_seconds 秒まで待ち、終わらなければ formlist_status で続きを見る。"""
+    大手・チェーンと推定した会社は既定で含める（include_large=false で外す）。一人サロン・小さな会社だけにしたいときだけ include_large=false にする。wait_seconds 秒まで待ち、終わらなければ formlist_status で続きを見る。"""
     miss = _chromium_missing()
     if miss:
         return {"started": False, "error": miss}
@@ -365,7 +350,7 @@ def formlist_search(area: str, industries: list[str] | None = None, keywords: st
 
 
 @mcp.tool()
-def formlist_search_many(area: str, searches: list[dict], limit: int = 50, include_large: bool = False, sources: list[str] | None = None,
+def formlist_search_many(area: str, searches: list[dict], limit: int = 50, include_large: bool = True, sources: list[str] | None = None,
                          wait_seconds: int = 90) -> dict:
     """複数の探す処理を、別々のサーバーで同時に走らせる(最大3つ)。searches は {"industries": [...], "keywords": "語 語"} の並び。
     たとえば「江東区でサロンと、ホテルと、フラワー教室を別々のリストで同時に」なら、3つ入れる。
@@ -523,10 +508,14 @@ def formlist_sender_set(fields: dict) -> dict:
 
 @mcp.tool()
 def formlist_message_get(name: str = "default") -> dict:
-    """送る文面を読む。name は default（標準）か業種名。{企業名}{書き出し}{署名} は送るとき自動で置き換わる。"""
+    """送る文面を読む。name は default（標準）か業種名（業種の一覧は formlist_status ではなく、返り値の by_industry）。{企業名}{書き出し}{署名} は送るとき自動で置き換わる。
+    by_industry は、業種ごとに「専用」(その業種専用の文面がある)か「標準」(専用が無く、標準の文面が使われる)。orphans は、古い業種名で作った文面(いまは使われない)で、to が引き継ぎ先の候補。
+    業種ごとに文面が違うので、最初の設定のときに、探す業種ぶんをまとめて決める(手引きの「文面を業種ごとに用意する」)。"""
     _, m = api("GET", "/api/meta")
     msgs = m.get("messages", {})
-    return {"name": name, "text": msgs.get(name, msgs.get("default", "")), "available": list(msgs)}
+    info = m.get("message_info", {})
+    return {"name": name, "text": msgs.get(name, msgs.get("default", "")), "uses": "専用" if name in msgs and name != "default" else "標準",
+            "by_industry": info.get("industries", {}), "orphans": info.get("orphans", []), "available": list(msgs)}
 
 
 @mcp.tool()
@@ -534,6 +523,21 @@ def formlist_message_set(name: str, text: str) -> dict:
     """送る文面を保存する。顧客に届く文面なので、ユーザーに全文を見せて承認を得てから保存する。保存すると確認済みの印は無効になる。"""
     code, d = api("POST", "/api/message", {name: text})
     return d if code == 200 else {"error": d.get("error")}
+
+
+@mcp.tool()
+def formlist_message_move(name: str, to: str) -> dict:
+    """古い業種名で作った文面(formlist_message_get の orphans)を、いまの業種の専用の文面にコピーする(元は残る。すでに専用がある業種には上書きしない)。
+    顧客に届く文面なので、コピーしたあとで formlist_message_get で全文を読み、利用者に見せて、必要なら直して formlist_message_set で保存する。"""
+    code, d = api("POST", "/api/message/move", {"from": name, "to": to})
+    return d if code == 200 else {"error": (d or {}).get("error", f"できませんでした（応答 {code}）")}
+
+
+@mcp.tool()
+def formlist_message_unset(name: str) -> dict:
+    """業種の専用の文面をやめて、標準の文面を使うようにする(前の文面は 文面/_削除済み に残る)。利用者が頼んだときだけ使う。"""
+    code, d = api("POST", "/api/message/delete", {"name": name})
+    return d if code == 200 else {"error": (d or {}).get("error", f"できませんでした（応答 {code}）")}
 
 
 @mcp.tool()

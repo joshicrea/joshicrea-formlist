@@ -10,6 +10,8 @@ import time
 
 import requests
 
+import industries
+
 UA = "AiMarunageEigyoTool/1.0 (small business lead list; respects rate limits)"
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
 OVERPASS_URLS = [
@@ -19,29 +21,8 @@ OVERPASS_URLS = [
     "https://overpass.kumi.systems/api/interpreter",
 ]
 
-# Industry names are the same as 05 台帳「業種一覧」. Value = Overpass selectors.
-# Selectors with a name regex catch facilities OSM has no dedicated tag for.
-INDUSTRY_TAGS = {
-    "ホテル・旅館": ['nwr["tourism"~"^(hotel|guest_house|motel|hostel)$"]'],
-    "百貨店": ['nwr["shop"="department_store"]'],
-    "商業施設": ['nwr["shop"="mall"]', 'nwr["name"~"ショッピングセンター|ショッピングモール|モール$"]["shop"]'],
-    "ブライダル": ['nwr["shop"="wedding"]', 'nwr["name"~"結婚式場|ウェディング|ウエディング|ブライダル|迎賓館"]'],
-    "観光施設": ['nwr["tourism"~"^(attraction|museum|theme_park|zoo|aquarium|gallery)$"]', 'nwr["name"~"^道の駅"]'],
-    "住宅・不動産": ['nwr["name"~"住宅展示場|ハウジングセンター|ハウジングステージ|モデルハウス|工務店"]', 'nwr["office"="estate_agent"]', 'nwr["shop"="estate_agent"]'],
-    "結婚相談所": ['nwr["name"~"結婚相談所|婚活"]'],
-    "自動車・保険": ['nwr["shop"="car"]', 'nwr["office"="insurance"]'],
-    "携帯ショップ": ['nwr["shop"="mobile_phone"]'],
-    "美容・コスメ": ['nwr["shop"~"^(beauty|cosmetics|hairdresser)$"]'],
-    "サロン": ['nwr["shop"~"^(hairdresser|beauty)$"]', 'nwr["beauty"]'],
-    "アパレル": ['nwr["shop"~"^(clothes|boutique)$"]'],
-    "ライフスタイル雑貨": ['nwr["shop"~"^(gift|variety_store|interior_decoration|houseware|florist|craft)$"]'],
-    "食品・生産者直売": ['nwr["shop"="farm"]', 'nwr["amenity"="marketplace"]', 'nwr["name"~"直売所|産直"]'],
-    "教育機関": ['nwr["amenity"~"^(college|university)$"]'],
-    "福祉施設": ['nwr["amenity"="social_facility"]'],
-    "自治体・地域団体": ['nwr["amenity"~"^(townhall|community_centre)$"]'],
-    "メーカー": ['nwr["man_made"="works"]', 'nwr["office"="company"]["industrial"]'],
-    "企業の社内イベント": ['nwr["office"="company"]'],
-}
+# 業種の定義は industries.py(広い分類ごとの地図の検索語・OpenStreetMapの条件)。ここは Overpass の条件だけを取り出す。
+INDUSTRY_TAGS = {name: d["osm"] for name, d in industries.INDUSTRIES.items()}
 
 KW_BAD = '.^$*+?(){}[]|\\"'
 URL_KEYS = ("website", "contact:website", "url", "brand:website")
@@ -88,6 +69,7 @@ def _overpass(query, log):
 
 
 def fetch(area_name, industry, log):
+    industry = industries.canonical(industry) if industries.canonical(industry) in INDUSTRY_TAGS else industry
     if industry not in INDUSTRY_TAGS:
         raise ValueError(f"地図で探せない業種です: {industry}")
     area_id, disp = resolve_area(area_name, log)

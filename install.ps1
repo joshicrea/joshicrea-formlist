@@ -89,9 +89,33 @@ function New-Lnk([string]$Path, [string]$Target, [string]$Arguments, [string]$Di
     $l.Save()
 }
 function Remove-Shortcuts {
+    if ($env:FORMLIST_TASK_NAME) { try { Unregister-ScheduledTask -TaskName $env:FORMLIST_TASK_NAME -Confirm:$false -ErrorAction Stop } catch {} }
+    elseif (-not $DryRunRegister) { Remove-ResidentTask }
     $d = Get-ShortcutDirs
     if (-not $d) { return }
     foreach ($p in @([IO.Path]::Combine($d.Startup, $StartupLnk), [IO.Path]::Combine($d.Desktop, $DesktopLnk))) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
+}
+$TaskName = "AIまるなげ営業_画面の常駐"
+function Remove-ResidentTask {
+    try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop } catch {}
+}
+# ログオンのたびに画面のサーバーを起動し、止まっていたら5分以内に起動し直す。1つだけ動く(app.py が、すでに動いていれば何もしない)
+function Set-ResidentTask([string]$Exe) {
+    $name = if ($env:FORMLIST_TASK_NAME) { $env:FORMLIST_TASK_NAME } else { $TaskName }
+    try {
+        $app = [IO.Path]::Combine($AppDir, "app.py")
+        $act = New-ScheduledTaskAction -Execute $Exe -Argument "-X utf8 `"$app`" --no-browser" -WorkingDirectory $AppDir
+        $trg = @((New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME))
+        $rep = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5)
+        $trg += $rep
+        $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+        $pr = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+        Register-ScheduledTask -TaskName $name -Action $act -Trigger $trg -Settings $set -Principal $pr -Description "AIまるなげ営業の画面を、パソコンを開いたときと、止まったときに自動で起動します（動いていれば何もしません）" -Force | Out-Null
+        return $true
+    } catch {
+        Write-Host "常駐の登録（タスクスケジューラ）を作れませんでした（$($_.Exception.Message)）。スタートアップのショートカットだけで自動起動します。"
+        return $false
+    }
 }
 function Set-Shortcuts {
     $d = Get-ShortcutDirs
@@ -103,6 +127,7 @@ function Set-Shortcuts {
         if (-not (Test-Path -LiteralPath $exe)) { throw "Python の場所を確かめられませんでした: $exe" }
         $app = [IO.Path]::Combine($AppDir, "app.py")
         New-Lnk ([IO.Path]::Combine($d.Startup, $StartupLnk)) $exe "-X utf8 `"$app`" --no-browser" $AppDir 7 "AIまるなげ営業の画面を、パソコンを開いたときに自動で起動します"
+        $script:ResidentOk = if ($DryRunRegister -and -not $env:FORMLIST_TASK_NAME) { $false } else { Set-ResidentTask $exe }
         New-Lnk ([IO.Path]::Combine($d.Desktop, $DesktopLnk)) $exe "-X utf8 `"$app`"" $AppDir 7 "AIまるなげ営業の画面を開きます（止まっていれば起動します）"
         return $true
     } catch {
@@ -129,9 +154,33 @@ function Invoke-Local([int]$Port, [string]$Path, [string]$Body = "", [string]$To
     try { return (New-Object IO.StreamReader($resp.GetResponseStream(), [Text.Encoding]::UTF8)).ReadToEnd() } finally { $resp.Close() }
 }
 
+# その番号で動いているこのツールの状態(tool・here・running・name)。このツールでなければ $null
+function Get-ToolInfo([int]$Port) {
+    try { $st = Invoke-Local $Port "/api/whoami" | ConvertFrom-Json; if ($st -and $st.tool -eq "formlist") { return $st } } catch {}
+    # /api/whoami が無い古い版: トップページに埋め込まれたトークンで /api/job を読む。古い版を「別のアプリ」と取り違えない
+    try {
+        $page = Invoke-Local $Port "/"
+        if ($page -match "const TOKEN='([^']+)'" -and $page.Contains("AIまるなげ営業")) {
+            $req = [Net.HttpWebRequest]::Create("http://127.0.0.1:$Port/api/job")
+            $req.Proxy = $null; $req.Timeout = 3000; $req.Headers["X-Token"] = $Matches[1]
+            $resp = $req.GetResponse()
+            try { $j = (New-Object IO.StreamReader($resp.GetResponseStream(), [Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } finally { $resp.Close() }
+            if ($j -and $null -ne $j.lines) { return [pscustomobject]@{ tool = "formlist"; here = $j.here; running = [bool]$j.running; name = $j.name; port = $Port } }
+        }
+    } catch {}
+    return $null
+}
+
+# その番号で、別のフォルダに入れたこのツールが動いているときの状態を返す(自分のフォルダでなければ $null)
+function Get-OtherCopy([int]$Port, [string]$Dir) {
+    $st = Get-ToolInfo $Port
+    if ($st -and $st.here -and -not (Test-SamePath $st.here $Dir)) { return $st }
+    return $null
+}
+
 # その番号で動いているのが、このフォルダのツールの画面なら、状態を返す。違えば $null
 function Get-ToolState([int]$Port, [string]$Dir) {
-    try { $st = Invoke-Local $Port "/api/job" | ConvertFrom-Json } catch { return $null }
+    $st = Get-ToolInfo $Port
     if ($st -and $st.here -and (Test-SamePath $st.here $Dir)) { return $st }
     return $null
 }
@@ -208,6 +257,12 @@ if ($Open) {
     foreach ($p in $Ports) {
         if (Get-ToolState $p $Here) { Write-Host "画面を開きます: http://127.0.0.1:$p/"; Start-Process "http://127.0.0.1:$p/"; exit 0 }
     }
+    # 画面のアドレスは 8780 番で固定。別のフォルダのこのツール(古いコピー)が居座っていれば、何も動いていないときだけ止めて入れ替える
+    $others = @($Ports | ForEach-Object { Get-OtherCopy $_ $Here } | Where-Object { $_ })
+    foreach ($o in $others) {
+        if ($o.running) { Write-Host "別のフォルダのこのツールが、$($o.port)番で「$($o.name)」を実行中です。終わってから、もう一度開いてください。"; exit 3 }
+    }
+    foreach ($h in @($others | ForEach-Object { $_.here } | Select-Object -Unique)) { $null = Stop-ToolServers $h -RefuseIfBusy }
     $free = 0
     foreach ($p in $Ports) { if (Test-PortFree $p) { $free = $p; break } }
     if (-not $free) { Write-Host "8780〜8782 番が、すべてほかのアプリに使われています。使っていないアプリを閉じるか、パソコンを再起動してから、もう一度開いてください。"; exit 3 }
@@ -437,7 +492,10 @@ $shortcutOk = Set-Shortcuts
 Write-Host ""
 Write-Host "インストールが終わりました。"
 Write-Host "確かめたこと: $($checked)Claude への登録を書いたこと$(if ($DryRunRegister) { '（試走のため、実際には書いていません）' })。$(if ($shortcutOk -and -not $DryRunRegister) { '起動用のショートカットを作ったこと。' })"
-if ($shortcutOk -and -not $DryRunRegister) { Write-Host "パソコンを開くたびに、画面が自動で用意されます。止まっていても、デスクトップの「AIまるなげ営業」を押すと開きます。" }
+if ($shortcutOk -and -not $DryRunRegister) {
+    Write-Host "画面のアドレスは、いつも http://127.0.0.1:8780/ です。パソコンを開くたびに自動で用意され、止まっても5分以内に起動し直します（ショートカットを押す必要はありません）。"
+    if (-not $script:ResidentOk) { Write-Host "ただし、常駐の登録（タスクスケジューラ）は作れませんでした。パソコンを開いたあとは、デスクトップの「AIまるなげ営業」を押すと開きます。" }
+}
 if ($SkipDeps) { Write-Host "確かめていないこと: 部品と専用ブラウザ（-SkipDeps のため）。" }
 Write-Host "確かめていないこと: Claude の画面から AIまるなげ営業が見えるか。次の手順で確かめます。"
 Write-Host "1. Claude を完全に終了します（画面右下の「^」の中にある Claude の絵を右クリックして「終了」）"

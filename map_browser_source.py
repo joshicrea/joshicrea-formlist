@@ -289,7 +289,9 @@ def _fetch_google_once(area_name, term, log, limit=20, stats=None):
     from playwright.sync_api import sync_playwright
     q = f"{term} {area_name}"
     rows = []
-    with sync_playwright() as p:
+    pw_cm = sync_playwright()
+    p = pw_cm.__enter__()
+    try:
         b = None
         try:
             b, ctx = _browser(p)
@@ -385,7 +387,15 @@ def _fetch_google_once(area_name, term, log, limit=20, stats=None):
                 log(f"    読めなかった例: {sample}")
         finally:
             if b:
-                b.close()
+                try:
+                    b.close()
+                except Exception as e:  # 取り終えたあとの後片付けの失敗(接続が先に切れた等)で、取れた店を捨てない
+                    log(f"    （ブラウザを閉じる時の失敗は無視しました: {type(e).__name__}）")
+    finally:
+        try:
+            pw_cm.__exit__(None, None, None)
+        except Exception as e:
+            log(f"    （ブラウザの後片付けの失敗は無視しました: {type(e).__name__}）")
     return rows
 
 

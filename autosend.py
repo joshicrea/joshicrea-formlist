@@ -77,10 +77,15 @@ def pick_message(path, industry):
     """--message がフォルダなら 業種名.txt を優先し、無ければ default.txt。ファイルならそれを使う"""
     p = Path(path)
     if p.is_dir():
-        f = p / f"{industry}.txt"
-        # CSVの業種は外部由来。「../」や絶対パスで文面フォルダの外を読ませない(区切り文字を含むか、解決後に直下でなければ default.txt)
-        safe = industry and not re.search(r'[\\/:*?"<>|]|\.\.', industry) and f.resolve().parent == p.resolve()
-        return (f if safe and f.exists() else p / "default.txt").read_text(encoding="utf-8-sig")
+        # 業種は、書かれたとおりの名前 → 新しい分類の名前(古い名前で作ったリストも、新しい分類の文面を使う) の順に探す
+        import industries
+        for name in dict.fromkeys([industry, industries.canonical(industry) if industry else industry]):
+            f = p / f"{name}.txt"
+            # CSVの業種は外部由来。「../」や絶対パスで文面フォルダの外を読ませない(区切り文字を含むか、解決後に直下でなければ default.txt)
+            safe = name and not re.search(r'[\\/:*?"<>|]|\.\.', name) and f.resolve().parent == p.resolve()
+            if safe and f.exists():
+                return f.read_text(encoding="utf-8-sig")
+        return (p / "default.txt").read_text(encoding="utf-8-sig")
     return p.read_text(encoding="utf-8-sig")
 
 
