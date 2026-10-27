@@ -467,7 +467,7 @@ try {
 $checked = ""
 if (-not $SkipDeps) {
     Write-Host "部品を入れています（数分かかります）..."
-    Invoke-Py -Rest @("-m", "pip", "install", "--quiet", "--disable-pip-version-check", "playwright", "requests", "beautifulsoup4", "openpyxl", "mcp<2", "pydantic") | Out-Host
+    Invoke-Py -Rest @("-m", "pip", "install", "--quiet", "--disable-pip-version-check", "playwright==1.58.0", "requests>=2.32,<3", "beautifulsoup4>=4.12,<5", "openpyxl>=3.1,<4", "mcp>=1.29,<2", "pydantic>=2.10,<3") | Out-Host
     if ($LASTEXITCODE -ne 0) { Write-Host "部品の導入に失敗しました（終了コード $LASTEXITCODE）。上の表示に「CERTIFICATE_VERIFY_FAILED」があれば、会社のネットワークの証明書検査が原因です。「407」があればプロキシの認証が原因です。それ以外は、$Ask"; exit 1 }
     Write-Host "ホームページを開くための専用ブラウザを入れています（数分かかります）..."
     Invoke-Py -Rest @("-m", "playwright", "install", "chromium") | Out-Host

@@ -261,6 +261,19 @@ def _read_place_page(pg, term, area_name, q, log):
     return row
 
 
+CARD_SEL = "a.hfpxzc"
+ALT_CARD_SEL = "[role='feed'] a[href*='/maps/place/'][aria-label]"
+
+
+def _alt_card_selector(pg):
+    """主の目印で一覧が出なかったときだけ呼ぶ。予備の目印で1件以上見えれば、その選択子を返す。見えなければ None(既存の失敗の分類へ進む)"""
+    try:
+        pg.wait_for_selector(ALT_CARD_SEL, timeout=6000)
+        return ALT_CARD_SEL if pg.locator(ALT_CARD_SEL).count() > 0 else None
+    except Exception:
+        return None
+
+
 def fetch_google(area_name, term, log, limit=20):
     """検索語1つぶんの取得。候補の半分以上が読めなかったときは(Googleマップが詳細欄を開かなくなる・一時的な失敗)、やり直す。
     やり直してもだめなら、丸ごと失敗したことを警告に出す(一覧が黙って小さくなるのを防ぐ)"""
@@ -301,33 +314,38 @@ def _fetch_google_once(area_name, term, log, limit=20, stats=None):
             for k in range(2):
                 try:
                     pg.goto("https://www.google.com/maps/search/" + quote(q) + "?hl=ja", timeout=45000, wait_until="domcontentloaded")
-                    pg.wait_for_selector("a.hfpxzc", timeout=25000)
+                    pg.wait_for_selector(CARD_SEL, timeout=25000)
+                    card_sel = CARD_SEL
                     break
                 except Exception as e:
                     last = e
                     pg.wait_for_timeout(4000)
             else:
-                kind = _classify_failed_page(pg)
-                if kind == "blocked":
-                    raise GoogleBlocked(f"Google マップに「普段と違う通信」として止められました（確認画面）。時間をおいて、同じ場所を連続で探さないでください: {last!r}")
-                if kind == "place":
-                    row = _read_place_page(pg, term, area_name, q, log)
-                    if row:
+                card_sel = _alt_card_selector(pg)  # a.hfpxzc は Google の生成名で、変わると一覧が取れない。予備の選択子で取れるなら、そのまま進む
+                if card_sel:
+                    log(f"  「{q}」は、一覧の目印(a.hfpxzc)が見つからず、予備の目印で一覧を読みました。Googleマップの作りが変わった可能性があります")
+                else:
+                    kind = _classify_failed_page(pg)
+                    if kind == "blocked":
+                        raise GoogleBlocked(f"Google マップに「普段と違う通信」として止められました（確認画面）。時間をおいて、同じ場所を連続で探さないでください: {last!r}")
+                    if kind == "place":
+                        row = _read_place_page(pg, term, area_name, q, log)
+                        if row:
+                            if stats is not None:
+                                stats.update(place_read=1)
+                            log(f"  「{q}」は、結果が1件だけで施設ページに直接移りました。その1件を取りました")
+                            return [row]
                         if stats is not None:
-                            stats.update(place_read=1)
-                        log(f"  「{q}」は、結果が1件だけで施設ページに直接移りました。その1件を取りました")
-                        return [row]
-                    if stats is not None:
-                        stats.update(place_missed=1)
-                    log(f"  「{q}」は、結果が1件だけで施設ページに直接移り、その1件を読めませんでした（取りこぼし1件）。町名を広げて探し直すと取れることがあります")
-                    return []
-                if kind == "empty":
-                    if stats is not None:
-                        stats.update(empty=1)
-                    log(f"  「{q}」は、Googleマップで結果が0件でした（失敗ではありません）")
-                    return []
-                raise TransientFetchError(f"Google マップが開けない・結果が出ない（通信の失敗か、一時的な不具合です）: {last!r}")
-            cards = pg.locator("a.hfpxzc")
+                            stats.update(place_missed=1)
+                        log(f"  「{q}」は、結果が1件だけで施設ページに直接移り、その1件を読めませんでした（取りこぼし1件）。町名を広げて探し直すと取れることがあります")
+                        return []
+                    if kind == "empty":
+                        if stats is not None:
+                            stats.update(empty=1)
+                        log(f"  「{q}」は、Googleマップで結果が0件でした（失敗ではありません）")
+                        return []
+                    raise TransientFetchError(f"Google マップが開けない・結果が出ない（通信の失敗か、一時的な不具合です）: {last!r}")
+            cards = pg.locator(card_sel)
             card_scroll = _count_cards_with_scroll(pg, cards, limit)
             n = min(card_scroll["count"], limit)
             if card_scroll["status"] != "limit_reached":

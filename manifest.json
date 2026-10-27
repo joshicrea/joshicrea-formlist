@@ -1,5 +1,5 @@
 {
- "version": "61134b58e39d",
+ "version": "f2406f165771",
  "files": {
   "app.py": "203a8046cbe35bda86d1cf59f9a6e6068d3a3661d36cca62614ee6003dac3110",
   "ui.html": "ed573a00e33f8e9feae349a26b9e63a26f4d40e8686f75a14d1bc977d5de6ec7",
@@ -11,7 +11,7 @@
   "hp_finder.py": "e63ea228b10833af90b3207c2185902ab55d1aba76e09d19620fb730dc89ef41",
   "hp_verify.py": "bb9c29303e9821a686610dee648390c624e30d215ad094a406eb37b75aca2b4f",
   "limited_http_budget.py": "229b0b36fcec3af27c287f405b79ece1ca4a912b35b936467e5ede6d0e87e0f3",
-  "map_browser_source.py": "c7ca2bb37320424630bd62972b73e9d4a5640523cb7f7876447ab77ece001f97",
+  "map_browser_source.py": "d5237ebc58ea8c05d004f2c0656fa358d25554ebbee8076c84c0f9dc604baeb5",
   "mcp_server.py": "615215ac1b9c69b3d2c0da4a2d6ccda8f436aaae331fa9d940faa3a7ecf2baa1",
   "mcp_register.py": "bdcc53e3824ebe950f3f5a4c57fc9a10b7dd67f15fea17456c5c32a54e88dfdd",
   "message_adoption.py": "8e3fff10bd33d5636dd156b4a4f8d6cb00949d8db1cf8573cdc0f9ef566b67d6",
