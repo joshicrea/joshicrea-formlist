@@ -19,6 +19,18 @@ SHARED = ("forms.gle", "docs.google.com", "talkappi.com", "form.run", "formrun.c
 FILE = Path(__file__).resolve().parent / "出力" / "NGリスト.txt"
 HP_COL = "HP URL"
 FORM_COL = "問い合わせフォームURL 無ければメール"
+MAIL_PREFIX = "mail:"
+_EMAIL_RE = re.compile(r"^[^@\s/:#]+@[^@\s/:#]+\.[^@\s/:#]+$")
+
+
+def norm_email(s):
+    """メールアドレスの照合用にそろえる(全角半角・大文字小文字・前後の空白)"""
+    return unicodedata.normalize("NFKC", (s or "").strip()).lower()
+
+
+def is_email(s):
+    """URLではなくメールアドレスの形かどうか(除外リスト登録時の自動判別に使う)"""
+    return bool(_EMAIL_RE.match(norm_email(s)))
 
 
 def domain(url):
@@ -52,6 +64,8 @@ def load():
             item = line.split("#")[0].strip()
             if item.startswith("@"):
                 urls.add(norm_url(item[1:]))
+            elif item.lower().startswith(MAIL_PREFIX):
+                continue  # メールアドレスの行は load_mails() で読む(ドメインとして誤読しない)
             elif item:
                 doms.add(domain(item.lower()) or item.lower())
     return doms, urls
@@ -71,11 +85,30 @@ def is_ng_form(form_url, ng=None):
     return bool(form_url) and norm_url(form_url) in (ng or load())[1]
 
 
+def load_mails():
+    """メールアドレスの集合(正規化済み)。mail: で始まる行だけを読む"""
+    mails = set()
+    if FILE.exists():
+        for line in FILE.read_text(encoding="utf-8-sig").splitlines():
+            item = line.split("#")[0].strip()
+            if item.lower().startswith(MAIL_PREFIX):
+                m = norm_email(item[len(MAIL_PREFIX):])
+                if m:
+                    mails.add(m)
+    return mails
+
+
+def is_ng_email(email, mails=None):
+    """そのメールアドレス自体が除外に入っているか。ドメイン単位では当てない(別のアドレスには効かせない)"""
+    m = norm_email(email)
+    return bool(m) and m in (load_mails() if mails is None else mails)
+
+
 def is_ng_row(row, ng=None):
-    """一覧の1行がNGか。HPのドメイン・フォームURLのどちらかが当たれば"""
+    """一覧の1行がNGか。HPのドメイン・フォームURL・メールアドレスのどれかが当たれば"""
     ng = ng or load()
     hp, form = row.get(HP_COL) or "", row.get(FORM_COL) or ""  # 列が足りないCSVでも落ちない
-    return is_ng(hp, ng) or is_ng_form(form, ng) or is_ng_form(hp, ng)
+    return is_ng(hp, ng) or is_ng_form(form, ng) or is_ng_form(hp, ng) or (is_email(form) and is_ng_email(form))
 
 
 def _clean(s):
@@ -112,6 +145,8 @@ TOO_WIDE = {"jp", "co.jp", "or.jp", "ne.jp", "ac.jp", "go.jp", "lg.jp", "com", "
 def add(url, reason, name=""):
     """追加できたら True。入っている・広すぎる・ドメインなしは False。
     共有サービス(パスで店を分けるものを含む)は、ドメインではなくそのURL1つだけを入れる"""
+    if is_email(url):
+        return add_mail(url, reason, name)
     h = domain(url)
     if not h or "." not in h or h in TOO_WIDE:
         return False
@@ -129,4 +164,13 @@ def add_form(form_url, reason, name=""):
     if not form_url.startswith("http") or is_ng_form(form_url):
         return False
     _write(f"@{form_url.strip()}  # {reason} {name}")
+    return True
+
+
+def add_mail(email, reason, name=""):
+    """メールアドレス1つだけを追加する。ドメイン単位には広げない(同じドメインの別の会社・別のアドレスには効かせない)"""
+    m = norm_email(email)
+    if not is_email(m) or is_ng_email(m):
+        return False
+    _write(f"{MAIL_PREFIX}{m}  # {reason} {name}")
     return True

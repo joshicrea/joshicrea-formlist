@@ -107,7 +107,8 @@ def start_peer():
         with open(OUT / "app_起動ログ.txt", "ab") as log:
             subprocess.Popen([_pythonw(), "-X", "utf8", str(HERE / "app.py")], cwd=HERE,
                              env=dict(os.environ, FORMLIST_NO_BROWSER="1", FORMLIST_PORT=str(pt), PYTHONIOENCODING="utf-8"),
-                             stdin=subprocess.DEVNULL, stdout=log, stderr=log, creationflags=NO_WINDOW)
+                             stdin=subprocess.DEVNULL, stdout=log, stderr=log, creationflags=NO_WINDOW,
+                             start_new_session=(os.name != "nt"))  # Mac/Linux: 親が終わっても画面のサーバーを道連れにしない
         for _ in range(40):
             time.sleep(0.5)
             if ports.state(pt, here) == "ours":
@@ -276,13 +277,15 @@ def set_ng_store_for_tests(store):
 
 def add_ng_item(item, reason, company="", store=None):
     if store is None:
-        return ng_list.add(item, reason, company) or ng_list.is_ng(item) or ng_list.is_ng_form(item)
+        return ng_list.add(item, reason, company) or ng_list.is_ng(item) or ng_list.is_ng_form(item) or ng_list.is_ng_email(item)
     raw = str(item or "").strip()
     if not raw:
         return False
     if raw.startswith("@"):
         url = raw[1:].strip()
         return bool(store.add_form_ng(url, reason, company) or store.is_ng([url]))
+    if ng_list.is_email(raw):
+        return bool(store.add_mail_ng(raw, reason, company) or store.is_ng([raw]))
     host = ng_list.domain(raw)
     if not host or "." not in host or host in ng_list.TOO_WIDE:
         return bool(store.is_ng([raw]))
@@ -309,11 +312,19 @@ def ng_row_hidden(row, store=None):
 
 def ng_add_screen(hp, form, name, store=None):
     if store is None:
-        return (hp.startswith("http") and ng_list.add(hp, NGMARK, name)) or (form.startswith("http") and ng_list.add_form(form, NGMARK, name))
+        ok = (hp.startswith("http") and ng_list.add(hp, NGMARK, name)) or (form.startswith("http") and ng_list.add_form(form, NGMARK, name))
+        if ng_list.is_email(form):
+            ok = bool(ng_list.add_mail(form, NGMARK, name)) or ok or ng_list.is_ng_email(form)
+        return ok
     try:
+        ok = False
         if hp.startswith("http") and store.add_screen_domain_ng(hp, name):
-            return True
+            ok = True
         if form.startswith("http") and store.add_screen_form_ng(form, name):
+            ok = True
+        if ng_list.is_email(form) and store.add_screen_mail_ng(form, name):
+            ok = True  # 連絡先がメールアドレスの会社は、ドメインと合わせてアドレスでも止める(手動で送った会社を両経路で除外する)
+        if ok:
             return True
         return (hp and store.is_ng([hp])) or (form and store.is_ng([form]))
     except Exception:
@@ -324,6 +335,23 @@ def ng_undo_screen(line, store=None):
     if store is None:
         return ng_list.remove_line(line)
     return store.undo_screen_ng_line(line) == "ok"
+
+
+PORTALS_FILE = OUT / "ポータル登録.json"
+
+
+def load_portals():
+    """業種ポータルの登録(名前とURLの一覧)。ファイルが壊れていたら空として扱う(検索自体は止めない)"""
+    try:
+        data = json.loads(PORTALS_FILE.read_text(encoding="utf-8-sig"))
+        return [x for x in data if isinstance(x, dict) and str(x.get("url", "")).strip()]
+    except Exception:
+        return []
+
+
+def save_portals(items):
+    OUT.mkdir(exist_ok=True)
+    PORTALS_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def digest(p, supp, mx, store=None):
@@ -488,6 +516,8 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, rows)
         if u.path == "/api/ngscreen":
             return self.send(200, ng_screen(ng_store))
+        if u.path == "/api/portals":
+            return self.send(200, load_portals())
         if u.path == "/api/openings":
             f = safe_out(parse_qs(u.query).get("file", [""])[0])
             if not f or not str(f).endswith(".csv"):
@@ -536,6 +566,7 @@ class H(BaseHTTPRequestHandler):
             lim = count(d.get("limit"), 200, 1, 1000)
             mx = count(d.get("max"), 20, 1, 300)
             par = count(d.get("parallel"), 3, 1, 5)
+            flim = count(d.get("fetch_limit"), 0, 0, 100000)  # 検索する数の上限。0・空欄は未指定(formlist側の固定の既定値で止まる)
         except Exception:
             return self.send(400, {"error": "入力の形が正しくありません（数は1以上の整数で入れてください）"})
         if self.path in ("/api/message", "/api/sender", "/api/ng", "/api/ng/undo", "/api/openings") and JOB["running"] and JOB["name"] in ("本番送信", "確認"):
@@ -543,6 +574,8 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/api/search":
             sync_ng_txt(ng_store)
             args = ["formlist.py", "--limit", str(lim), "--parallel", str(par)]
+            if flim:
+                args += ["--fetch-limit", str(flim)]
             if ng_store is not None:
                 args += ["--ng-state-db", str(ng_store.db_path)]
             if d.get("resume_checks"):
@@ -551,8 +584,9 @@ class H(BaseHTTPRequestHandler):
                 args.append("--official-research")
             if d.get("include_large") is False:  # 既定は含める。画面で「大手・チェーンも含める」を外したときだけ外す
                 args.append("--exclude-large")
-            if d.get("portal"):
-                args += ["--portal", d["portal"]]
+            for purl in dict.fromkeys([str(d.get("portal") or "").strip()] + [str(x).strip() for x in (d.get("portals") or [])]):
+                if purl:
+                    args += ["--portal", purl]
             else:
                 kws = [k for k in re.split(r"[\s、,，]+", d.get("keywords", "")) if k]
                 if not d.get("area") or not (d.get("industries") or kws):
@@ -632,6 +666,19 @@ class H(BaseHTTPRequestHandler):
             self.send(200, {"ok": True})
             threading.Timer(0.5, lambda: os._exit(0)).start()
             return
+        if self.path == "/api/portals":
+            items = load_portals()
+            url = str(d.get("url", "")).strip()
+            if d.get("delete"):
+                save_portals([x for x in items if x.get("url") != url])
+                return self.send(200, {"ok": True, "portals": load_portals()})
+            name = str(d.get("name", "")).strip()[:40]
+            if not re.match(r"(?i)https?://", url) or "." not in url:
+                return self.send(400, {"error": "ポータルのURLが読み取れません(https:// で始まるアドレスを入れてください)"})
+            if not any(x.get("url") == url for x in items):
+                items.append({"name": name or url, "url": url})
+                save_portals(items)
+            return self.send(200, {"ok": True, "portals": items})
         if self.path == "/api/ng/undo":
             line = str(d.get("line", "")).strip()
             if ng_store is None:
@@ -645,7 +692,7 @@ class H(BaseHTTPRequestHandler):
             hp, form = str(d.get("hp", "")).strip(), str(d.get("form", "")).strip()
             name = str(d.get("name", ""))[:40]
             ok = ng_add_screen(hp, form, name, ng_store)
-            if ok or (ng_store is None and ((hp and ng_list.is_ng(hp)) or (form and ng_list.is_ng_form(form)))):
+            if ok or (ng_store is None and ((hp and ng_list.is_ng(hp)) or (form and ng_list.is_ng_form(form)) or (form and ng_list.is_ng_email(form)))):
                 return self.send(200, {"ok": True})
             return self.send(400, {"error": "この会社は送らないリストに入れられませんでした（ホームページの情報が足りません）"})
         if self.path == "/api/sender":

@@ -216,7 +216,8 @@ def dedupe(rows):
 
 def apply_ng(rows, path):
     """NGリストのドメイン(サブドメイン含む)に一致する会社を除く。対照: NGに入れたドメインの行が消える"""
-    ng = {ng_list.domain(l.split("#")[0]) for l in Path(path).read_text(encoding="utf-8-sig").splitlines()} - {""}
+    items = [l.split("#")[0].strip() for l in Path(path).read_text(encoding="utf-8-sig").splitlines()]
+    ng = {ng_list.domain(x) for x in items if x and not ng_list.is_email(x) and not x.lower().startswith(ng_list.MAIL_PREFIX)} - {""}  # メールアドレスの行はドメインに化かさない(この段階では連絡先が分からない。当てるのは連絡先が判明した後の照合)
     keep = [r for r in rows if not ng_list.is_ng(r["url"], (ng, set()))]
     return keep, len(rows) - len(keep)
 
@@ -1023,6 +1024,7 @@ def summarize(fetched, checked, no_url, refused=0):
 
 
 from plan import PARALLEL_MAX  # noqa: E402  (Googleマップへの同時アクセスの上限。増やすほどブロックされやすい)
+DEFAULT_FETCH_LIMIT = 200  # 検索する数の上限の既定値(候補を集める全体の件数)。出力する数(--limit)とは連動させない(連動させると出力の指定に合わせて集める側も膨らんで終わらなくなるため)
 BLOCK_MINUTES = 30  # Googleに止められたら、この時間はどのサーバーも新しい地図の検索を始めない(暫定値。止められた時間の実測は無い)
 TRANSIENT_IN_A_ROW = 3  # 地図の結果が出ない失敗がこの回数続いたら、制限の可能性があるとして残りの検索を止める
 from plan import SECONDS_PER_CARD  # noqa: E402
@@ -1090,7 +1092,7 @@ def clear_stop():
 
 
 
-def prefetch_google(area, units, limit, workers, block_check=None, stop_check=None):
+def prefetch_google(area, units, limit, workers, block_check=None, stop_check=None, fetch_limit=None):
     """Googleマップの検索を、検索語(業種・キーワード)×町名の単位で並列に取る。戻りは {(単位の番号, 検索語, 町): 行の一覧 か 例外}。
     どれか1つがGoogleに止められたら、まだ始めていない検索は実行しない(ブロックされたときに叩き続けないため)。
     地図の結果が出ない失敗が TRANSIENT_IN_A_ROW 回続いたときも、制限の可能性として止める。
@@ -1116,6 +1118,9 @@ def prefetch_google(area, units, limit, workers, block_check=None, stop_check=No
     all_terms = {t for t, _s in jobs}
     term_hit, term_zero = {}, {}  # 検索語ごとの、1件でも引っかかった回数 / 続けて0件だった回数
     auto_stop = []  # 0件が続いて自動で止めた理由(1件だけ入る)
+    budget = max(fetch_limit, 1) if fetch_limit else DEFAULT_FETCH_LIMIT  # 検索する数の上限(候補を取得した行の数)。集める段階の停止条件はこれ1つだけ(出力上限 limit とは連動させない)。上限が無いと、検索語×町名の数だけ際限なく開き続ける(2026-10-28 実例: 50社の指定で120検索・約3,600件の読み取りが半日続いた)
+    fetched_total = [0]  # ここまでに取得した行の数
+    budget_stop = []  # 候補の上限に達して自動で止めた理由(1件だけ入る)
 
     def finish(job, n, note=""):
         """1検索が終わるたびに、どの検索が終わったか・何件目かを出す(同じ文言が並んで止まって見えないように)"""
@@ -1146,6 +1151,17 @@ def prefetch_google(area, units, limit, workers, block_check=None, stop_check=No
                 RUN_STATS["zero_terms_skipped"][term] += 1
             finish(job, 0, f"（「{term}」は{ZERO_TERM_IN_A_ROW}町続けて0件のため飛ばしました）")
             return job, []
+        with lock:
+            over_budget = fetched_total[0] >= budget
+            first_budget = over_budget and not budget_stop
+            if first_budget:
+                budget_stop.append(f"候補の取得が全体の上限（{budget}件）に達したため、残りの検索は自動で止めました。取れた分でリストを作ります")
+                RUN_STATS["auto_stopped_budget"] = budget_stop[0]
+        if over_budget:  # 候補はもう十分に集まっている。これ以上は開かない
+            if first_budget:
+                log(f"\n  {budget_stop[0]}")
+            finish(job, 0, "（候補の上限に達したため実行せず）")
+            return job, NotRun(budget_stop[0])
         time.sleep(random.uniform(0, 2))  # 同時に始めた検索が、同じ瞬間にGoogleへ集中しないようにずらす
         try:
             got = map_browser_source.fetch("google", sub, term, log, limit=limit)
@@ -1162,6 +1178,7 @@ def prefetch_google(area, units, limit, workers, block_check=None, stop_check=No
             return job, e  # この1検索だけの失敗。続いていなければ、ほかの町名・検索語は続ける
         with lock:
             streak[0] = 0
+            fetched_total[0] += len(got)
             if got:
                 term_hit[term] = term_hit.get(term, 0) + 1
                 term_zero[term] = 0
@@ -1184,7 +1201,8 @@ def prefetch_google(area, units, limit, workers, block_check=None, stop_check=No
         minutes = estimate_minutes(len(jobs), limit, workers)
         log(f"\n{len(jobs)}件の検索（検索語×町名）を、最大{workers}本ずつ並行して取得します。1検索で最大{limit}件の店を1件ずつ開くため、"
             f"地図だけでおよそ{minutes}分かかることがあります（店が少ない検索は早く終わります。このあとホームページの検索とフォームの確認が続きます）。"
-            f"1件ごとに「[終わった数/全体]」が出ます。0件が続くと自動で止まり、画面の「ここで止める」でいつでも止められます")
+            f"1件ごとに「[終わった数/全体]」が出ます。0件が続くと自動で止まり、画面の「ここで止める」でいつでも止められます。"
+            f"候補が全体で{budget}件（検索する数の上限）に達したら、残りの検索は始めずに次へ進みます")
         RUN_STATS["estimate_minutes"] = minutes
     with ThreadPoolExecutor(max_workers=workers) as ex:
         got = dict(ex.map(run, jobs))
@@ -1214,6 +1232,7 @@ def _main(budget=None):
     ap.add_argument("--industry", action="append")
     ap.add_argument("--keyword", action="append", help="Googleマップで探す言葉(何個でも)。Googleマップでは名前での絞り込みはしない(地図データ osm では名前に含むものだけ)")
     ap.add_argument("--limit", type=positive_int, default=200)
+    ap.add_argument("--fetch-limit", type=positive_int, default=None, help="検索する数の上限(候補を集める全体の件数)。未指定なら既定値200で止める")
     ap.add_argument("--parallel", type=int, default=3, help="Googleマップを同時に何本取るか(1〜5。既定3。増やすとブロックされやすい)")
     ap.add_argument("--source", action="append", choices=["osm", "google", "google_places_text"], help="地図の取得元(何個でも。既定google。Yahoo!マップは外した)")
     ap.add_argument("--input", help="CSV/TXT of company names or URLs")
@@ -1221,7 +1240,7 @@ def _main(budget=None):
     ap.add_argument("--overture-release", default="2026-09-23.1")
     ap.add_argument("--overture-license", default="CDLA-Permissive-2.0/Apache-2.0")
     ap.add_argument("--boundary-geojson", help="Optional ward boundary GeoJSON for strict point-in-polygon filtering")
-    ap.add_argument("--portal", help="ポータルサイト等のURL。掲載企業のHPを自動で集める")
+    ap.add_argument("--portal", action="append", help="ポータルサイト等のURL(複数指定可)。掲載企業のHPを自動で集める")
     ap.add_argument("--include-large", action="store_true", help="互換のために残している(既定で含める。何も変わらない)")
     ap.add_argument("--exclude-large", action="store_true", help="大手・チェーンと推定した会社を外す(既定は含める)")
     ap.add_argument("--ng", help="送らない会社のドメイン一覧(1行1件のTXT/CSV)。既存客・競合を入れる")
@@ -1240,12 +1259,28 @@ def _main(budget=None):
         return 1
 
     if a.portal:
-        try:
-            rows, label = portal_source.fetch(a.portal, a.limit, log), "ポータル_" + urlparse(a.portal).netloc
-        except RuntimeError as e:
-            log(f"止まりました: {e}")
-            write_run_summary("failed", area=a.portal, fetched=0, error=str(e)[:200])
+        cap = max(a.fetch_limit, 1) if getattr(a, "fetch_limit", 0) else DEFAULT_FETCH_LIMIT  # ポータルから集める候補の上限も「検索する数の上限」にそろえる(止まる条件はこれ1つ)
+        rows, labels, errors, seen_hosts = [], [], [], set()
+        for purl in a.portal:
+            if len(rows) >= cap:
+                break
+            try:
+                got = portal_source.fetch(purl, cap - len(rows), log)
+            except RuntimeError as e:
+                errors.append(f"{purl}: {e}")
+                log(f"ポータル {purl} は開けませんでした: {e}")
+                continue
+            for r in got:
+                h = urlparse(r.get("url", "")).netloc.lower()
+                if h and h not in seen_hosts:
+                    seen_hosts.add(h)
+                    rows.append(r)
+            labels.append(urlparse(purl).netloc)
+            log(f"ポータル {purl} から {len(got)} 件(累計 {len(rows)} 件)")
+        if not rows:
+            write_run_summary("failed", area=a.portal[0], fetched=0, error=(errors[0] if errors else "ポータルから1件も集まりませんでした")[:200])
             return 1
+        label = "ポータル_" + "+".join(labels)
     elif a.input or a.overture_file:
         rows = read_input_file(a.input) if a.input else []
         label = Path(a.input).stem if a.input else "overture"
@@ -1270,7 +1305,7 @@ def _main(budget=None):
         if until:
             blocked.add("google")
             log(f"\nGoogleマップは、同時に動いていた別の検索がGoogleに止められたため、{until[11:16]}ごろまで使いません。時間をおいて探し直してください")
-        pre = prefetch_google(area, units, a.limit, a.parallel, block_check=google_block_active, stop_check=stop_requested) if "google" in (a.source or ["google"]) and not until else {}
+        pre = prefetch_google(area, units, a.limit, a.parallel, block_check=google_block_active, stop_check=stop_requested, fetch_limit=a.fetch_limit) if "google" in (a.source or ["google"]) and not until else {}
         for ui, (ind, kw) in enumerate(units):
             log(f"\n{area} で " + (f"「{kw}」を探しています（Googleマップでは名前での絞り込みはしません。関係の薄い店も混ざります）..." if kw else f"{ind} を地図データから探しています..."))
             for src in a.source or ["google"]:

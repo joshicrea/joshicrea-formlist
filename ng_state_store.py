@@ -86,6 +86,34 @@ class NgStateStore:
                     pass
             raise
 
+    def _upgrade_ng_kind_check(self, c):
+        """ng_entries の kind の CHECK を旧2種から3種（mail 追加）へ広げる。既存のDBは
+        CREATE TABLE IF NOT EXISTS では変わらないため、定義を読み直して作り直す。
+        列の並びと値は PRAGMA table_info からそのまま写すので、既存の行は保たれる。
+        インデックスは呼び出し元の後の処理で作り直される。"""
+        row = c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='ng_entries'").fetchone()
+        sql = row[0] if row else ""
+        if not sql or "'mail'" in sql:
+            return
+        cols = c.execute("PRAGMA table_info(ng_entries)").fetchall()
+        defs = []
+        for _cid, name, typ, nn, dflt, pk in cols:
+            d = f'"{name}" {typ}'
+            if pk:
+                d += " PRIMARY KEY AUTOINCREMENT" if typ.upper() == "INTEGER" else " PRIMARY KEY"
+            if nn:
+                d += " NOT NULL"
+            if name == "kind":
+                d += " CHECK(kind IN ('domain', 'form', 'mail'))"
+            if dflt is not None:
+                d += f" DEFAULT {dflt}"
+            defs.append(d)
+        names = ", ".join(f'"{r[1]}"' for r in cols)
+        c.execute(f"CREATE TABLE ng_entries_new ({', '.join(defs)})")
+        c.execute(f"INSERT INTO ng_entries_new ({names}) SELECT {names} FROM ng_entries")
+        c.execute("DROP TABLE ng_entries")
+        c.execute("ALTER TABLE ng_entries_new RENAME TO ng_entries")
+
     def _ensure_schema_locked(self, c):
         c.execute(
             """CREATE TABLE IF NOT EXISTS sends (
@@ -102,7 +130,7 @@ class NgStateStore:
         c.execute(
             """CREATE TABLE IF NOT EXISTS ng_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                kind TEXT NOT NULL CHECK(kind IN ('domain', 'form')),
+                kind TEXT NOT NULL CHECK(kind IN ('domain', 'form', 'mail')),
                 value TEXT NOT NULL,
                 reason TEXT,
                 company TEXT,
@@ -114,6 +142,7 @@ class NgStateStore:
                 nonce TEXT DEFAULT ''
             )"""
         )
+        self._upgrade_ng_kind_check(c)
         cols = {r[1] for r in c.execute("PRAGMA table_info(ng_entries)")}
         for col in ("reason", "company", "display_line", "source"):
             if col not in cols:
@@ -365,7 +394,12 @@ class NgStateStore:
 
     def _parse_legacy_line(self, raw):
         item = raw.split("#")[0].strip()
-        if item.startswith("@"):
+        if item.lower().startswith(ng_list.MAIL_PREFIX):
+            kind = "mail"
+            value = ng_list.norm_email(item[len(ng_list.MAIL_PREFIX):])
+            if not ng_list.is_email(value):
+                raise ValueError("unparseable NG row")
+        elif item.startswith("@"):
             kind = "form"
             value = ng_list.norm_url(item[1:])
         else:
@@ -399,6 +433,8 @@ class NgStateStore:
         return "domain", value
 
     def add_domain_ng(self, url, reason="", company=""):
+        if ng_list.is_email(url):
+            return self.add_mail_ng(url, reason, company)
         kind, value = self._domain_or_shared(url)
         if not value:
             return None
@@ -410,7 +446,21 @@ class NgStateStore:
             return None
         return self._add_ng("form", value, reason, company)
 
+    def add_mail_ng(self, email, reason="", company=""):
+        value = ng_list.norm_email(email)
+        if not ng_list.is_email(value):
+            return None
+        return self._add_ng("mail", value, reason, company)
+
+    def add_screen_mail_ng(self, email, company=""):
+        value = ng_list.norm_email(email)
+        if not ng_list.is_email(value):
+            return None
+        return self._add_ng("mail", value, SCREEN_REASON, company, source=SCREEN_SOURCE, nonce=secrets.token_urlsafe(16))
+
     def add_screen_domain_ng(self, url, company=""):
+        if ng_list.is_email(url):
+            return self.add_screen_mail_ng(url, company)
         kind, value = self._domain_or_shared(url)
         if not value:
             return None
@@ -523,7 +573,7 @@ class NgStateStore:
             c.close()
 
     def _screen_line(self, entry_id, kind, value, reason, company, generation, nonce):
-        head = ("@" if kind == "form" else "") + value
+        head = (("@" if kind == "form" else "mail:" if kind == "mail" else "")) + value
         comment = " ".join(x for x in (reason or SCREEN_REASON, company or "") if x)
         return f"{head}  # {comment}{SCREEN_TOKEN_MARK}{entry_id}:{generation}:{nonce}"
 
@@ -561,11 +611,11 @@ class NgStateStore:
 
     def is_ng(self, urls):
         keys = self._ng_lookup_keys(urls)
-        if not keys[0] and not keys[1]:
+        if not keys[0] and not keys[1] and not keys[2]:
             return False
         c = self._conn()
         try:
-            for kind, values in (("domain", keys[0]), ("form", keys[1])):
+            for kind, values in (("domain", keys[0]), ("form", keys[1]), ("mail", keys[2])):
                 for value in values:
                     if c.execute(
                         "SELECT 1 FROM ng_entries WHERE kind=? AND value=? AND active=1",
@@ -764,20 +814,21 @@ class NgStateStore:
         domains = {ng_list.domain(url) for url in urls if url}
         forms = {ng_list.norm_url(url) for url in urls if url}
         forms |= {ng_list.norm_url(re.sub(r"(?i)/index\.(html?|php)$", "/", url.split("?")[0].split("#")[0])) for url in urls if url}
-        return {d for d in domains if d}, {f for f in forms if f}
+        mails = {ng_list.norm_email(url) for url in urls if url and ng_list.is_email(url)}
+        return {d for d in domains if d}, {f for f in forms if f}, mails
 
     def _ng_lookup_keys(self, urls):
         """NGの照合用。親ドメインでも当てる(osaka.hotelx.co.jp は hotelx.co.jp のNGで止める)。テキスト版 ng_list._dom_hit と同じ規則"""
-        domains, forms = self._candidate_keys(urls)
+        domains, forms, mails = self._candidate_keys(urls)
         expanded = set(domains)
         for d in domains:
             labels = d.split(".")
             expanded.update(".".join(labels[i:]) for i in range(1, len(labels) - 1))
-        return expanded, forms
+        return expanded, forms, mails
 
     def _is_ng_locked(self, conn, urls):
-        domains, forms = self._ng_lookup_keys(urls)
-        for kind, values in (("domain", domains), ("form", forms)):
+        domains, forms, mails = self._ng_lookup_keys(urls)
+        for kind, values in (("domain", domains), ("form", forms), ("mail", mails)):
             for value in values:
                 if conn.execute(
                     "SELECT 1 FROM ng_entries WHERE kind=? AND value=? AND active=1",
