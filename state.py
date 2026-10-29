@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import sqlite3
+import sys
 import time
 import json
 from pathlib import Path
@@ -21,8 +22,10 @@ import ng_list
 
 
 def _default_db():
-    """OneDrive などの同期フォルダの外に置く(同期中の SQLite は壊れうる)。LOCALAPPDATA が使えなければ 出力/ に置く"""
+    """OneDrive などの同期フォルダの外に置く(同期中の SQLite は壊れうる)。Windows は LOCALAPPDATA、Mac は ~/Library/Application Support。使えなければ 出力/ に置く"""
     base = os.environ.get("LOCALAPPDATA")
+    if not base and sys.platform == "darwin":
+        base = str(Path.home() / "Library" / "Application Support")
     if base and Path(base).is_dir():
         return Path(base) / "FormListTool" / "送信状態.db"
     return Path(__file__).resolve().parent / "出力" / "送信状態.db"

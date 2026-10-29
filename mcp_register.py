@@ -15,6 +15,14 @@ SERVER = str(HERE / "mcp_server.py")
 ENTRY = {"command": sys.executable, "args": ["-X", "utf8", SERVER]}
 
 
+def default_appdata() -> str:
+    """Windows は APPDATA。Mac のデスクトップ版の設定は ~/Library/Application Support/Claude/ にあるので、その親を返す"""
+    env = os.environ.get("APPDATA", "")
+    if env or sys.platform != "darwin":
+        return env
+    return str(Path.home() / "Library" / "Application Support")
+
+
 def desktop_config(appdata: Path) -> Path:
     """通常のインストールは APPDATA 直下の Claude フォルダ。Microsoft Store 版は Packages 配下の Claude_* の LocalCache/Roaming/Claude に置かれるので、あればそちらを使う"""
     local = os.environ.get("LOCALAPPDATA", "")
@@ -84,7 +92,7 @@ def find_exe(name: str):
     hits = []
     for base in (".cursor", ".vscode", ".vscode-insiders", ".windsurf", ".vscode-oss"):
         hits += (home / base / "extensions").glob("anthropic.claude-code-*/resources/native-binary/claude*")
-    hits += [home / ".claude" / "local" / "claude.exe", home / ".claude" / "local" / "claude"]
+    hits += [home / ".claude" / "local" / "claude.exe", home / ".claude" / "local" / "claude", home / ".local" / "bin" / "claude"]  # 最後は Mac/Linux の標準の入れ場所(PATH に無いことがある)
     hits = [h for h in hits if h.is_file() and h.suffix in ("", ".exe")]
     return str(max(hits, key=lambda h: h.stat().st_mtime)) if hits else None
 
@@ -126,7 +134,7 @@ def remove_cli(name: str, dry: bool) -> str:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--appdata", default=os.environ.get("APPDATA", ""))
+    ap.add_argument("--appdata", default=default_appdata())
     ap.add_argument("--remove", action="store_true", help="登録を外す")
     a = ap.parse_args()
     if a.remove:

@@ -59,8 +59,20 @@ def build():
     return h.hexdigest()[:12]
 
 
+def _ssl_context():
+    """python.org 版の Python(Mac)は OS の証明書を持たず、https が CERTIFICATE_VERIFY_FAILED になる。requests の依存で入る certifi があればそれを使う。無ければ既定のまま"""
+    try:
+        import ssl
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return None
+
+
 def fetch(name, timeout=8):
-    with urllib.request.urlopen(base() + urllib.request.quote(name), timeout=timeout) as r:
+    url = base() + urllib.request.quote(name)
+    ctx = _ssl_context() if url.startswith("https:") else None
+    with urllib.request.urlopen(url, timeout=timeout, context=ctx) as r:
         st = getattr(r, "status", None)  # file: の応答には番号が無い(None)。https は 200 でなければ失敗
         if st not in (None, 200):
             raise RuntimeError(f"応答 {st}")
@@ -280,7 +292,7 @@ def start():
     env = dict(os.environ, FORMLIST_PORT=port, FORMLIST_NO_BROWSER="1", PYTHONIOENCODING="utf-8")
     log = open(os.path.join(here, "出力", "app_起動ログ.txt"), "ab")
     return subprocess.Popen([exe, "-X", "utf8", os.path.join(here, "app.py")], cwd=here, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), start_new_session=(os.name != "nt"))
 for _ in range(60):
     if not up():
         break
@@ -325,4 +337,5 @@ def relaunch(port, backup, exe=None, version=""):
         w = exe[:-len("python.exe")] + "pythonw.exe"
         exe = w if os.path.exists(w) else exe
     subprocess.Popen([exe, "-X", "utf8", "-c", _RELAUNCH, str(HERE), str(port), str(backup), exe, str(version)],
-                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW,
+                     start_new_session=(os.name != "nt"))  # Mac/Linux: 親(画面のサーバー)が終わっても、この小さなプログラムは生きて起動し直す

@@ -39,6 +39,10 @@ def legal_missing(sender):
     addr = (sender.get("住所") or "").strip()
     if not addr or re.sub(r"\s", "", addr) not in re.sub(r"\s", "", sig):  # 番地・建物名まで署名に入っていること(先頭だけでは通さない)
         miss.append("住所(送信元の住所を署名に入れてください)")
+    names = [n for n in ((sender.get(k) or "").strip() for k in ("会社名", "氏名")) if len(n) >= 2]
+    compact_sig = re.sub(r"\s", "", sig)
+    if not names or not any(re.sub(r"\s", "", n) in compact_sig for n in names):
+        miss.append("送信者の氏名・名称(送信元の会社名か氏名を設定し、署名に入れてください)")
     if not PHONE.search(sig):
         miss.append("電話番号")
     if not OPT_OUT.search(sig):

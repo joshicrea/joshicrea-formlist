@@ -291,7 +291,7 @@ async function loadFunnel(){
   box.hidden=false
  }catch(e){}
 }
-let timer,wasRun=false;
+let timer,wasRun=false,updWait=false;
 function paint(id,own){const j=JOB;$(id).textContent=own&&(j.lines.length||j.running)?(j.running?'【'+j.name+'を実行中】\n':'')+j.lines.join('\n'):'まだ何も動いていません';$(id).scrollTop=1e9}
 function status(){const j=JOB,mine=j.name=='探す',last=(j.lines.filter(l=>l.trim()).slice(-1)[0]||'');
  const f=(own)=>!own||!j.name?'まだ何も動いていません':j.running?`【${j.name}】実行中… ${last}`:j.code===0?`【${j.name}】終わりました。`:`【${j.name}】途中で止まりました。くわしい経過の最後の行を見てください。`;
@@ -299,7 +299,7 @@ function status(){const j=JOB,mine=j.name=='探す',last=(j.lines.filter(l=>l.tr
  $('#jobbar').classList.toggle('on',!!j.running);const canStop=!!j.running&&j.name=='探す';$('#stop').hidden=!canStop;$('#stop2').hidden=!canStop;if(j.running){$('#jobname').textContent='「'+j.name+'」を実行しています';$('#jobline').textContent=last}}
 async function poll(){clearInterval(timer);const t=async()=>{const j=await J('/api/job');if(j.error)return;JOB=j;const mine=j.name=='探す';paint('#log',mine);paint('#log2',!mine);status();banners();
  if(j.running)wasRun=true;
- if(!j.running){clearInterval(timer);const fin=wasRun&&mine&&j.code===0;
+ if(!j.running){clearInterval(timer);const fin=wasRun&&mine&&j.code===0;if(wasRun&&updWait){updWait=false;setTimeout(checkUpdate,500)}
   if(wasRun&&j.code!==0&&j.code!==null)alert('「'+j.name+'」が途中で止まりました。進み具合のくわしい経過に、理由が出ています');
   opts($('#files'),j.files,fin?j.files[0]:$('#files').value);opts($('#sfile'),j.files,fin?j.files[0]:$('#sfile').value);META.files=j.files;
   if(wasRun&&j.name=='確認'&&j.code===0){STATE.prevOk=true;STATE.pkey='';STATE.pkey=curKey();loadTargets()}
@@ -348,7 +348,7 @@ async function checkUpdate(){
   const r=await J('/api/update');
   if(!r||r.error||(r.state!=='古い'&&!r.restart_needed))return;
   const box=$('#upd');box.hidden=false;
-  if(r.busy){box.textContent='新しい版があります。探す・送る処理が終わってから、この画面を読み込み直すと、自動で更新されます';return}
+  if(r.busy){updWait=true;box.textContent='新しい版があります。探す・送る処理が終わると、自動で更新されます';return}
   box.textContent='新しい版に更新しています（数秒かかります）。終わると、この画面が自動で読み込み直されます';
   const old=r.build;const u=await post('/api/update',{});
   if(u.error){box.textContent='更新できませんでした（前の版のまま使えます）: '+u.error;return}

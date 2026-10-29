@@ -26,8 +26,10 @@ import random
 import re
 import sys
 import time
+import unicodedata
 from collections import Counter
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 import message_adoption
@@ -219,6 +221,118 @@ def _target_skip_reason(row, include_supplemented=False, gate=None, done=None):
     if done is not None and key in done:
         return "送信済みまたは同一回の重複フォームURL"
     return ""
+
+
+_FREE_MAIL = re.compile(r"@(?:gmail\.com|yahoo\.co\.jp|yahoo\.com|outlook\.\w+|hotmail\.\w+|icloud\.com|docomo\.ne\.jp|ezweb\.ne\.jp|softbank\.ne\.jp|au\.com|nifty\.com|live\.jp)$", re.I)
+
+
+def _mail_of(row):
+    """メールのみの行の宛先。列「メールアドレス」を優先し、無ければ連絡先の列(フォームURL無ければメール)がアドレスの形のときそれを使う。
+    推測では作らない(HPに出ていたものだけ)。全角・mailto:・前後の空白をそろえる。複数並んでいるものはそのまま返す(形が不正として落ちる)"""
+    m = (row.get(formlist.EXTRA_COLS[3]) or "").strip()
+    if not m:
+        m = _form_value(row).strip()
+        if "@" not in m or m.lower().startswith("http"):
+            return ""
+    m = unicodedata.normalize("NFKC", m).strip()
+    return m[len("mailto:"):].strip() if m.lower().startswith("mailto:") else m
+
+
+def row_channel(row):
+    """連絡のチャネル。フォームあり=フォーム、フォームが無く公開アドレスがある(メールのみ)=メール、どちらでもなければ なし"""
+    verdict = (row.get(formlist.EXTRA_COLS[0]) or "").strip()
+    if verdict == next(iter(formlist.ORDER)):
+        return "フォーム"
+    if verdict == "メールのみ" and _mail_of(row):
+        return "メール"
+    return "なし"
+
+
+def _mail_root(mail):
+    return site_checker._root(mail.rsplit("@", 1)[-1])
+
+
+def _hp_root(row):
+    host = urlparse(row.get("HP URL") or "").netloc
+    return site_checker._root(host) if host else ""
+
+
+def _mail_is_ng(row, mail, gate):
+    """HPとアドレスの両方を見る。アドレスのドメインがNGドメインでも止める(gateの有無で結果を変えない)"""
+    if gate is not None:
+        return gate.is_ng([row.get("HP URL") or "", mail])
+    return ng_list.is_ng_row(row) or ng_list.is_ng_email(mail) or ng_list.is_ng("https://" + mail.rsplit("@", 1)[-1] + "/")
+
+
+def mail_skip_reason(row, include_supplemented=False, gate=None, done=None):
+    """メール対象にならない理由。空なら対象。条件は、HPの照合が電話一致か住所一致・営業お断りの表示なし・NGリスト外(HPとアドレスの両方)・
+    採用や個人情報の窓口ではない・HPに公開された自社のアドレス(フリーメール以外はHPと同じドメイン)・同じ会社に重複して送らない。
+    done には、送ったアドレス(正規化)と、送った/送る会社の目印 "site:<HPの登録ドメイン>" を入れる"""
+    if row_channel(row) != "メール":
+        return "メールのみではない"
+    mail = _mail_of(row)
+    if not site_checker.EMAIL.fullmatch(mail):
+        return "メールアドレスの形が不正"
+    if site_checker.BAD_MAIL.search(mail):
+        return "採用・個人情報などの窓口のアドレス"
+    if row.get(formlist.EXTRA_COLS[1]):
+        return "営業お断り表示あり"
+    if (row.get("sales_permission") or "").startswith("営業不可"):
+        return "営業不可候補: " + row["sales_permission"][:60]
+    if _mail_is_ng(row, mail, gate):
+        return "NGリスト対象"
+    if "補完" in row.get("取得元", "") and not include_supplemented:
+        return "検索補完HPのため未承認"
+    hp_reason = _hp_verify_skip_reason(row)
+    if hp_reason:
+        return hp_reason
+    hp_root = _hp_root(row)
+    if hp_root and not _FREE_MAIL.search(mail) and hp_root != _mail_root(mail):
+        return "アドレスのドメインがHPと違う(制作会社・掲載先のアドレスの疑い)"
+    if done is not None:
+        if ng_list.norm_email(mail) in done:
+            return "送信済みまたは同一回の重複アドレス"
+        if hp_root and "site:" + hp_root in done:
+            return "同じ会社(HP)に、フォームかメールで送る・送った行がある"
+    return ""
+
+
+def _mail_scan(csv_path, include_supplemented=False, gate=None):
+    """メールのみの行を1回だけ走査し、(対象, 対象外) を返す(対象と内訳を別々に数えない)。
+    同じ会社へフォームとメールの両方が行かないよう、フォームで送る行・送信済みの行のHPを先に目印として入れる"""
+    with open(csv_path, encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.DictReader(f))
+    form_done = _done_keys(gate)
+    done = set()
+    for r in rows:
+        if row_channel(r) == "フォーム":
+            key = (state.keys_of([r.get(formlist.LEDGER_COLS[7], "")]) or [""])[0]
+            if (key in form_done or not _target_skip_reason(r, include_supplemented=include_supplemented, gate=gate, done=set())) and _hp_root(r):
+                done.add("site:" + _hp_root(r))
+    targets_, skips = [], []
+    for r in rows:
+        if (r.get(formlist.EXTRA_COLS[0]) or "").strip() != "メールのみ":
+            continue
+        mail = _mail_of(r)
+        reason = mail_skip_reason(r, include_supplemented=include_supplemented, gate=gate, done=done)
+        if reason:
+            skips.append((r.get("企業名", ""), mail, reason))
+            continue
+        done.add(ng_list.norm_email(mail))
+        if _hp_root(r):
+            done.add("site:" + _hp_root(r))
+        targets_.append((r.get("企業名", ""), mail, r.get("業種", ""), r.get("書き出し", ""), r.get("HP URL", "")))
+    return targets_, skips
+
+
+def mail_target_skip_reasons(csv_path, include_supplemented=False, gate=None):
+    """メールのみの行のうち、メール対象にならないものの (企業名, アドレス, 理由)。件数の内訳に使う"""
+    return _mail_scan(csv_path, include_supplemented, gate)[1]
+
+
+def mail_targets(csv_path, include_supplemented=False, gate=None):
+    """メール対象の (企業名, アドレス, 業種, 書き出し, HP URL)。リストの順。第2段のメール送信が使う(第1段では数えるだけで送らない)"""
+    return _mail_scan(csv_path, include_supplemented, gate)[0]
 
 
 def _done_keys(gate):

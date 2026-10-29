@@ -18,6 +18,7 @@ CAPTCHA-only pages, and refusal wording shown as an image.
 """
 import re
 import time
+import unicodedata
 import urllib.robotparser
 from urllib.parse import urljoin, urlparse
 
@@ -67,7 +68,7 @@ def is_not_company_site(url_or_host):
     u = str(url_or_host or "")
     host = urlparse(u if "//" in u else "//" + u).netloc.split(":")[0]
     return bool(host and SOCIAL.search(host))
-BAD_MAIL = re.compile(r"privacy|recruit|saiyo|jinji|\bir@|example|sentry|wixpress|@.*\.(png|jpg|gif|webp)$", re.I)
+BAD_MAIL = re.compile(r"privacy|recruit|saiyo|saiyou|jinji|kyujin|career|\bjobs?@|\bhr@|\bentry@|kojin|personal|\bdpo@|\bir@|example|sentry|wixpress|@.*\.(png|jpg|gif|webp)$", re.I)
 REFUSE = re.compile(
     r"(営業(?:目的|電話|メール|活動|行為|の?ご?連絡|の?お?問い?合わせ|のお?電話)|セールス|勧誘|売り?込み|提案目的|宣伝目的|広告目的|sales(?:inquir|call|email|solicit))[^。\n]{0,30}\n?[^。\n]{0,30}"
     r"(お断り|ご遠慮|遠慮願|お控えください|禁止|おやめ|不要です|受け?付け?(し)?て(い|お)りません|受け?付け?(いた)?しません|"
@@ -77,10 +78,25 @@ REFUSE = re.compile(
     r"|(お断り|ご遠慮)[^。\n]{0,15}(営業(?!時間|日|中|所|開始|終了)|勧誘|セールス|売り?込み)", re.I)
 
 
+_SALES2 = r"(?:営業(?!時間|日|中|所|開始|終了|部|窓口|担当|品目|案内図|エリア|区域|カレンダー|再開|時|地域)|セールス|sales(?:目的|メール|電話|のご連絡)|勧誘|売り?込み|広告宣伝|広告営業|宣伝(?:目的|メール|のご連絡|のお電話|行為|活動|のお問い?合わせ)|販売促進)"
+_REFUSAL2 = (r"(?:お断[りわ]|ご遠慮|遠慮願|お控え|禁止|禁じ|禁ず|おやめ|お止め|不要|拒否|謝絶|ご容赦|ご辞退|差し?控え|受付不可|不可|NG|無視|(?:ご利用|ご使用|送信)(?:は)?でき(?:ません|かねます)|送って(?:こ)?ないで|お送りにならないで|(?:いた|致)しかね|お受け(?:いた)?しかね|受け?付け?(?:いた)?(?:し)?て(?:い|お)りません|受け?付け?(?:いた)?しません|"
+             r"お受け(?:して)?(?:い|お)りません|お受けできません|受け付けできません|対応(?:いた|致)?しかね|対応して(?:い|お)りません|対応できません|"
+             r"返信(?:いた|致)?しかね|返答(?:いた|致)?しかね|回答(?:いた|致)?しかね|ご?返信(?:は)?(?:いた)?しません|ご?返答(?:いた)?しません|"
+             r"お答えできません|お答えいたしかね|お応えできません|応じかね)")
+# 営業の語 → 25字以内(文の途中で「。」が来たら切れる) → お断りの語。語順の決め打ちをしない。
+# 陰性対照(営業の語はあるがお断りではないので、当ててはいけない): 営業時間・営業日・営業所・営業部・営業担当の案内、提案書のご提出、広告掲載のご相談
+REFUSE2 = re.compile(_SALES2 + r"[^。\n]{0,30}\n?[^。\n]{0,15}" + _REFUSAL2 + r"|" + _REFUSAL2 + r"[^。\n]{0,15}" + _SALES2, re.I)
+# 英語。空白を除く前の文で見る(空白を除くと「casino sales」の中の「nosales」に当たってしまう)
+REFUSE_EN = re.compile(r"\bno\s+(?:sales|soliciting|solicitation)|\bnot\s+accept\s+(?:any\s+)?(?:sales|solicit)|\bsales\s+(?:inquir|solicit|call|email)\w*\s+(?:are\s+)?(?:not|prohibited)", re.I)
+
+
 def refuse_in(text):
     """お断り文言を探す。空白(スペース・タブ)は除くが改行は残し、別の行どうしをつないで誤検出しないようにする。
     陰性対照(お断りではないので検出してはいけない): 営業時間の案内・提案書のご提出・送信内容の控え・画像の無断転載禁止・広告掲載のご相談"""
-    return REFUSE.search(re.sub(r"[ \t\u3000]+", "", text))
+    norm = unicodedata.normalize("NFKC", text)  # 全角の英数字をそろえる
+    t = re.sub(r"[ \t\u3000]+", "", norm)
+    t = re.sub(r"\n{2,}", "\n", t)  # 要素の区切りで入る空行は改行1つに畳む(別の行をつなぎすぎない)
+    return REFUSE.search(t) or REFUSE2.search(t) or REFUSE_EN.search(norm)
 
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")

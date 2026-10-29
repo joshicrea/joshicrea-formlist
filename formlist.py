@@ -983,6 +983,12 @@ def summarize_sendable(csv_path, fetched, checked, no_url):
     form_ok = [r for r in verified if r.get(EXTRA_COLS[0]) == next(iter(ORDER))]
     dropped = sum(1 for r in no_url if r.get("discard"))
     c.update(verified=len(verified), form_ok=len(form_ok), dropped=dropped, outside=outside)
+    mail_skips = autosend.mail_target_skip_reasons(csv_path)
+    mail_only = sum(1 for r in csv_rows if r.get(EXTRA_COLS[0]) == "メールのみ")
+    mail_reasons = {}
+    for _n, _m, why in mail_skips:
+        mail_reasons[why.split(":")[0]] = mail_reasons.get(why.split(":")[0], 0) + 1
+    c.update(mail_only=mail_only, mail_sendable=mail_only - len(mail_skips), mail_reasons=mail_reasons)
     log("\n=== 件数の内訳(候補から自動送信の対象まで) ===")
     log(f"地図・リストの候補: {c['fetched'] + outside}件")
     if outside:
@@ -996,9 +1002,20 @@ def summarize_sendable(csv_path, fetched, checked, no_url):
     for reason, n in c["reasons"].items():
         key = reason.split(":")[0]
         grouped[key] = grouped.get(key, 0) + n
+    not_form = "フォーム判定がフォームありではない"
+    if not_form in grouped:  # メールのみの会社は、下の「メールのみの会社」で別に数える(フォームが無いというだけの一括りにしない)
+        grouped[not_form] -= c["mail_only"]
+        if grouped[not_form] <= 0:
+            del grouped[not_form]
     for reason, n in sorted(grouped.items(), key=lambda kv: -kv[1]):
-        log(f"    自動送信の対象にならない({reason}): {n}件")
+        label = "フォームもメールのみでもない" if reason == not_form else reason
+        log(f"    自動送信の対象にならない({label}): {n}件")
     log(f"  自動送信の対象: {c['sendable']}件（調べた{c['checked']}件中）")
+    log(f"  メールのみの会社: {c['mail_only']}件 → メール対象 {c['mail_sendable']}件 / 対象外 {c['mail_only'] - c['mail_sendable']}件")
+    for reason, n in sorted(c["mail_reasons"].items(), key=lambda kv: -kv[1]):
+        log(f"    メール対象にならない({reason}): {n}件")
+    if c["mail_only"]:
+        log("  ※メールの送信機能はまだありません(第2段で追加)。いまは、メール対象の件数を確かめるだけで、自動では送りません")
     line_only = [r for r in csv_rows if r.get("LINE公式") and r.get(EXTRA_COLS[0]) != next(iter(ORDER))]
     c["line_only"] = len(line_only)
     log(f"  フォームが無くLINE公式がある会社: {c['line_only']}件（自動では送らない。列「LINE公式」のURLを開き、友だち追加して手で送る）")
