@@ -18,6 +18,7 @@ import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+DEV_MARK = HERE / "開発版_自動更新しない.txt"  # 開発用の作業フォルダの目印。公開物には含めない。あると、公開版で手元の変更を上書きしない(2026-10-29: 自動更新が未公開の変更を上書きした)
 BASE = "https://raw.githubusercontent.com/joshicrea/joshicrea-formlist/master/"
 UPDATABLE = {".py", ".html", ".md"}
 NO_UPDATE = {"sender.json", "message_adoptions.json", "sender.sample.json"}  # 本人の設定。万一 manifest に載っても触らない
@@ -133,6 +134,8 @@ def skipped_version():
 
 
 def check():
+    if DEV_MARK.exists():
+        return {"state": "開発版", "files": [], "message": "開発用の作業フォルダのため、自動では更新しません"}
     m = fetch_manifest()
     if m is None:
         return {"state": "未確認", "files": [], "message": "公開されている最新の版と照合できませんでした(通信できない・社内ネットワークで止められた等)。最新かどうかは分かりません。ツールはこのまま使えます"}
@@ -214,6 +217,8 @@ def apply(log=None):
 
 
 def _apply(log):
+    if DEV_MARK.exists():
+        raise ValueError("開発用の作業フォルダのため、更新しません(手元の変更が公開版で上書きされるのを防ぐ目印があります)")
     m = fetch_manifest()
     if m is None:
         raise ValueError("公開されている最新の版の一覧(manifest.json)を取得できませんでした。通信を確かめてください")
