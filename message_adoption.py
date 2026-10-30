@@ -12,7 +12,10 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
 
 def records():
-    return json.loads((HERE / 'message_adoptions.json').read_text(encoding='utf-8'))
+    path = HERE / 'message_adoptions.json'
+    if not path.exists():  # 公開版には無い(採用記録は開発側だけが持つ)。無い=採用済みの会社は0社
+        return {'cases': []}
+    return json.loads(path.read_text(encoding='utf-8'))
 
 def case_for(name, url):
     cases = records()['cases']

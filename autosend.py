@@ -22,6 +22,7 @@ import csv
 import datetime as dt
 import hashlib
 import json
+import os
 import random
 import re
 import sys
@@ -33,6 +34,7 @@ from urllib.parse import urlparse
 
 
 import message_adoption
+import placeholders
 import proposal_links
 import send_rules
 
@@ -51,6 +53,7 @@ if not _PURE_MESSAGE_CHECK:
     import ng_list
     import formlist
     from ng_state_store import NgStateStore
+    import sales_records
 
 HERE = Path(__file__).resolve().parent
 LOG = HERE / "出力" / "送信ログ.csv"
@@ -75,8 +78,9 @@ DONE = re.compile(r"送信(が)?完了|送信しました|受け付けました|
 CONSENT = re.compile(r"同意|承諾|プライバシー|個人情報|privacy|agree", re.I)
 
 
-def pick_message(path, industry):
-    """--message がフォルダなら 業種名.txt を優先し、無ければ default.txt。ファイルならそれを使う"""
+def pick_message_source(path, industry):
+    """(どの文面か, 本文)。どの文面か は「標準」か、業種ごとの文面の業種名(ファイルを1つ指定したときは「指定の文面」)。
+    --message がフォルダなら 業種名.txt を優先し、無ければ割り当てた業種別パターン、それも無ければ default.txt"""
     p = Path(path)
     if p.is_dir():
         # 業種は、書かれたとおりの名前 → 新しい分類の名前(古い名前で作ったリストも、新しい分類の文面を使う) の順に探す
@@ -86,9 +90,19 @@ def pick_message(path, industry):
             # CSVの業種は外部由来。「../」や絶対パスで文面フォルダの外を読ませない(区切り文字を含むか、解決後に直下でなければ default.txt)
             safe = name and not re.search(r'[\\/:*?"<>|]|\.\.', name) and f.resolve().parent == p.resolve()
             if safe and f.exists():
-                return f.read_text(encoding="utf-8-sig")
-        return (p / "default.txt").read_text(encoding="utf-8-sig")
-    return p.read_text(encoding="utf-8-sig")
+                return name, f.read_text(encoding="utf-8-sig")
+        import patterns  # 専用の業種文面が無ければ、割り当てた業種別パターン。割り当てが無い業種は標準へ(人が送信前に確認する)
+        for name in dict.fromkeys([industry, industries.canonical(industry) if industry else industry]):
+            text = patterns.text_for_industry(name) if name else None
+            if text:
+                return name, text
+        return "標準", (p / "default.txt").read_text(encoding="utf-8-sig")
+    return "指定の文面", p.read_text(encoding="utf-8-sig")
+
+
+def pick_message(path, industry):
+    """--message がフォルダなら 業種名.txt を優先し、無ければ default.txt。ファイルならそれを使う"""
+    return pick_message_source(path, industry)[1]
 
 
 class EmptyOpenerError(ValueError):
@@ -129,6 +143,163 @@ def plan_digest(todo, bodies, sender):
     """送る会社・各社の全文・送信元(フォームに入れる値を全部含む)の照合番号。確認(--preview)と本番(--send --expect)で同じ関数を使う"""
     rows = [(t[0], t[1], b, message_adoption.effective_sender(t[0], t[1], sender)) for t, b in zip(todo, bodies)]
     return hashlib.sha256(json.dumps({"rows": rows, "sender": sender, "adoptions": message_adoption.record_digest()}, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+CONTACT = re.compile(r"@|\d{2,4}-\d{2,4}-\d{3,4}")  # 最終の本文に送信者の連絡先(メールか電話)があるか
+
+
+def subject_for(name, url, sender):
+    """その会社に実際に入れる件名(採用記録の送信元を反映し、{企業名}を置き換えたもの)"""
+    return message_adoption.effective_sender(name, url, sender).get("件名", "").replace("{企業名}", name)
+
+
+MASK = "〇"  # 仮の文字の検査で、相手の会社名・書き出しの部分の代わりに置く1文字(括弧ではないので、それ自体は止まらない)
+
+
+def _masked(text, *parts):
+    """text の中の parts(相手の会社名・書き出し)を MASK に置き換える。長いものから置き換える(書き出しの中の会社名を先に崩さない)"""
+    for p in sorted({(p or "").strip() for p in parts} - {""}, key=len, reverse=True):
+        text = text.replace(p, MASK)
+    return text
+
+
+def body_leftovers(body, name, opener, words=None, headings=None):
+    """全文に残った仮の文字。ただし相手の会社名と書き出し(ホームページの題から作る)の部分は見ない。
+    「【公式】ホテル…」のような題・会社名は相手の側の文字で、文面の仮の文字ではないため(勝利条件 D7: 事実と違う理由で外さない)。
+    陽性対照: 書き出しに【公式】があり、文面にも【拠点エリア】が残る → 【拠点エリア】で止まる。
+    誤爆の対照: 書き出し「ホームページの「【公式】ホテルhotel」を拝見しました」・会社名「【公式】hotel」だけ → 止まらない。
+    原理的に取りこぼす型: 会社名か書き出しの文字列と一字一句同じ仮の文字が文面にある場合(例: 会社名が「【屋号】」の行)。
+    その部分も会社名として見ないため。会社名を括弧で囲む文面「【{企業名}】」は MASK を囲む【〇】として止まる"""
+    return placeholders.leftovers(_masked(body, name, opener), words, headings=headings)
+
+
+def subject_leftovers(name, url, sender, words=None):
+    """件名に残った仮の文字。{企業名} に入る相手の会社名の部分は見ない(会社名の【公式】で「件名が置き換わらない」と言わない)"""
+    template = message_adoption.effective_sender(name, url, sender).get("件名", "")
+    return placeholders.leftovers(template.replace("{企業名}", MASK), words, allow_heading=False)
+
+
+SKIP_TEXT = (  # target_skip_reasons の理由 → (reason_code, 利用者向けの文)。上から先に当たったもの
+    ("送信済み", "sent", "このフォームには、すでに送ったか、リストの別の会社と同じフォームです(同じフォームへは1回だけ送ります)"),
+    ("営業お断り", "refuse", "ホームページに営業お断りの表示があるため、送りません"),
+    ("NGリスト", "ng", "送らない会社に入っているため、送りません"),
+    ("検索補完", "hp_supplemented", "ホームページを検索で補った会社のため、自動では送りません(別の会社のページの恐れがあるため)"),
+    ("HPの照合", "hp_verify", "ホームページがこの会社のものか(電話番号か住所の一致で)確かめきれていないため、自動では送りません"),
+    ("http", "form_url", "問い合わせフォームのアドレスが正しい形ではないため、送りません"),
+)
+
+
+def _skip_item(why):
+    """target_skip_reasons の理由を、画面の skipped の形にする。フォームなしの行(フォーム判定がフォームありではない)は、送る対象の候補ではないので None。
+    送らない会社(NGリスト)も None: 利用者が自分で「送らない」に入れた会社で、結果の一覧からも外れる。既存の試験
+    (test_app_offline.test_api_targets_and_send_preview_use_official_research_output_with_isolated_state の skipped == [])がこの扱いを固定している"""
+    if why.startswith("フォーム判定") or "NGリスト" in why:
+        return None
+    for head, code, text in SKIP_TEXT:
+        if head in why:
+            return {"reason_code": code, "text": text, "fix": "none"}
+    return {"reason_code": "other", "text": "自動では送らない会社です: " + why[:60], "fix": "none"}
+
+
+def build_plan(csv_path, include_supplemented, gate, max_count, message_path, sender, apply_rules=True, explain=False, apply_daily=True):
+    """送る会社と各社の全文を決める、ただ1つの関数。確認(画面の「送る内容を出す」・--preview)と本番(--send)は、必ずこれを通す。
+    順序: 送る候補(targets: 送らない会社・送信済み・重複を外す) → 同じ会社への間隔(company_refusal) → きょうの残り(1日の上限) →
+          max_count で切る → 文面を作る(prepare_message_plan) → 件名と本文の検査(placeholders.leftovers・連絡先) → 確認番号。
+    apply_rules=False は試走だけ(間隔ときょうの残りを掛けない。以前の main と同じ)。explain=True のときだけ、送信済み・重複で外した会社も skipped に入れる(画面の表示用。確認番号は変わらない)。
+    返す形: {"todo": [(会社名, フォームURL, 業種, 書き出し, HP)], "bodies": [全文], "subjects": [件名], "labels": [どの文面か],
+             (labels は explain=True のときだけ埋まる)
+             "skipped": [{"name", "url", "reason_code", "text", "fix": "sender"|"message"|"none"}], "digest": 確認番号(送る会社が0なら None),
+             "left_today": きょうの残り(apply_rules=False なら None), "over_limit": きょうの残りと max_count で外れた社数, "stop": 1社も送れない理由(無ければ "")}
+    reason_code: "sent"(送信済み・重複) "company"(同じ会社の間隔) "opener"(書き出しが空) "adoption"(採用記録との不一致) "subject"(件名の仮の文字) "message"(文面の仮の文字) "sender_url"(資料URLが空) "contact"(本文に連絡先が無い)
+    陽性対照(test_send_flow_offline): 14日以内に送った会社・2回送った会社・送信済み・見本の語の残った文面・件名の記号 → skipped に理由つきで出て todo に無い。
+    誤爆の対照: 見出し1行の【企業・団体向け提案書】だけの文面は todo に入る。
+    原理的に取りこぼす型: 送信ログに無い送信(別のパソコン・手で送って記録しなかった分)。会社名の大きな表記違い(send_rules の守備範囲と同じ)
+    件名・全文の仮の文字の検査は、相手の会社名と書き出しの部分を見ない(subject_leftovers・body_leftovers。【公式】の題で文面のせいにしない)。
+    explain=True の skipped には、お断り・HPの照合が弱い・検索で補ったHP・フォームのアドレスの形で外した会社も理由つきで入る(フォームなしの行と送らない会社(NG)は入れない)。
+    同じ会社(会社名の株式会社の有無・フォームかHPのドメインが同じ)がリストに2行以上あれば、2行目以降を "company" で外す(本番の1社ごとの見直しと同じ数え方)。
+    apply_daily=False は、きょうの残りで切らない(確認番号の不一致の理由を調べるときだけ使う)"""
+    skipped = []
+    if explain:
+        for n, u, why in target_skip_reasons(csv_path, include_supplemented, gate=gate):
+            item = _skip_item(why)
+            if item:
+                skipped.append(dict(item, name=n, url=u))
+    todo = targets(csv_path, include_supplemented, gate=gate) if gate is not None else targets(csv_path, include_supplemented)
+    left = None
+    over = 0
+    if apply_rules:  # 同じ会社へ送りすぎない(09 送信ルール2)。確認と本番で同じ絞り方にする(確認番号を合わせるため)
+        kept, seen_names, seen_doms = [], set(), set()
+        for row in todo:
+            why = send_rules.company_refusal(LOG, row[0], row[1], row[4])
+            key = send_rules.company_key(row[0])
+            doms = {send_rules.form_domain(row[1]), send_rules.form_domain(row[4])} - {""}
+            if not why and ((key and key in seen_names) or doms & seen_doms):  # 本番では1社目を送ったあと、2社目は「同じ会社」で飛ばされる。確認でも同じに数える
+                why = "リストの中に同じ会社がもう1行あります(会社名かホームページが同じ)。同じ会社へは1回だけ送るので、先の行だけに送ります"
+            if why:
+                skipped.append({"name": row[0], "url": row[1], "reason_code": "company", "text": why, "fix": "none"})
+            else:
+                kept.append(row)
+                seen_names |= {key} - {""}
+                seen_doms |= doms
+        todo = kept
+        if apply_daily:
+            left = send_rules.DAILY_LIMIT - send_rules.pressed_today(LOG)
+            if left <= 0:
+                return {"todo": [], "bodies": [], "subjects": [], "labels": [], "skipped": skipped, "digest": None, "left_today": 0, "over_limit": len(todo),
+                        "stop": f"きょうはもう{send_rules.DAILY_LIMIT}社に送りました(1日{send_rules.DAILY_LIMIT}社まで)。あした以降に送ります"}
+            over = max(0, len(todo) - left)
+            todo = todo[:left]
+    over += max(0, len(todo) - max_count)
+    todo = todo[:max_count]
+    todo, bodies, rejected = prepare_message_plan(todo, message_path, sender)
+    for name, url, reason in rejected:
+        code = "opener" if "書き出し" in reason else "adoption"
+        skipped.append({"name": name, "url": url, "reason_code": code, "text": "書き出しが空です" if code == "opener" else reason, "fix": "none"})
+    words = placeholders.sample_words()
+    headings = placeholders.heading_words(words=words)
+    keep_todo, keep_bodies, subjects, labels = [], [], [], []
+    for row, body in zip(todo, bodies):
+        name, url = row[0], row[1]
+        subject = subject_for(name, url, sender)
+        left_subject = subject_leftovers(name, url, sender, words)
+        left_body = body_leftovers(body, name, row[3], words, headings)
+        if left_subject:
+            item = {"reason_code": "subject", "text": f"件名の「{left_subject[0]['match']}」の部分が置き換わりません", "fix": "sender"}
+        elif any(w["match"] == "{資料URL}" for w in left_body) and not str(sender.get("資料URL") or "").strip():
+            item = {"reason_code": "sender_url", "text": "文面に資料のリンクがありますが、送信元の「資料URL」が空です", "fix": "sender"}
+        elif left_body:
+            w = left_body[0]
+            item = {"reason_code": "message", "text": (f"文面に見本の「{w['word']}」が残っています" if w["kind"] == "見本"
+                                                       else f"文面の「{w['match']}」の行が、見本の書き込み欄のままに見えます(業種ごとの文面の見出しではありません)。中身を書き入れるか、行を消してください" if w["kind"] == "見出しでない1行"
+                                                       else f"文面に置き換わらない「{w['match']}」が残っています"), "fix": "message"}
+        elif not CONTACT.search(body):
+            item = {"reason_code": "contact", "text": "文面に送信者の連絡先(メールか電話)が入っていません", "fix": "sender"}
+        else:
+            keep_todo.append(row)
+            keep_bodies.append(body)
+            subjects.append(subject)
+            if explain:  # どの文面を使うか(画面の表示用)。本文は上の prepare_message_plan と同じ選び方で決まっている
+                labels.append("承認済みの文面" if message_adoption.case_for(name, url) else pick_message_source(message_path, row[2])[0])
+            continue
+        skipped.append(dict(item, name=name, url=url))
+    stop = "" if keep_todo else ("送れる会社がありません" if not skipped else "送れる会社がありません(理由は送らない会社の一覧)")
+    return {"todo": keep_todo, "bodies": keep_bodies, "subjects": subjects, "labels": labels, "skipped": skipped,
+            "digest": plan_digest(keep_todo, keep_bodies, sender) if keep_todo else None, "left_today": left, "over_limit": over, "stop": stop}
+
+
+def daily_cut_explains(csv_path, include_supplemented, gate, max_count, message_path, sender, expect, left_now):
+    """確認番号の不一致が「きょうの残りが減った」だけで説明できるか。止める文を原因に合わせて分けるためだけに使う(送るかどうかは変えない)。
+    きょうの残りで切らない送る内容を作り、先頭から k 社で切った確認番号に expect と同じものがあれば True。
+    陽性対照: 確認のあとに別の回で1社送り、残りが3→2社になった → True。誤爆の対照: 文面を変えた → False(どの k でも番号が合わない)。
+    原理的に取りこぼす型: 残りが減ったうえに中身も変わったとき(False=中身が変わった、の文になる)"""
+    if left_now is None:
+        return False
+    alt = build_plan(csv_path, include_supplemented, gate, max_count, message_path, sender, apply_daily=False)
+    todo, bodies = alt["todo"], alt["bodies"]
+    for k in range(1, len(todo) + 1):  # 送る内容の検査で外れた会社があるので、残りの数と k は一致しない。先頭からの全部の長さを試す
+        if plan_digest(todo[:k], bodies[:k], sender) == expect:
+            return True
+    return False
 
 
 class LogError(Exception):
@@ -413,6 +584,47 @@ def fit_length(el, value):
     return value.replace("-", "") if ml and 0 < ml < len(value) else value
 
 
+def _same_value(got, want, key):
+    """欄から読み戻した値が、入れた値と同じか。本文は改行コード(\\r\\n と \\n)だけを揃えて、一字一句で比べる。
+    本文以外の欄は全角半角(NFKC)と空白を揃えて比べ、電話・郵便番号は数字だけで比べる(サイトの自動整形で区切りが変わっても同じ値とみなす)。
+    フリガナはひらがなとカタカナの違いを見ない"""
+    if key == "本文":
+        return (got or "").replace("\r\n", "\n") == (want or "").replace("\r\n", "\n")
+
+    def norm(s):
+        s = re.sub(r"\s", "", unicodedata.normalize("NFKC", s or ""))
+        if key in ("電話", "郵便番号"):
+            s = re.sub(r"\D", "", s)
+        if key == "フリガナ":
+            s = "".join(chr(ord(c) + 0x60) if "ぁ" <= c <= "ゖ" else c for c in s)
+        return s
+    return norm(got) == norm(want)
+
+
+def _put(el, value, key):
+    """欄に値を入れ、入った値を読み戻して入れた値と同じかを確かめる。同じなら None、違えば利用者向けの理由。
+    入れる前に maxlength を見て、値がそれより長ければ入れずに止める(本文が切れて署名・配信停止の案内が落ちたまま送らないため)。
+    陽性対照(test_send_flow_offline): 本文欄 maxlength=120 に約240字の本文 → 理由が返り、送信ボタンは押されない。
+    誤爆の対照: maxlength の無い本文欄・十分な maxlength → None。電話欄が自動でハイフンを付けても None。
+    原理的に取りこぼす型: 入れた直後は全文が入っていて、送信ボタンを押したとき(サーバー側)に切られるもの。画面に見えない別の欄へ値を写すサイトの作り"""
+    want = value or ""
+    try:
+        ml = el.evaluate("e => e.maxLength")
+    except Exception:
+        ml = -1
+    js_len = len(want.replace("\r\n", "\n").encode("utf-16-le")) // 2  # ブラウザの maxlength は UTF-16 の長さで数える
+    if isinstance(ml, int) and 0 < ml < js_len:
+        return f"「{key}」の欄が{ml}文字までで、入れる{key}({js_len}文字)が入りきらない(入力欄の文字数の上限)"
+    el.fill(want)
+    try:
+        got = el.input_value()
+    except Exception:
+        return f"「{key}」の欄に入った値を読み戻せない"
+    if not _same_value(got, want, key):
+        return f"「{key}」の欄に入った値が、入れた値と違う(入力欄の文字数の上限などで入りきらなかった)"
+    return None
+
+
 SEI = re.compile(r"last|sei|family|姓|surname", re.I)
 MEI = re.compile(r"first|mei|given|(?<![姓氏])名(?!前)", re.I)
 ADDR_PART = re.compile(r"address|addr|住所|市区町村|番地|city|street", re.I)
@@ -432,19 +644,39 @@ def neutral_option(el):
     return hits[0] if len(hits) == 1 else None
 
 
-def fill_form(page, sender, message):
-    """戻り値: (成功, メモ)。埋められない必須項目があれば送らない"""
+def fill_form(page, sender, message, skipped=None):
+    """戻り値: (成功, メモ)。埋められない必須項目があれば送らない。
+    skipped にリストを渡すと、埋められない必須項目で止まらず、理由をそこへ集めて残りを入力する(手動経路用。送らない前提)"""
+    def _cannot(reason):
+        if skipped is None:
+            return False, reason
+        skipped.append(reason)
+        return None
+
     name_parts = [p for p in re.split(r"[ 　]+", sender.get("氏名", "").strip()) if p]
     kana_parts = [p for p in re.split(r"[ 　]+", sender.get("フリガナ", "").strip()) if p]
     pref, city, rest_addr = split_address(sender.get("住所", ""))
     n_addr = sum(1 for e in page.locator("input:visible[type=text], input:visible:not([type])").all() if ADDR_PART.search(own_attrs(e)))
     addr_seen = 0
     if CAPTCHA.search(page.content()):
-        return False, "captchaあり"
+        if skipped is None:
+            return False, "captchaあり"
+        skipped.append("captcha(手で解いてください)")  # 手動経路は、人が解く前提で入力を続ける
     scope, err = pick_form(page)
     if scope is None:
         return False, err
     filled = []
+
+    def put(el, value, key):
+        """入れて読み戻す。違えば、本番は押さずに止める理由を返し、手動経路は未入力の一覧へ足して続ける"""
+        why = _put(el, value, key)
+        if why and skipped is not None:  # 手動経路は人が直す前提。入るところまで入れておき(欄の上限で切れる)、切れたことを一覧に出す
+            try:
+                el.fill(value or "")
+            except Exception:
+                pass
+        return _cannot(why + "。送信ボタンは押さず、自分で送る会社へ回します" if skipped is None else why + "(手で直してください)") if why else None
+
     generic = []  # 欄の名前だけで割り当てた項目(同じ項目が2欄以上に入るなら、分割欄で誤入力の恐れ)
     for el in scope.locator("input:visible, textarea:visible, select:visible").all():
         tag = el.evaluate("e => e.tagName.toLowerCase()")
@@ -457,7 +689,9 @@ def fill_form(page, sender, message):
             if CONSENT.search(lab):
                 el.check()
             elif required:
-                return False, "必須のチェック項目: " + lab[:30]
+                r = _cannot("必須のチェック項目: " + lab[:30])
+                if r:
+                    return r
             continue
         if tag == "select" and pref and re.search(r"pref|都道府県", own_attrs(el) + lab, re.I):
             try:
@@ -469,16 +703,22 @@ def fill_form(page, sender, message):
         if typ in ("radio", "file") or tag == "select":
             if required and not (tag == "select" and el.input_value()):
                 pick = neutral_option(el) if tag == "select" else None  # 判断がつくものだけ自動で選ぶ。つかなければ要手動
+                r = None
                 if pick is None:
-                    return False, "必須の選択項目: " + lab[:30]
-                try:
-                    el.select_option(label=pick)
-                except Exception:
-                    return False, "必須の選択項目: " + lab[:30]
-                filled.append("選択:" + pick)
+                    r = _cannot("必須の選択項目: " + lab[:30])
+                else:
+                    try:
+                        el.select_option(label=pick)
+                        filled.append("選択:" + pick)
+                    except Exception:
+                        r = _cannot("必須の選択項目: " + lab[:30])
+                if r:
+                    return r
             continue
         if tag == "textarea":
-            el.fill(message)
+            r = put(el, message, "本文")  # 入った値を読み戻す。欄の文字数の上限で切れたまま(署名・配信停止の案内が落ちたまま)押さない
+            if r:
+                return r
             filled.append("本文")
             continue
         own = own_attrs(el)
@@ -488,30 +728,114 @@ def fill_form(page, sender, message):
             if parts is None:
                 pass
             elif SEI.search(own) and not MEI.search(own):
-                el.fill(parts[0]); filled.append("氏名" if not kana else "フリガナ"); continue
+                r = put(el, parts[0], "氏名" if not kana else "フリガナ")
+                if r:
+                    return r
+                filled.append("氏名" if not kana else "フリガナ"); continue
             elif MEI.search(own) and not SEI.search(own):
-                el.fill(parts[1]); filled.append("氏名" if not kana else "フリガナ"); continue
+                r = put(el, parts[1], "氏名" if not kana else "フリガナ")
+                if r:
+                    return r
+                filled.append("氏名" if not kana else "フリガナ"); continue
         if ADDR_PART.search(own) and pref:  # 住所が複数欄に分かれている形
             addr_seen += 1
             if n_addr >= 2:
                 val = city if addr_seen == 1 and city else rest_addr if city else sender["住所"]
-                el.fill(val); filled.append("住所"); continue
+                r = put(el, val, "住所")
+                if r:
+                    return r
+                filled.append("住所"); continue
         key = next((k for rx, k in FIELD_MAP if rx.search(lab)), None)
         if key and sender.get(key):
-            el.fill(fit_length(el, sender[key]) if key in ("郵便番号", "電話") else sender[key])
+            r = put(el, fit_length(el, sender[key]) if key in ("郵便番号", "電話") else sender[key], key)
+            if r:
+                return r
             filled.append(key)
             generic.append(key)
         elif typ == "email" and sender.get("メール"):
-            el.fill(sender["メール"])
+            r = put(el, sender["メール"], "メール")
+            if r:
+                return r
             filled.append("メール")
         elif required:
-            return False, "必須の未知項目: " + lab[:30]
+            r = _cannot("必須の未知項目: " + lab[:30])
+            if r:
+                return r
     dup = [k for k in ("氏名", "フリガナ", "電話", "郵便番号", "会社名", "住所") if generic.count(k) > 1]
     if dup:
         return False, "同じ種類の欄が複数あり判別できない: " + "・".join(dup)
     if "本文" not in filled:
         return False, "本文を入れられない"
-    return True, "入力: " + "・".join(dict.fromkeys(filled))
+    return True, "入力: " + "・".join(dict.fromkeys(filled)) + (("／未入力%d件: " % len(skipped) + "、".join(skipped)) if skipped else "")
+
+
+# 自動記入の対応表(正本)。フォームの項目 → sender.json のキー → 見分ける手がかり。fill_form はこの表のとおりに動く。
+# 表に無い必須項目は推測で埋めず、止める(本番)か、未入力として一覧に出す(手動経路)。
+COVERAGE = [
+    ("メール(確認用の再入力欄を含む)", "メール", "欄のラベルに メール/mail/確認、または type=email"),
+    ("フリガナ", "フリガナ", "ラベルに フリガナ/カナ。姓・名が別欄なら分けて入れる(読みが未設定なら入れない)"),
+    ("会社名・団体名", "会社名", "ラベルに 会社/企業/法人/団体/company"),
+    ("件名・題名", "件名", "ラベルに 件名/題名/subject"),
+    ("電話番号", "電話", "ラベルに 電話/tel。桁数の制限は欄の長さに合わせる"),
+    ("郵便番号", "郵便番号", "ラベルに 郵便/zip"),
+    ("住所(1欄・分割欄)", "住所", "ラベルに 住所/address。都道府県のプルダウンは選ぶ。複数欄に分かれていれば市区町村・番地に分ける"),
+    ("氏名(1欄・姓名の分割欄)", "氏名", "ラベルに 氏名/お名前/担当者名。姓・名が別欄なら分ける"),
+    ("本文(textarea)", "(送る文面)", "textarea に画面で確認した全文を入れる"),
+    ("同意チェック(個人情報・規約)", "(不要)", "ラベルに 同意/承諾/プライバシー のものだけチェックする"),
+    ("必須のプルダウン", "(中立の選択肢)", "「その他」「お問い合わせ」など判断のつく選択肢だけ選ぶ。つかなければ未入力として止める"),
+    ("上記以外の必須項目", "(なし)", "推測で埋めない。本番の送信は止め、手動経路では未入力として理由を出す"),
+]
+
+
+def coverage_text():
+    return "\n".join("%s ← %s(%s)" % row for row in COVERAGE)
+
+
+def prefill_manual(url, sender, message):
+    """手動経路: ブラウザを開いて入力できる項目を埋めるところまで。送信ボタンは押さない。画面を閉じるまで待つ。
+    戻り値: (入力メモ, 未入力の一覧)。実行環境: Windows / Mac / Linux(画面が出る環境)"""
+    skipped = []
+    with sync_playwright() as p:
+        br = p.chromium.launch(headless=False)
+        try:
+            page = br.new_context().new_page()
+            page.goto(url, timeout=30000)
+            ok, memo = fill_form(page, sender, message, skipped)
+            page.wait_for_event("close", timeout=0)  # 人が内容を確かめて、自分の手で送る。ここでは押さない
+        finally:
+            br.close()
+    return memo, skipped
+
+
+def manual_prefill_company(csv_path, sender_path, message_path, company_name):
+    """画面の「手で送る」。1社のフォームを開いて入力できる項目を埋め、送信ボタンは押さずに、画面を閉じるまで待つ。"""
+    sender = json.loads(Path(sender_path).read_text(encoding="utf-8-sig"))
+    with open(csv_path, encoding="utf-8-sig", newline="") as f:
+        rows = [r for r in csv.DictReader(f) if r.get("企業名") == company_name]
+    if len(rows) != 1:
+        print("指定した会社が1行に決まらないため、手動入力を始めません")
+        return 5
+    r = rows[0]
+    row = (r["企業名"], r.get("問い合わせフォームURL 無ければメール", ""), r.get("業種", ""), r.get("書き出し", ""), r.get("HP URL", ""))
+    if not re.match(r"https?://", row[1]):
+        print("この会社はフォームのURLがありません(メールのみ)。手動入力の対象外です")
+        return 5
+    ok_url, why_url = netguard.check_url(row[1])
+    if not ok_url:
+        print("宛先が公開サイトではないため開きません: " + why_url)
+        return 5
+    todo, bodies, rejected = prepare_message_plan([row], message_path, sender)
+    if rejected or len(todo) != 1:
+        print("本文を作れないため停止:", rejected)
+        return 5
+    eff = dict(sender, 件名=sender.get("件名", "").replace("{企業名}", row[0]))
+    print(f"手動入力: {row[0]} のフォームを開きます。入力できる項目だけ自動で埋めます。送信ボタンは押しません。")
+    memo, skipped = prefill_manual(row[1], eff, bodies[0])
+    print("入力のメモ: " + str(memo))
+    if skipped:
+        print("自動で入れられなかった必須項目(手で入れてください): " + "、".join(map(str, skipped)))
+    print("手動入力を終えました")
+    return 0
 
 
 NOT_INQUIRY_ATTR = re.compile(r"reserv|booking|review|survey|recruit|entry|newsletter|subscribe|予約|口コミ|クチコミ|アンケート|応募|エントリー|メルマガ", re.I)
@@ -747,9 +1071,12 @@ def send_one(page, name, url, sender, message, do_send, hp=""):
     refuse = site_checker.refuse_in(page.inner_text("body"))  # フォーム自体の「営業お断り」。入力より前に見る
     if refuse:
         return "お断り表示(送らない)", refuse.group(0)[:40]
+    kind, kind_why = site_checker.form_kind_result(site_checker.BeautifulSoup(page.content(), "html.parser"), page.url, page.title())  # 一覧作成と同じ判定を、いま開いているフォームにも掛ける
+    if kind in ("purpose", "unknown"):
+        return "要手動", ("用途限定のフォーム(営業の送り先にしない)" if kind == "purpose" else "フォームの用途を判定できない") + ": " + kind_why
+    if placeholders.leftovers(sender.get("件名", "").replace("{企業名}", MASK), allow_heading=False):  # 会社名(【公式】など)の部分は見ない
+        return "要手動", "件名に置き換わらない仮の文字が残っている"
     sender = dict(sender, 件名=sender.get("件名", "").replace("{企業名}", name))  # 件名にも会社名を差し込む
-    if re.search(r"[{｛][^}｝]{1,20}[}｝]|【", sender["件名"]):
-        return "要手動", "件名に差し込みの取り残しがある"
     ok, memo = fill_form(page, sender, message)
     SHOTS.mkdir(parents=True, exist_ok=True)
     shot = SHOTS / (time.strftime("%Y%m%d_%H%M%S_") + re.sub(r'[\\/:*?"<>|#\s]', "_", name)[:30] + ".png")
@@ -761,6 +1088,13 @@ def send_one(page, name, url, sender, message, do_send, hp=""):
     btn = find_submit(page)
     if btn is None:
         return "要手動", "送信ボタンが見つからない"
+    if FIRST_LOOK["pending"]:  # はじめての人の1社目: 入力と画面の保存のあと、押す前に人に見せる。この下の見直し(NG・送信済み・上限)は待ったあとに行う
+        FIRST_LOOK["pending"] = False
+        if not first_look_wait(name, shot, first_look_fields(sender, message)):
+            return sales_records.FIRST_LOOK_STOPPED, memo + "（1社目の入力した画面を見て止めたか、5分のあいだ選ばれなかったため、送信ボタンは押していない）"
+    late = send_rules.window_refusal()  # 1社目の確認を待つあいだ(最大5分)や、ページを開くあいだに送れる時間を過ぎていたら押さない
+    if late:
+        return "要手動", late + "(送れる時間を過ぎたため、送信ボタンは押していない。次の平日の時間内に送れます)"
     if _gate_is_ng(gate, [url, page.url, hp]):  # 長い送信の途中で追加されたNGも、押す直前に見る(会社のHPのドメインも)
         return _gate_ng_result()
     if set(state.keys_of([url, page.url])) & (sent_urls(results_only=True) | state.blocked_keys()):  # 画面版・コマンド版のどちらで押したものも、送信ログの結果行で止める
@@ -776,6 +1110,53 @@ def send_one(page, name, url, sender, message, do_send, hp=""):
 
 
 DAILY_FULL = "上限(送らない)"
+FIRST_LOOK_SECONDS = 300  # 1社目の確認を待つ長さ。長く待つとフォームの有効期限が切れるので5分で止める
+FIRST_LOOK = {"pending": False}  # main が --first-look(はじめての人の本番)のとき True。押す直前まで来た最初の1社だけで待ち、待ったら False
+
+
+def first_look_fields(sender, message):
+    """1社目の確認で見せる値。フォームに入れるために渡した値(画面から読み戻した値ではない)と、本文の先頭3行"""
+    rows = [{"label": k, "value": str(sender.get(k))} for k in ("会社名", "氏名", "フリガナ", "メール", "電話", "住所", "件名") if sender.get(k)]
+    return rows + [{"label": "本文(先頭3行)", "value": "\n".join((message or "").strip().split("\n")[:3])}]
+
+
+def first_look_wait(name, shot, fields, timeout=None, interval=2.0):
+    """はじめての人の1社目で、入力した画面を人に見せ、「このまま送る」が選ばれたときだけ True。
+    起動元の画面(app.py)に POST /api/firstlook/wait {company, shot(画像のファイル名), fields, deadline} を interval 秒ごとに送り、
+    応答 {"go": true} で True、{"go": false} で False、{"go": null} は待ち続ける。期限(既定 FIRST_LOOK_SECONDS)を過ぎたら False。
+    画面から起動していない(ポートの環境変数が無い)ときは、誰も答えられないので False(押さない)。
+    陽性対照(test_send_flow_offline): 答えない画面・「止める」と答える画面・画面なし → False で、送信ボタンは押されない。誤爆の対照: 「送る」と答える画面 → True。
+    原理的に取りこぼす型: 画面を操作できるAIや人が、中身を読まずに「このまま送る」を押すこと(承認ダイアログと同じ限界)
+    待ちの受付番号: 呼ばれるたびに新しい番号(wait)を作って送り、{"go": true} は応答の wait が同じときだけ受け付ける(前の待ち・別の会社への答えで押さない)。
+    期限を過ぎてから届いた {"go": true} は受け付けない(問い合わせの応答が遅れて期限をまたいだ場合)。
+    陽性対照: wait の無い/違う {"go": true} → 待ち続けて期限で False。期限1秒・応答の遅れ2.5秒の {"go": true} → False"""
+    import approval
+    import secrets
+    import urllib.request
+    port = os.environ.get(approval.PORT_ENV, "")
+    if not port.isdigit():
+        return False
+    deadline = time.time() + (FIRST_LOOK_SECONDS if timeout is None else timeout)
+    wait_id = secrets.token_hex(8)
+    payload = json.dumps({"company": name, "shot": Path(shot).name, "fields": fields, "deadline": int(deadline), "wait": wait_id}, ensure_ascii=False).encode("utf-8")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    while time.time() < deadline:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/firstlook/wait", data=payload, method="POST",
+                                     headers={"Content-Type": "application/json", "Host": f"127.0.0.1:{port}", "X-Token": os.environ.get(approval.UI_TOKEN_ENV, "")})
+        try:
+            with opener.open(req, timeout=max(0.5, min(10, deadline - time.time()))) as r:
+                ans = json.loads(r.read().decode("utf-8"))
+            go = ans.get("go")
+            if go is True and ans.get("wait") != wait_id:  # 今の待ちへの答えでない「送る」は数えない
+                go = None
+        except Exception:  # 画面が一時的に答えないときは、期限まで問い合わせ続ける(押さない側に倒れる)
+            go = None
+        if go is True:
+            return time.time() <= deadline  # 期限を過ぎてから届いた「送る」では押さない
+        if go is False:
+            return False
+        time.sleep(interval)
+    return False
 
 
 def _press(page, name, url, message, hp, gate, btn, memo, shot):
@@ -926,8 +1307,21 @@ def main():
     ap.add_argument("--expect", help="確認(--preview)が出した確認番号。本番で送る会社・全文・送信元が、これと違えば送らずに止める")
     ap.add_argument("--include-supplemented", action="store_true", help="検索で補ったHPの会社も対象にする(別会社の恐れあり)")
     ap.add_argument("--ng-state-db", help="Explicit isolated NG/state DB used by the UI handoff; omitted keeps the normal text NG/state defaults.")
+    ap.add_argument("--manual-company", help="画面の「手で送る」。この会社のフォームを開いて入力だけ自動で行う(送信ボタンは押さない)")
     ap.add_argument("--check-message-name", help="採用済み企業1社の本文検査のみ。NG/履歴/企業適格性は未検証。DB・ブラウザ・送信動作なし")
+    ap.add_argument("--first-look", action="store_true", help="はじめての人の本番。押す直前まで来た1社目だけ、入力した画面を画面(app.py)で見せ、「このまま送る」が選ばれるまで押さない(5分で止める)")
     a = ap.parse_args()
+    FIRST_LOOK["pending"] = False
+    if a.send:  # 画面を通らない直接実行でも、利用許可の確認を通す(本番送信だけ。試走・確認は止めない)
+        import license_check
+        ok, why = license_check.gate()
+        if not ok:
+            print(why)
+            return 7
+    if a.manual_company:
+        if a.send or a.preview:
+            ap.error("--manual-company は --send/--preview と併用できません")
+        return manual_prefill_company(a.csv, a.sender, a.message, a.manual_company)
     if a.check_message_name is not None:
         if not a.check_message_name.strip():
             ap.error("--check-message-name に企業名が必要です")
@@ -939,43 +1333,28 @@ def main():
         gate = NgStateStore(a.ng_state_db)
         set_send_gate(gate)
     sender = json.loads(Path(a.sender).read_text(encoding="utf-8-sig"))
-    miss = [k for k in ("会社名", "氏名", "メール", "署名") if not sender.get(k) or "【" in sender[k]]
-    if not re.search(r"@|\d{2,4}-\d{2,4}-\d{3,4}", sender.get("署名", "")):
-        miss.append("署名に連絡先(メールか電話)")
-    if miss:
-        print("sender.json に必要な項目がないか、見本のままです:", miss)
+    problems = send_rules.sender_problems(sender)  # 画面・保存・MCP と同じ関門(欄の名前つき)。文面が使う資料URLは、下の build_plan が会社ごとに見る
+    if problems:
+        print("送信元に、送る前に直すところがあります: " + " / ".join(p["text"] for p in problems))
         return 1
-    todo = targets(a.csv, a.include_supplemented, gate=gate) if gate is not None else targets(a.csv, a.include_supplemented)
-    if a.send or a.preview:  # 同じ会社へ送りすぎない(09 送信ルール2)。確認と本番で同じ絞り方にする(確認番号を合わせるため)
-        kept = []
-        for row in todo:
-            why = send_rules.company_refusal(LOG, row[0], row[1], row[4])
-            if why:
-                print(f"同じ会社のため対象外: {row[0]}  {why}")
-            else:
-                kept.append(row)
-        todo = kept
-        left = send_rules.DAILY_LIMIT - send_rules.pressed_today(LOG)
-        if left <= 0:
-            print(f"きょうはすでに{send_rules.DAILY_LIMIT}社に送っています(1日の上限)。あした以降に送ってください")
-            return 6
-        if len(todo) > left:
-            print(f"1日の上限({send_rules.DAILY_LIMIT}社)まで残り{left}社のため、{left}社に絞ります")
-            todo = todo[:left]
-    todo = todo[: a.max]
+    FIRST_LOOK["pending"] = bool(a.first_look and a.send)
+    plan = build_plan(a.csv, a.include_supplemented, gate, a.max, a.message, sender, apply_rules=bool(a.send or a.preview))
+    for s in plan["skipped"]:
+        print(f"送らない会社: {s['name']}  {s['text']}")
+    if plan["left_today"] == 0 and plan["stop"]:
+        print(plan["stop"])
+        return 6
+    todo, bodies = plan["todo"], plan["bodies"]
     print(f"対象 {len(todo)}社（フォームあり・お断り表示なし・送信ログに無い{'・検索で補ったHPを含む' if a.include_supplemented else '・検索で補ったHPは除く'}）")
     if not todo:
         return 0
-    todo, bodies, rejected = prepare_message_plan(todo, a.message, sender)  # 文面を先に固定。空書出しは会社単位で除外
-    for name, _url, reason in rejected:
-        print(f"文面未検証・対象外: {name}  {reason}")
-    if rejected:
-        print(f"文面生成可能 {len(todo)}社 / 空書き出しで対象外 {len(rejected)}社")
-    if not todo:
-        return 0
-    got = plan_digest(todo, bodies, sender)
+    got = plan["digest"]
     if a.send and a.expect and got != a.expect:  # 確認のあとで、送る会社・文面・送信元が変わった。確認していない相手に送らない
-        print("確認のあとで、送る会社・文面・送信元のどれかが変わりました。送らずに止めます。もう一度「確認する」からやり直してください")
+        if daily_cut_explains(a.csv, a.include_supplemented, gate, a.max, a.message, sender, a.expect, plan["left_today"]):
+            print(f"送る内容を出したあとで、きょう送れる残りが減りました(別の送信が先に進んだため。いまの残りは{plan['left_today']}社)。"
+                  "送る会社・文面・送信元は変わっていません。送らずに止めます。もう一度「送る内容を出す」を押します")
+        else:
+            print("送る内容を出したあとで、送る会社・文面・送信元のどれかが変わりました。送らずに止めます。もう一度「送る内容を出す」を押します")
         return 4
     if a.send:
         try:
@@ -1037,9 +1416,9 @@ def main():
             STATE["token"] = None
             STATE["targets"] = [url]
             body = bodies[i - 1]
-            if re.search(r"[{｛][^}｝]{1,20}[}｝]|【", body):  # 差し込みが残った文面は送らない
-                res, memo = "要手動", "文面に差し込みの取り残しがある"
-            elif not re.search(r"@|\d{2,4}-\d{2,4}-\d{3,4}", body):  # 送信者の連絡先が最終の本文に無い(署名の設定は有っても、文面から消えている)
+            if body_leftovers(body, name, opener):  # 置き換わらない記号・見本の仮の文字が残った文面は送らない(build_plan で外しているが、押す前にもう一度見る)
+                res, memo = "要手動", "文面に置き換わらない仮の文字が残っているので送らない(フォームは開いていない)"
+            elif not CONTACT.search(body):  # 送信者の連絡先が最終の本文に無い(署名の設定は有っても、文面から消えている)
                 res, memo = "要手動", "文面に送信者の連絡先(メールか電話)が入っていない"
             else:
                 try:
@@ -1070,6 +1449,9 @@ def main():
                 return 2
             if res == DAILY_FULL:
                 print("1日の上限に達したため、残りの会社には送らず、ここで止めます")
+                break
+            if res == sales_records.FIRST_LOOK_STOPPED:
+                print("1社目の確認で止めたため、残りの会社には送らず、ここで止めます")
                 break
             if res.startswith("お断り"):
                 if ng_list.add(hp or url, "営業お断り表示(フォーム画面)「" + memo[:30] + "」", name):

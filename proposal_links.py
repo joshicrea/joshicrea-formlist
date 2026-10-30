@@ -72,7 +72,8 @@ def _read(path):
         return []
 
 
-def _secret():
+def read_key():
+    """計測キー(利用許可のキーを兼ねる)。無い・形が違うときは空文字。実値は呼び出し側でも記録・表示しない"""
     k = os.environ.get("FORMLIST_TRACK_KEY", "").strip()
     for f in (KEY_FILE, LEGACY_KEY_FILE):
         if not k:
@@ -80,7 +81,12 @@ def _secret():
                 k = f.read_text(encoding="utf-8").strip()
             except OSError:
                 k = ""
-    if not KEY_OK.fullmatch(k):
+    return k if KEY_OK.fullmatch(k) else ""
+
+
+def _secret():
+    k = read_key()
+    if not k:
         raise RuntimeError("計測用の鍵がまだ入っていません。担当者から届いた設定の文を、Claude Code に貼って送ると入ります。鍵が無いと、開封を数えられない専用リンクになるため、資料URLは保存しません")
     return k.encode("utf-8")
 

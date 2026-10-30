@@ -87,10 +87,30 @@ th{color:var(--mut);font-size:14px;position:sticky;top:0;background:var(--bg);z-
  table.rt,table.rt tbody,table.rt tr,table.rt td{display:block;width:100%!important}table.rt tr:has(th){display:none}
  table.rt tr{border-bottom:1px solid var(--line);padding:8px 4px}table.rt td{border:0;padding:4px 8px}.tw{max-height:none}
 }
+.now .nowact .btn{margin-top:0}.now .berr{margin:8px 0 0;color:var(--danger-ink);font-weight:700;font-size:16px}.now .hint{font-size:15px}
+.lnk{background:none;border:0;padding:0 2px;color:var(--ac);font:inherit;font-weight:700;text-decoration:underline;text-underline-offset:3px;cursor:pointer}.lnk:hover{text-decoration-thickness:2px}
+.btn.wait{opacity:.55}
+.sumline{display:flex;flex-wrap:wrap;gap:2px 12px;align-items:baseline;padding:10px 0;border-bottom:1px solid var(--line)}.sumline .k{font-weight:700;min-width:5em}.sumline .v{overflow-wrap:anywhere;min-width:0;flex:1 1 300px}
+.edit{border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin:14px 0;background:var(--card)}
+.eh{font-size:18px;margin:24px 0 4px}.edit>.eh:first-child,#c_plan>.eh:first-child{margin-top:4px}
+.fld.bad input,.bad textarea{border:2px solid var(--danger)}
+.ferr{color:var(--danger-ink);font-size:14px;font-weight:700;margin:4px 0 0}
+.opt{font-weight:400;color:var(--mut);font-size:14px;margin-left:4px}
+.mk{display:inline-block;background:var(--ac-soft);color:var(--ac);border:1px solid var(--ac-line);border-radius:6px;padding:0 6px;margin:0 2px;font-size:14px;font-weight:700;line-height:1.6;white-space:nowrap}
+.autobox{background:var(--bg);border-radius:10px;padding:10px 14px;margin:12px 0}.autobox .ah{margin:0 0 4px;font-weight:700;font-size:15px}.arow{margin:4px 0;font-size:15px}.al{display:inline-block;min-width:7em;color:var(--mut)}
+.common{margin:10px 0 16px}.common .ch{margin:0 0 4px;font-weight:700}
+table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{background:var(--bg)}
+.readck{font-weight:700;font-size:17px;margin:20px 0 6px;padding:12px 14px;border:2px solid var(--ac-line);border-radius:10px;background:var(--ac-soft)}.readck input{width:24px;height:24px}
+.prog2{height:10px;background:var(--bg);border-radius:6px;overflow:hidden;margin:10px 0}.prog2>div{height:100%;background:var(--ac)}
+.flshot{max-width:100%;border:1px solid var(--line);border-radius:8px;margin-top:8px}
+.tag.gray{background:var(--bg);color:var(--mut)}.nw{display:inline-block;max-width:100%;overflow-wrap:anywhere}
+@media(min-width:641px){#c .now.stick{position:sticky;top:0;z-index:4;box-shadow:0 2px 8px rgba(16,24,40,.12)}}
+@media(max-width:640px){.sumline .k{min-width:0}.al{display:block}.edit{padding:12px}table.op textarea{min-height:96px}}
 </style></head><body>
-<header class="top"><div class="wrap hd"><div><h1><span class="mark" aria-hidden="true"></span>AIまるなげ営業</h1><p>地域と業種から、問い合わせフォームのある会社を探して、営業の文面を送ります。</p></div><button type="button" id="quit" class="btn sub sm">ツールを終了する</button></div>
+<header class="top"><div class="wrap hd"><div><h1><span class="mark" aria-hidden="true"></span>AIまるなげ営業</h1><p>地域と業種から、問い合わせフォームのある会社を探して、営業の文面を送ります。</p></div><button type="button" id="restart" class="btn sub sm">再起動する</button><button type="button" id="quit" class="btn sub sm">ツールを終了する</button></div>
 <nav class="wrap" aria-label="画面の切り替え"><button data-t="a" class="on"><span class="n">1</span>探す</button><button data-t="b"><span class="n">2</span>結果を見る</button><button data-t="c"><span class="n">3</span>送る</button><button data-t="d">送信の記録</button></nav></header>
 <div id="upd" role="status" aria-live="polite" hidden style="background:#fff7e0;border-bottom:1px solid #e6c36a;padding:10px 16px;text-align:center"></div>
+<div id="lic" role="alert" hidden style="background:#fde8e8;border-bottom:1px solid #d9534f;padding:10px 16px;text-align:center"></div>
 <div id="jobbar" role="status" aria-live="polite"><div class="wrap"><b id="jobname"></b><span id="jobline"></span><button type="button" id="stop2" class="btn sub sm" hidden style="margin-left:auto;white-space:nowrap">ここで止める</button></div><div class="bar"></div></div>
 <main class="wrap">
 <section id="a" class="on">
@@ -113,156 +133,364 @@ th{color:var(--mut);font-size:14px;position:sticky;top:0;background:var(--bg);z-
    <label for="portal">ポータルサイトのURLから集める（上の場所と業種の代わり）</label><input id="portal" type="text" placeholder="https://...（Indeed・業界ポータルなどの、絞り込み後の一覧ページ）">
    <div id="portalBox"></div>
    <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap"><input id="portalName" type="text" placeholder="登録名（例：介護ポータル）" style="flex:1;min-width:140px"><input id="portalUrl" type="text" placeholder="登録するポータルの一覧ページURL" style="flex:2;min-width:200px"><button class="btn sub sm" id="portalAdd" type="button">ポータルを登録</button></div>
-   <label for="ng">送らない会社を先に入れる（ホームページのドメイン、またはメールアドレスを、1行に1つ。手動で送った会社もここへ）</label><textarea id="ng" placeholder="example.com / info@example.com"></textarea>
+   <label for="ng">送らない会社を先に入れる（ホームページのドメイン、メールアドレス、または問い合わせフォームのURL（行の先頭に @ を付ける）を、1行に1つ。手動で送った会社もここへ）</label><textarea id="ng" placeholder="example.com / info@example.com / @https://example.com/contact/"></textarea>
    <p class="hint">探したあとで、結果の画面の「送らない」を押して入れることもできます。</p></details>
   <p class="hint" id="plan"></p>
   <div class="actions"><button class="btn big" id="go">探しはじめる</button> <button class="btn sub" id="newtab" type="button">別のタブで、別の条件の検索を始める</button> <button class="btn danger" id="stop" type="button" hidden>ここで止める</button>
   <p class="hint">探している間に、別の場所・別のキーワードで同時に探したいときは「別のタブで…」を押します（同時に3つまで）。止めたいときは「ここで止める」を押すと、調べ終えた分でリストを作って終わります。0件が続いたときは、自動で止まります。</p></div></div>
  <div class="card"><h2>進み具合</h2><p class="st" id="st_a"></p><details class="dt"><summary>くわしい経過（黒い画面）を見る</summary><pre id="log">まだ何も動いていません</pre></details></div>
 </section>
-<section id="b"><div class="now" id="now_b"></div><div class="card" id="funnelCard" hidden></div><div class="card"><h2>できたリスト</h2>
-  <div class="toolbar"><div class="grow"><label for="files">見るリスト</label><select id="files"></select></div><label class="check inl"><input type="checkbox" id="onlyOk" checked><span>問い合わせ候補だけ表示</span></label><div style="margin-bottom:6px"><button class="btn sub sm" id="dl">Excel用にCSVをダウンロード</button></div></div>
+<section id="b"><div class="now" id="now_b"></div><div class="card">
+  <div class="toolbar"><div class="grow"><label for="files">見るリスト</label><select id="files"></select></div><label class="check inl"><input type="checkbox" id="onlyOk" checked><span>フォームがある会社だけ表示</span></label><div style="margin-bottom:6px"><button class="btn sub sm" id="dl" type="button">CSVをダウンロード</button></div></div>
   <div class="sum" id="sum"></div><p class="mut" id="sumnote" style="margin:6px 0 0"></p>
   <details class="dt"><summary>くわしい内訳</summary><div class="sum sm" id="sum2"></div></details>
+  <details class="dt" id="funnelBox" hidden><summary>前回の探索の内訳</summary><div id="funnelCard"></div></details>
   <div class="legend" id="legend" hidden></div>
   <div class="tw"><table class="rt" id="res"></table></div>
   <details class="dt" style="margin-top:14px"><summary>送らない会社に入れたもの（ここから戻せます）</summary><div id="nglist"></div></details></div></section>
 <section id="c">
  <div class="now" id="now_c"></div>
- <details class="card fold" id="senderBox"><summary><span class="h2">準備1　送信元</span><span class="sumtxt" id="senderSum"></span></summary>
-  <p class="hint">先方に表示される名前と連絡先です。「必須」の欄が空だと送れません。フリガナ・電話・住所などは、フォームに同じ欄があるときだけ使います。</p>
-  <div class="row" id="sender"></div><button class="btn sub" id="saveSender">保存</button></details>
- <details class="card fold" id="msgBox"><summary><span class="h2">準備2　文面</span><span class="sumtxt">見る・直すときに開きます。送る前の確認でも全文が出ます。</span></summary>
-  <p class="hint">{企業名}・{書き出し}・{署名} の3つは消さずに残してください。送るとき、相手の会社名・会社ごとの書き出し・署名に置き換わります。</p>
-  <details class="dt"><summary>文面のくわしい決まり</summary><div>{書き出し} は会社ごとの書き出しの一文に置き換わります。書き出しが空の会社には送りません。書き出しは「3 送る」の「書き出しが空の会社」で入れます。それ以外の文章は、直して保存して大丈夫です。業種ごとの文面があれば、その業種の会社にはそちらを使います。送信者の名前・連絡先・配信停止の案内は消さないでください（特定電子メール法）。</div></details>
-  <label for="mind">どの業種の文面か（「標準」はどの業種にも使われます）</label><select id="mind"></select>
-  <p class="hint" id="mstate"></p>
-  <div class="actions"><button class="btn sub" id="moveMsg" type="button" hidden></button> <button class="btn sub" id="delMsg" type="button" hidden>この業種の専用の文面をやめる（標準に戻す）</button></div>
-  <details class="dt"><summary>営業資料から、文面のたたき台を作る</summary><p class="why">営業資料の文章を貼ってください。見出し・箇条書き・URLを拾って、下の文面欄にたたき台を入れます。保存するまでは、文面は変わりません。AIは使っていません。必ず自分で読んで直してください。</p><textarea id="mat" style="min-height:120px" placeholder="営業資料の文章をここに貼り付け"></textarea><button class="btn sub" id="mkSample" type="button">たたき台を作って、下に入れる</button></details>
-  <label for="mtext">文面</label><textarea id="mtext" style="min-height:300px"></textarea><button class="btn sub" id="saveMsg">この文面を保存</button></details>
- <div class="card"><h2>送る</h2>
-  <h3 class="sh"><span class="n">1</span>送る条件</h3>
-  <div class="row"><div><label for="sfile">送るリスト</label><select id="sfile"></select></div><div><label for="smax">今回送る最大の社数</label><input id="smax" type="number" value="3" min="1"><p class="hint">最初は3社くらいが安心です。</p></div></div>
-  <label class="check"><input type="checkbox" id="supp"><span>検索で見つけたホームページの会社にも送る<span class="hint d">別の会社のページを拾っている恐れがあります。「2 結果を見る」で「要確認」の会社を開いて確かめてから入れます。</span></span></label>
-  <details class="dt"><summary>どの会社が送る対象になるか</summary><div>対象は、問い合わせフォーム候補が検出され、営業お断りの表示がなく、まだ処理していない会社だけです。フォーム検出は営業送信の許可ではありません。自動入力できない確認画面（画像認証など）や、選ぶ形式の必須項目があるフォームは送らず、「手で送る必要あり」と記録します。</div></details>
-  <div id="opbox"></div>
-  <h3 class="sh"><span class="n">2</span>練習（しなくても先へ進めます）</h3>
-  <p class="hint">フォームに入力して画面を保存するだけです。送信ボタンは押しません。最初は1回おすすめです。</p>
-  <button class="btn sub" id="dry">練習する</button>
-  <h3 class="sh"><span class="n">3</span>送る会社と、文面の全文を確認する</h3>
-  <p class="hint">本番の前に必ず押します。会社ごとに置き換わった文面の全文が、すぐ下に出ます。</p>
-  <button class="btn big" id="prev">対象の会社と、送る文面の全文を確認する</button>
-  <div class="prog"><p class="st" id="st_c"></p><details class="dt"><summary>くわしい経過（黒い画面）を見る</summary><pre id="log2">まだ何も動いていません</pre></details></div>
-  <div id="tg" style="margin-top:12px"><p class="hint">まだ確認していません。上の「対象の会社と、送る文面の全文を確認する」を押すと、ここに出ます。</p></div>
-  <h3 class="sh"><span class="n">4</span>全文を読んでから、本番で送る</h3>
-  <div class="zone off" id="zone"><p class="lock" id="lockmsg">全文の確認が終わると、ここが使えるようになります。</p>
-   <label for="confirm">全文を読んで良ければ「送信」と入力します（毎回必要です）</label><input id="confirm" type="text" placeholder="送信" autocomplete="off">
-   <button class="btn danger big" id="real">本番で送る</button>
-   <p class="hint">押すと、画面の外に「本番送信の承認」の確認が出ます。内容を確かめて「はい」を押したときだけ送ります。</p></div>
-  <div class="aibox"><h4>AI（ClaudeやCodex）に送ってもらうとき</h4><p class="hint">AIは承認を押せません。全文を読んだあと、このボタンを押して画面の外の確認で「はい」を押し、それからAIに「送って」と伝えます。承認は1回の送信で使い切ります。</p><button class="btn sub" id="approve" type="button">この全文で送ることを承認する</button></div>
+ <div class="card" id="c_main">
+  <div id="c_cond">
+   <div class="sumline" id="condSum" hidden></div>
+   <div id="condEdit">
+    <div class="row"><div><label for="sfile">送るリスト</label><select id="sfile"></select></div>
+     <div><label for="smax">1回に送る社数</label><input id="smax" type="text" inputmode="numeric" autocomplete="off" style="max-width:12em"><p class="hint" id="smaxNote"></p><p class="ferr" id="smaxErr" hidden></p></div></div>
+    <p class="hint" id="limitsLine"></p>
+   </div>
+  </div>
+  <div id="c_sum"><div class="sumline" id="senderLine"></div><div class="sumline" id="msgLine"></div></div>
+  <div class="edit" id="senderEdit" hidden>
+   <h3 class="eh">送信元（相手に見える名前と連絡先）</h3><p class="hint">一度保存すれば残ります。直すときもここだけです。</p>
+   <div class="row" id="sender"></div>
+   <div class="fld" id="f_署名"><label for="s_署名">署名</label><p class="hint">住所・電話・お名前と、不要ならご返信くださいの案内を入れます（法律で決まっている表示です）。</p><textarea id="s_署名" style="min-height:130px"></textarea><p class="ferr" id="e_署名" hidden></p><button class="btn sub sm" id="sigSample" type="button" style="margin-top:8px">見本を入れる</button></div>
+   <div class="actions"><button class="btn sub" id="saveSender" type="button">この送信元を保存</button> <button class="lnk" id="senderClose" type="button">閉じる</button></div>
+  </div>
+  <div class="edit" id="msgEdit" hidden>
+   <h3 class="eh">文面</h3>
+   <label for="mind">どの業種の文面か</label><select id="mind"></select>
+   <p class="hint" id="mstate"></p><p class="ferr" id="mprob" hidden></p>
+   <div class="autobox"><p class="ah">自動で入る部分（ここは書き換えません）</p>
+    <div class="arow" id="greetRow"><span class="al">宛名</span><span id="greetView"></span> <button class="lnk" id="greetToggle" type="button"></button></div>
+    <div class="arow" id="openRow"><span class="al">書き出し</span><span id="openView"></span></div></div>
+   <label for="mtext">本文（ここを直します）</label><textarea id="mtext" style="min-height:260px"></textarea>
+   <div class="autobox"><p class="ah">自動で入る部分</p><div class="arow"><span class="al">署名（送信元から）</span><button class="lnk" id="toSender" type="button">送信元を直す</button></div><div class="msgbody" id="sigView"></div></div>
+   <div class="actions"><button class="btn sub" id="saveMsg" type="button">この文面を保存</button> <button class="btn sub" id="moveMsg" type="button" hidden></button> <button class="btn sub" id="delMsg" type="button" hidden>この業種の文面をやめる（標準に戻す）</button> <button class="lnk" id="msgClose" type="button">閉じる</button></div>
+   <p class="hint" id="msgSaved"></p>
+   <h3 class="eh">実際に届く文の見本</h3><p class="hint" id="sampleNote"></p><div class="msgbody" id="sampleView"></div>
+   <details class="dt"><summary>営業資料から、文面のたたき台を作る</summary><div><p class="why">営業資料の文章を貼ります。見出し・箇条書き・URLを拾って、本文の欄にたたき台を入れます。保存するまでは、文面は変わりません。AIは使っていません。自分で読んで直します。</p><textarea id="mat" style="min-height:120px" placeholder="営業資料の文章をここに貼り付け"></textarea><button class="btn sub" id="mkSample" type="button">たたき台を作って、本文に入れる</button><p class="hint" id="matNote"></p></div></details>
+  </div>
+  <div id="c_plan" hidden></div>
+  <div id="c_run" hidden></div>
+  <details class="dt" id="condMore"><summary>くわしい条件</summary><div><label class="check"><input type="checkbox" id="supp"><span>検索で見つけたホームページの会社にも送る<span class="hint d">別の会社のページを拾っていることがあります。結果を見るで開いて確かめてから入れます。</span></span></label></div></details>
+  <details class="dt" id="aiOpen"><summary>AIに書き出しを書き直してもらう方法</summary><div>Claude に、送るリストの会社の書き出しを、ホームページに書いてあることだけで書き直して、と頼みます。書き直した書き出しは、送る内容の一覧に、AI（Claude）が書き直した下書き、と出ます。送る前に読んで直せます。</div></details>
+  <details class="dt" id="aiSend" hidden><summary>AI（Claude）に送ってもらうとき</summary><div>AIは承認を押せません。上の文を読んで、読みましたにチェックを入れてから、下のボタンを押します。画面の外に確認が出たら、内容を読んで「はい」を押します。それから AI に、送って、と伝えます。承認は1回の送信で使い切ります。<br><button class="btn sub" id="approve" type="button">この内容で送ることを承認する</button><p class="hint" id="aiNote"></p></div></details>
  </div>
+ <details class="dt" id="supLog"><summary>くわしい記録（サポート用）</summary><pre id="log2">まだ何も動いていません</pre></details>
 </section>
-<section id="d"><div class="now" id="now_d"></div><div class="card"><div class="toolbar"><h2 style="flex:1">送信の記録</h2><button class="btn sub sm" id="reload">更新</button></div><div class="sum" id="hsum"></div><div class="tw"><table class="rt" id="hist"></table></div></div></section>
+<section id="d"><div class="now" id="now_d"></div><div class="card"><div class="toolbar"><h2 style="flex:1">送信の記録</h2><button class="btn sub sm" id="reload" type="button">更新</button></div><div class="sum" id="hsum"></div><p class="hint" id="hfnote"></p><div class="tw"><table class="rt" id="hist"></table></div></div></section>
 </main>
-<div id="foot"></div>
+<div id="foot"></div><p id="ver" style="text-align:center;color:#888;font-size:12px"></p>
 <script>
 const TOKEN='__TOKEN__';const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const J=(u,o={})=>fetch(u,{...o,headers:{...(o.headers||{}),'X-Token':TOKEN}}).then(async r=>{const d=await r.json().catch(()=>({error:'サーバーから読み取れない応答（'+r.status+'）'}));if(r.status==403){alert(d.error||'拒否されました');if(d.code=='token')location.reload();return {error:d.error}}return d});
+const J=(u,o={})=>fetch(u,{...o,headers:{...(o.headers||{}),'X-Token':TOKEN}}).then(async r=>{const d=await r.json().catch(()=>({error:'ツールから読み取れない応答が返りました（'+r.status+'）。ツールを起動し直して、もう一度押します'}));if(r.status==403){if(d.code=='token'){location.reload();return {error:d.error}}return {error:d.error||'この操作は受け付けられませんでした'}}return d});
 const post=(u,d)=>J(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
 let META={},JOB={lines:[],running:false,name:'',code:null,files:[]},RESROWS=[];
-const SF=['会社名','氏名','フリガナ','メール','電話','郵便番号','住所','件名','資料URL'],NEED=['会社名','氏名','メール','署名'];
+const SF=['会社名','氏名','フリガナ','メール','電話','郵便番号','住所','件名','資料URL'],FIELDS=[...SF,'署名'];
+const SF_OPT={'郵便番号':'なくてよい'},SF_HINT={'資料URL':'文面に資料のリンクがあるときだけ要ります。','件名':'相手の会社名は自動で入ります。'};
 function goto(t){document.querySelector('nav button[data-t="'+t+'"]').click()}
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button,section').forEach(e=>e.classList.remove('on'));b.classList.add('on');$('#'+b.dataset.t).classList.add('on');if(b.dataset.t=='d')hist();if(b.dataset.t=='b')loadRes();if(b.dataset.t=='c')loadOp();banners();window.scrollTo(0,0)});
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button,section').forEach(e=>e.classList.remove('on'));b.classList.add('on');$('#'+b.dataset.t).classList.add('on');if(b.dataset.t=='d')hist();if(b.dataset.t=='b')loadRes();if(b.dataset.t=='c')refreshMeta();banners();window.scrollTo(0,0)});
 function opts(sel,list,cur){sel.innerHTML=list.map(f=>`<option ${f==cur?'selected':''}>${esc(f)}</option>`).join('')}
 function tag(t,k){return `<span class="tag ${k||''}">${esc(t)}</span>`}
 function lk(v,label){try{const u=new URL(v);if(u.protocol=='http:'||u.protocol=='https:')return `<a href="${esc(u.href)}" target="_blank" rel="noopener noreferrer" title="${esc(u.hostname)}">${esc(label)}</a>`}catch(e){}return ''}
 function plain(m){m=String(m||'');
- if(/Timeout/i.test(m))return 'ページが開くのに時間がかかりすぎて、時間切れになりました。時間を置くと確認できることがあります';
- if(/captcha/i.test(m))return '自動入力できない確認画面（画像認証など）があります。手で送る必要があります';
- if(/ConnectionError|ERR_|Max retries|NameResolution/i.test(m))return '接続できませんでした（相手のサイトが止まっているか、通信が不安定です）';
- if(/本文欄が見つからない/.test(m))return '文面を入れる欄が見つかりませんでした。手で送る必要があります';
- if(/送信ボタンが見つからない/.test(m))return '送信ボタンが見つかりませんでした。手で送る必要があります';
- if(/完了画面の文言を確認できず/.test(m))return '送信ボタンは押しましたが、送れたかを画面で確認できませんでした。そのフォームを開いて確かめてください';
- if(/差し込みの取り残し/.test(m))return '文面に {…} や 【】 が残っているため送りませんでした。文面を見直してください';
- return m.replace(/^入力: ?/,'入力できた項目: ').replace('（送信ボタンは押していない）','（練習なので送信ボタンは押していません）').replace(/^error: ?/,'読み込みに失敗: ')}
-function verdict(r){const v=r['フォーム判定']||'',sup=(r['取得元']||'').includes('補完');
- if(v=='フォームあり')return sup?{k:'warn',t:'要確認',why:'ホームページを検索で見つけた会社です。'+(r['HPの照合']?'照合の結果は「'+r['HPの照合']+'」。':'')+'別の会社のページでないかを開いて確かめてください。営業送信可否は未確認です'}:{k:'ok',t:'フォーム検出',why:'問い合わせフォーム候補が見つかりました。営業送信可否は未確認です'};
- if(v=='要目視')return {k:'warn',t:'手で確かめる',why:'このツールでは送りません。ホームページを開いて、問い合わせフォームがあれば、自分で文面を貼って送ります'};
- if(v=='メールのみ')return {k:'ng',t:'対象外',why:'メールアドレスだけ見つかりました（このツールはフォーム候補の確認を優先します）'};
- if(v=='見つからず')return {k:'ng',t:'対象外',why:'問い合わせ候補を確認できませんでした'};
+ if(/Timeout/i.test(m))return 'ページが開くのに時間がかかりすぎました。時間を置くと開けることがあります';
+ if(/captcha/i.test(m))return '自動で入力できない確認（画像の文字を読むなど）があります。自分で送ります';
+ if(/ConnectionError|ERR_|Max retries|NameResolution/i.test(m))return 'つながりませんでした（相手のサイトが止まっているか、通信が不安定です）';
+ if(/本文欄が見つからない/.test(m))return '文面を入れる欄が見つかりませんでした。自分で送ります';
+ if(/送信ボタンが見つからない/.test(m))return '送信ボタンが見つかりませんでした。自分で送ります';
+ if(/完了画面の文言を確認できず/.test(m))return '送信ボタンは押しましたが、送れたかを画面で確かめられませんでした。フォームを開いて確かめます';
+ if(/差し込みの取り残し/.test(m))return '文面に置き換わらない部分が残っていたので、送りませんでした（フォームは開いていません）';
+ return m.replace(/^入力: ?/,'入力できた欄: ').replace('（送信ボタンは押していない）','（送信ボタンは押していません）').replace(/^error: ?/,'読み込めませんでした: ')}
+const NOTE_FORM='フォームがあっても、営業してよいという意味ではありません';
+function verdict(r){const cc=r['contact_confidence']||'',sp=r['sales_permission']||'',v=r['フォーム判定']||'',sup=(r['取得元']||'').includes('補完');
+ if(cc=='公式HP要目視')return {k:'warn',t:'手で確かめる',why:'公式のホームページらしいページはありますが、電話か住所が合いません。開いて確かめます'};
+ if(cc=='公式HP再探索済み:候補なし')return {k:'ng',t:'見つからず',why:'公式のホームページを探し直しましたが、見つかりませんでした'};
+ if(cc=='公式HP再探索失敗')return {k:'ng',t:'読み込めず',why:'公式のホームページを探し直す途中で、通信がうまくいきませんでした'};
+ if(cc=='公式HP再探索無効')return {k:'ng',t:'対象外',why:'見つかったページが、送らない会社の条件に当たりました'};
+ if(sp&&sp!='未確認')return {k:'ng',t:'営業お断りの可能性',why:sp+'。人が確かめるまで送りません'};
+ if(cc=='公式HP再探索待ち')return {k:'warn',t:'公式のページを探す前',why:'SNSや予約サイトのページだけ見つかりました。送る会社には入れません'};
+ if(cc=='自動確認:フォーム')return {k:'ok',t:'フォームあり',why:NOTE_FORM};
+ if(cc=='自動確認:メール')return {k:'warn',t:'メールだけ',why:'メールアドレスは見つかりました。このツールはフォームに送ります'};
+ if(cc=='候補:要目視')return {k:'warn',t:'手で確かめる',why:'問い合わせ先らしいページはありますが、自動では確かめられませんでした'};
+ if(cc=='未発見')return {k:'ng',t:'見つからず',why:'問い合わせ先を見つけられませんでした'};
+ if(v=='フォームあり')return sup?{k:'warn',t:'開いて確かめる',why:'ホームページを検索で見つけた会社です。'+(r['HPの照合']?'照合の結果は '+r['HPの照合']+'。':'')+'別の会社のページでないか、開いて確かめます'}:{k:'ok',t:'フォームあり',why:NOTE_FORM};
+ if(v=='要目視')return {k:'warn',t:'手で確かめる',why:'このツールでは送りません。ホームページにフォームがあれば、自分で文面を貼って送ります'};
+ if(v=='メールのみ')return {k:'ng',t:'対象外',why:'メールアドレスだけ見つかりました（このツールはフォームに送ります）'};
+ if(v=='見つからず')return {k:'ng',t:'対象外',why:'問い合わせ先を見つけられませんでした'};
  if(v=='robots禁止')return {k:'ng',t:'対象外',why:'ホームページ側が、自動で読むことを断っています'};
  if(v=='取得失敗')return {k:'ng',t:'対象外',why:'ホームページを読み込めませんでした（時間を置くと読めることがあります）'};
- return {k:'',t:v||'未判定',why:''}}
-function senderMissing(){const s=META.sender||{};const m=NEED.filter(k=>!(s[k]||'').trim()||(s[k]||'').includes('【'));if(!m.includes('署名')&&!/@|\d{2,4}-\d{2,4}-\d{3,4}/.test(s['署名']||''))m.push('署名に連絡先（メールか電話）');return m}
+ return {k:'',t:v||'まだ調べていません',why:''}}
+function summ(rows){const c={ok:0,warn:0,ng:0,auto:0,cand:0,missing:0,official:0};rows.forEach(r=>{const k=verdict(r).k;if(k in c)c[k]++;const cc=r['contact_confidence']||'';if(cc=='自動確認:フォーム'||cc=='自動確認:メール')c.auto++;if(r['contact_candidate']=='True'||r['contact_candidate']===true||['自動確認:フォーム','自動確認:メール','候補:要目視'].includes(cc))c.cand++;if(cc=='未発見')c.missing++;if(cc=='公式HP再探索待ち')c.official++});return c}
 function est(){const n=Math.max(1,parseInt($('#limit').value)||0);const a=Math.max(1,Math.round((n*3+30)/60)),b=Math.max(1,Math.round((n*15+60)/60));$('#est').textContent=`最大${n}社まで調べます。目安は約${a}〜${b}分です（実測の一例: ホテル・旅館10社で約40秒。会社数や通信で変わります）`}
 $('#limit').oninput=est;
 const NX='<b>次に</b>',NW='<b>いま</b>';
 function banners(){const j=JOB,mine=j.name=='探す';
  const run=(t)=>`${NW}「${esc(t)}」を実行しています。このままお待ちください。`;
  $('#now_a').innerHTML=j.running&&mine?run('探す')+'<span class="hint">終わると自動で「2 結果を見る」に移ります。</span>':NX+'場所と業種を選んで「探しはじめる」を押します。'+(META.files&&META.files.length?'<span class="hint">前に作ったリストは「2 結果を見る」で見られます。</span>':'');
- const s=RESROWS.length?summ(RESROWS):null;
- $('#now_b').innerHTML=s?`${NX}「フォーム検出」${s.ok}社と「要確認」${s.warn}社を見て、送らない会社は「送らない」を押します。よければ「3 送る」へ進みます。<span class="hint">フォーム検出は、問い合わせフォーム候補が見つかったという意味です。営業送信可否は未確認なので、必要に応じてホームページを開いて確かめます。</span><div class="nowact"><button class="btn sm" id="go3" type="button">3 送るへ進む</button>${s.ok>1?`<button class="btn sub sm" id="goall" type="button">「フォーム検出」${Math.min(s.ok,200)}社を確認へ進める</button>`:''}</div>`:NX+'「1 探す」で探してください。<span class="hint">リストがまだありません。</span>';
- const g=$('#go3');if(g)g.onclick=()=>goto('c');const ga=$('#goall');if(ga)ga.onclick=()=>{$('#sfile').value=$('#files').value;$('#smax').value=Math.min(s.ok,200);$('#smax').dispatchEvent(new Event('input'));goto('c')};
- const m=senderMissing(),ok1=!m.length,sd=META.sender||{};
- $('#senderSum').textContent=ok1?`${sd['会社名']||''} ${sd['氏名']||''}（保存済み）`:'足りません: '+m.join('、');$('#senderSum').classList.toggle('bad',!ok1);
- const st=[['準備1 送信元',ok1?'入っています':'足りません',ok1?'done':'bad'],['準備2 文面','確認で全文が出ます',''],['練習','しなくても進めます',''],['確認',STATE.prevOk?'終わりました':'本番の前に必ず',STATE.prevOk?'done':ok1?'cur':''],['本番',STATE.prevOk?'全文を読んで送る':'確認のあとに使えます',STATE.prevOk?'cur':'']];
- const nx=!ok1?'「準備1 送信元」を開いて、足りない欄（'+esc(m.join('、'))+'）を入れて「保存」を押します。':!STATE.prevOk?'「対象の会社と、送る文面の全文を確認する」を押します。練習は、しなくても進めます。':'下に出た全文を読みます。良ければ「送信」と入力して「本番で送る」を押します。';
- $('#now_c').innerHTML=(j.running&&!mine?run(j.name):NX+nx)+'<ol class="steps">'+st.map(x=>`<li class="${x[2]}">${x[0]}<span class="s">${x[1]}</span></li>`).join('')+'</ol>';
- $('#now_d').innerHTML=NX+'「手で送る必要あり」と「送れたか確認が要る」の会社を確かめます。<details class="dt"><summary>それぞれの意味と、すること</summary><div><b>手で送る必要あり:</b> フォームを開き、「3 送る」の文面をコピーして貼り、自分で送信します。<br><b>送れたか確認が要る:</b> 送信ボタンは押しています。相手から自動返信のメールが届いていれば送れています。届かなくても、送れていないとは限りません(自動返信が無い会社や、迷惑メールに入る場合があります)。送り直す前に、送信後の画面の保存(出力/送信画面)を見て、送れたかを確かめてください。<br>練習の記録も、この一覧に入っています。</div></details>';
- gate()}
-// 押せる・押せないで順番を示す(本当の歯止めはサーバー側の確認番号とOSの確認ダイアログ)
-function gate(){const busy=!!JOB.running,ready=STATE.prevOk&&TGN>0&&!busy,typed=$('#confirm').value=='送信';
- ['#go','#dry','#prev'].forEach(x=>$(x).disabled=busy);
- $('#confirm').disabled=!ready;$('#approve').disabled=!ready;$('#real').disabled=!(ready&&typed);$('#zone').classList.toggle('off',!ready);
- $('#lockmsg').textContent=busy?'処理が終わるまでお待ちください。':!STATE.prevOk?'全文の確認が終わると、ここが使えるようになります。':!TGN?'送る対象の会社がありません。':typed?'準備ができました。全文を読み終えていれば「本番で送る」を押します。':$('#confirm').value?'「送信」の2文字だけを入れてください。':'全文を読んで良ければ、下の欄に「送信」と入れると、ボタンが押せるようになります。'}
-$('#confirm').addEventListener('input',gate);
-const legacyVerdict=verdict;verdict=function(r){const cc=r['contact_confidence']||'',sp=r['sales_permission']||'';if(sp&&sp!='未確認')return {k:'ng',t:'営業不可候補',why:sp+'。フォームの有無とは別に、人が確認するまで送信許可とは扱いません'};if(cc=='公式HP再探索待ち')return {k:'warn',t:'公式HP再探索待ち',why:'SNS/予約ポータル等のURLです。公式HP再探索はまだ未実施です。この画面では送信対象にしません'};if(cc=='自動確認:フォーム')return {k:'ok',t:'自動確認:フォーム',why:'問い合わせフォーム候補を自動確認しました。営業送信可否は未確認です'};if(cc=='自動確認:メール')return {k:'warn',t:'自動確認:メール',why:'メール先は見つかりました。フォーム送信ではなく、営業可否は未確認です'};if(cc=='候補:要目視')return {k:'warn',t:'候補:要目視',why:'問い合わせ候補はありますが、自動確認できていません。営業可否も未確認です'};if(cc=='未発見')return {k:'ng',t:'未発見',why:'問い合わせ候補を確認できませんでした'};return legacyVerdict(r)}
-const officialVerdict=verdict;verdict=function(r){const cc=r['contact_confidence']||'',d=r['source_detail']||'';if(cc=='公式HP要目視')return {k:'warn',t:'公式HP要目視',why:'公式HPらしい候補はありますが、電話または住所の一致が足りないため元URLのままです。候補URLは詳細を確認してください'};if(cc=='公式HP再探索済み:候補なし')return {k:'ng',t:'公式HP候補なし',why:'公式HP再探索を試しましたが、採用できる候補は見つかりませんでした'};if(cc=='公式HP再探索失敗')return {k:'ng',t:'公式HP再探索失敗',why:'公式HP再探索中に通信または確認エラーがありました。迂回取得はしていません'};if(cc=='公式HP再探索無効')return {k:'ng',t:'公式HP再探索無効',why:'見つかった候補がNGまたは拒否基準に該当したため対象外にしました'};if(cc=='公式HP再探索済み:候補なし'&&/official_site_research:from=/.test(d))return {k:'warn',t:'公式HP再探索未採用',why:'公式HP再探索は実施されましたが、採用できる候補がまだありません'};return officialVerdict(r)}
-const STATE={prevOk:false,pkey:''};let TGN=0;
-function unprev(){if(!STATE.prevOk)return;STATE.prevOk=false;STATE.pkey='';TGN=0;$('#tg').innerHTML='<p class="warn">リスト・社数・文面・送信元のどれかが変わりました。もう一度「対象の会社と、送る文面の全文を確認する」を押してください。</p>';banners()}
-function summ(rows){const c={ok:0,warn:0,ng:0,auto:0,cand:0,missing:0,official:0};rows.forEach(r=>{const k=verdict(r).k;if(k in c)c[k]++;const cc=r['contact_confidence']||'';if(cc=='自動確認:フォーム'||cc=='自動確認:メール')c.auto++;if(r['contact_candidate']=='True'||r['contact_candidate']===true||['自動確認:フォーム','自動確認:メール','候補:要目視'].includes(cc))c.cand++;if(cc=='未発見')c.missing++;if(cc=='公式HP再探索待ち')c.official++});return c}
-async function init(){META=await J('/api/meta');
- const inds=META.industries;
- $('#inds').innerHTML=inds.map(i=>`<label class="chip"><input type="checkbox" value="${esc(i)}"><span>${esc(i)}</span></label>`).join('');
- $('#inds').onchange=()=>{const n=document.querySelectorAll('#inds input:checked').length;$('#indcnt').textContent=n?`${n}つ選んでいます`:'';refreshPlan()};
- $('#sender').innerHTML=SF.map(k=>`<div><label for="s_${k}">${k}${NEED.includes(k)?'（必須）':''}</label><input type="text" id="s_${k}" value="${esc(META.sender[k])}"></div>`).join('')+`<div style="grid-column:1/-1"><label for="s_署名">署名（必須）</label><p class="hint">文面の {署名} に入ります。連絡先と、配信停止の案内を含めてください。例: 今後このようなご案内が不要でしたら、メールアドレス宛てに「不要」とご返信ください。以後お送りしません。</p><textarea id="s_署名" style="min-height:130px">${esc(META.sender['署名'])}</textarea></div>`;
- opts($('#files'),META.files);opts($('#sfile'),META.files);
- renderMsgOptions();est();if(senderMissing().length)$('#senderBox').open=true;banners()}
-function renderMsgOptions(sel){const mi=META.message_info||{industries:{},orphans:[]};
- const names=['default',...META.industries,...mi.orphans.map(o=>o.name)];
- $('#mind').innerHTML=names.map(n=>{let t=n=='default'?'標準（専用の文面が無い業種に使われます）':n;
-  if(n!='default'){const o=mi.orphans.find(x=>x.name==n);t+=o?'（古い業種名。いまは使われません）':(mi.industries[n]=='専用'?'（専用あり）':'（標準を使う）')}
-  return `<option value="${esc(n)}">${esc(t)}</option>`}).join('');
- if(sel&&names.includes(sel))$('#mind').value=sel;showMsg()}
-function showMsg(){const k=$('#mind').value;const mi=META.message_info||{industries:{},orphans:[]};
- $('#mtext').value=META.messages[k]??META.messages.default;
- const o=mi.orphans.find(x=>x.name==k);const ded=mi.industries[k]=='専用';let h='';
- if(k=='default')h='この文面は、専用の文面が無い業種すべてに使われます。';
- else if(o)h='古い業種名で作った文面です。いまの業種の分類にこの名前は無いので、送るときには使われません。'+(o.to?`「${o.to}」`:'いまの業種')+'へ引き継ぐ場合は、下のボタンを押します。';
- else if(ded)h='この業種専用の文面があります。この業種の会社には、この文面が使われます。';
- else h='この業種の専用の文面は、まだありません。送るときは「標準」の文面が使われます（下の欄は「標準」の中身です）。この業種専用にするには、文面を直して「この文面を保存」を押します。';
- $('#mstate').textContent=h;$('#delMsg').hidden=!ded;
- $('#moveMsg').hidden=!(o&&o.to);$('#moveMsg').textContent=o&&o.to?`この文面を「${o.to}」の専用の文面にコピーする`:''}
-async function reloadMsgs(sel){const m=await J('/api/meta');META.messages=m.messages;META.message_info=m.message_info;renderMsgOptions(sel)}
-$('#mind').onchange=showMsg;
-$('#moveMsg').onclick=async()=>{const k=$('#mind').value;const o=(META.message_info.orphans||[]).find(x=>x.name==k);if(!o||!o.to)return;const r=await post('/api/message/move',{from:k,to:o.to});if(r.error)return alert(r.error);unprev();await reloadMsgs(o.to);alert(r.note)};
-$('#delMsg').onclick=async()=>{const k=$('#mind').value;if(!confirm(`「${k}」の専用の文面をやめて、「標準」の文面を使うようにします。前の文面は残してあります。よろしいですか`))return;const r=await post('/api/message/delete',{name:k});if(r.error)return alert(r.error);unprev();await reloadMsgs(k);alert(r.note)};
-['#sfile','#smax','#supp'].forEach(x=>{$(x).addEventListener('change',()=>unprev());$(x).addEventListener('input',()=>unprev())});
-$('#sfile').addEventListener('change',()=>loadOp());
-// 書き出しが空の会社には送れない。画面で、会社ごとの一文を入れられるようにする
-async function loadOp(){const f=$('#sfile').value,box=$('#opbox');if(!f){box.innerHTML='';return}
- const r=await J('/api/openings?only_form=1&file='+encodeURIComponent(f));if(r.error){box.innerHTML='';return}
- const m=r.missing||[];if(!m.length){box.innerHTML=r.total?'<p class="hint">書き出しは、送れる会社すべてに入っています。</p>':'';return}
- const show=m.slice(0,20);
- box.innerHTML=`<div class="aibox"><h4>書き出しが空の会社 ${m.length}社</h4><p class="hint">文面の {書き出し} に入る、会社ごとの一文です。空の会社には送れません。「ホームページを開く」でお店を見て、1〜2文で書きます。今回送る社数ぶん、上から書けば足ります。下書きが入っている会社は、読んで、直してから保存します。ホームページを見て、事実と合っているかを確かめてください。書いたら「書き出しを保存」を押します。</p>`+show.map(x=>`<div style="margin:10px 0"><b>${esc(x.name)}</b> ${lk(x.hp,'ホームページを開く')}<textarea class="opin" data-n="${esc(x.name)}" style="min-height:60px" placeholder="例 お店のホームページで、季節ごとのメニューを拝見しました。">${esc(x.draft||'')}</textarea></div>`).join('')+(m.length>show.length?`<p class="hint">ほかに${m.length-show.length}社あります。上の会社を保存すると、次の会社が出ます。</p>`:'')+'<button class="btn sub" id="saveOp" type="button">書き出しを保存</button></div>';
- $('#saveOp').onclick=async()=>{const ops={};document.querySelectorAll('.opin').forEach(t=>{if(t.value.trim())ops[t.dataset.n]=t.value.trim()});if(!Object.keys(ops).length)return alert('書き出しが入っていません');const res=await post('/api/openings',{file:f,openings:ops});if(res.error)return alert(res.error);unprev();alert(res.updated+'社の書き出しを保存しました');loadOp()}}
-function curKey(){for(let i=JOB.lines.length-1;i>=0;i--){const m=/確認番号: (\S+)/.exec(JOB.lines[i]);if(m)return m[1]}return STATE.pkey||''}
-async function askApprove(){const r=await post('/api/approve',{key:curKey()});if(r.error){alert(r.error);return false}if(!r.ok){alert('承認されませんでした（確認の画面で「はい」が押されませんでした）。送りません');return false}return true}
-$('#approve').onclick=async()=>{if(await askApprove())alert('承認しました。AIに「送って」と伝えてください。承認は1回の送信で使い切ります')};
-$('#mkSample').onclick=async()=>{const r=await post('/api/sample',{material:$('#mat').value});if(r.error)return alert(r.error);if($('#mtext').value.trim()&&!confirm('いまの文面欄を、たたき台で置き換えます（保存するまでは元に戻せます）。よろしいですか'))return;$('#mtext').value=r.text;alert('たたき台を入れました。拾えたもの: 題「'+(r.title||'なし')+'」・箇条書き'+r.points.length+'個・URL'+(r.url?'あり':'なし')+'。読んで直してから「この文面を保存」を押してください')};
-$('#saveMsg').onclick=async()=>{const k=$('#mind').value;const r=await post('/api/message',{[k]:$('#mtext').value});if(r.error)return alert(r.error);unprev();await reloadMsgs(k);alert('保存しました')};
-$('#saveSender').onclick=async()=>{const d={};[...SF,'署名'].forEach(k=>d[k]=$('#s_'+k).value);const r=await post('/api/sender',d);if(r.error)return alert(r.error);META.sender={...META.sender,...d};unprev();banners();alert('保存しました')};
+ bannerB();renderSend()}
+function bannerB(){const s=RESROWS.length?summ(RESROWS):null,box=$('#now_b');
+ if(!s){box.innerHTML=NX+'先に、探す画面でリストを作ります。<div class="nowact"><button class="btn big" id="toA" type="button">探すへ</button></div>';$('#toA').onclick=()=>goto('a');return}
+ if(!s.ok){box.innerHTML=NX+'このリストには、フォームがある会社がありません。別の条件で探します。<div class="nowact"><button class="btn big" id="toA" type="button">探すへ</button></div>';$('#toA').onclick=()=>goto('a');return}
+ box.innerHTML=NX+'送りたくない会社があれば「送らない」を押して、「このリストで送る準備へ」を押します。<div class="nowact"><button class="btn big" id="toC" type="button">このリストで送る準備へ（フォームあり '+s.ok+'社）</button></div><span class="hint">'+NOTE_FORM+'。営業お断りの表示がある会社は、自動で外しています。</span>';
+ $('#toC').onclick=()=>{const f=$('#files').value;if(f&&$('#sfile').value!=f){$('#sfile').value=f;markDirty('送るリスト')}goto('c')}}
+async function loadFunnel(){
+ try{
+  const s=await J('/api/summary');const box=$('#funnelCard');
+  if(!s||s.error||!s.outcome||s.outcome==='running'){$('#funnelBox').hidden=true;return}
+  const m=s.map||{};
+  const rows=(s.funnel||[]).map(f=>`<tr><td>${esc(f.label)}</td><td style="text-align:right;white-space:nowrap"><b>${f.n}</b>件</td><td class="hint">${esc(f.note||'')}</td></tr>`).join('');
+  const maprows=m.searches?[['Googleマップの検索',m.searches+'回'],['うち、結果が0件だった検索',(m.empty||0)+'回'],['うち、取得に失敗した検索',(s.fetch_failed||0)+'回'],['読めなかった店・施設ページ',(m.unreadable||0)+'件']].map(r=>`<tr><td>${r[0]}</td><td style="text-align:right;white-space:nowrap"><b>${r[1]}</b></td><td></td></tr>`).join(''):'';
+  box.innerHTML=`<p>${esc(s.message||'')}</p>`+(s.area?`<p class="hint">探した場所: ${esc(s.area)}</p>`:'')+((rows||maprows)?`<div class="tw"><table class="rt"><tbody>${maprows}${rows}</tbody></table></div><p class="hint">各行は別々に数えた件数です。足し引きで合わないことがあります（同じ店が複数の理由で外れるため）。</p>`:'');
+  $('#funnelBox').hidden=false
+ }catch(e){}
+}
+async function loadRes(){const f=$('#files').value;if(!f){$('#res').innerHTML='<tr><td>まだリストがありません</td></tr>';RESROWS=[];$('#sum').innerHTML='';$('#sum2').innerHTML='';banners();return}
+ const all=await J('/api/results?file='+encodeURIComponent(f));if(all.error)return;RESROWS=all;const s=summ(all);
+ const card=(lb,n,u)=>`<div><span class="lb">${lb}</span><span class="nm"><b>${n}</b>${u}</span></div>`;
+ $('#sum').innerHTML=card('全体',all.length,'社')+card(tag('フォームあり','ok'),s.ok,'社')+card(tag('開いて確かめる','warn'),s.warn,'社')+card(tag('送れない','ng'),s.ng,'社');
+ $('#sumnote').textContent=$('#onlyOk').checked&&s.ng?'フォームが無い会社は、いまは表示していません。':'';
+ $('#sum2').innerHTML=card('自動で確かめた',s.auto,'件')+card('候補を含む',s.cand,'件')+card('見つからず',s.missing,'件')+card('公式のページを探す前',s.official,'件');
+ const rank={ok:0,warn:1,ng:2,'':3};let rows=all.map(r=>({r,v:verdict(r)}));if($('#onlyOk').checked)rows=rows.filter(x=>x.v.k=='ok'||x.v.k=='warn');rows.sort((a,b)=>rank[a.v.k]-rank[b.v.k]);
+ const wc={};rows.forEach(({v})=>{if(v.why)wc[v.why]=(wc[v.why]||0)+1});const shared=new Map();rows.forEach(({v})=>{if(v.why&&wc[v.why]>1&&!shared.has(v.why))shared.set(v.why,v)});
+ $('#legend').hidden=!shared.size;$('#legend').innerHTML='<b style="color:var(--ink)">表示の意味</b>'+[...shared.values()].map(v=>`<div>${tag(v.t,v.k)}${esc(v.why)}</div>`).join('');
+ $('#res').innerHTML='<tr><th style="width:30%">会社</th><th style="width:30%">状態</th><th style="width:20%">開いて確かめる</th><th style="width:20%">送らない</th></tr>'+(rows.length?rows.map(({r,v},i)=>{const form=r['問い合わせフォームURL 無ければメール']||'',mail=r['メールアドレス']||(form.startsWith('http')?'':form);
+  return `<tr><td><b>${esc(r['企業名'])}</b><div class="why">${esc(r['業種'])}</div><details class="dt"><summary>くわしく</summary><div>取得元: ${esc(r['取得元'])}<br>メール: ${esc(mail||'なし')}<br>メモ: ${esc(plain(r['判定メモ']))||'なし'}</div></details></td><td>${tag(v.t,v.k)}${v.why&&wc[v.why]==1?`<div class="why">${esc(v.why)}</div>`:''}</td><td>${lk(r['HP URL'],'ホームページを開く')}<br>${lk(form,'フォームを開く')}</td><td><button class="btn sub sm ngb" data-i="${i}" type="button">送らない</button>${form&&/^https?:/.test(form)?`<br><button class="btn sub sm manb" data-i="${i}" type="button" style="margin-top:6px" title="フォームを開き、入れられる欄だけ自動で入れます。送信ボタンは押しません">自分で送る</button>`:''}</td></tr>`}).join(''):'<tr><td colspan="4">表示できる会社がありません。上の、フォームがある会社だけ表示、を外すと、ほかの会社も見えます。</td></tr>');
+ document.querySelectorAll('.manb').forEach(b=>b.onclick=async()=>{const x=rows[+b.dataset.i].r;if(!confirm(x['企業名']+' のフォームを別の画面で開き、入れられる欄だけ自動で入れます。\n送信ボタンは押しません。中身を確かめて、ご自分で送ってください。よろしいですか'))return;const r=await post('/api/manual',{file:$('#files').value,name:x['企業名']});if(r.error)return resNote(r.error);if(!r.started)resNote('いまほかの処理が動いています。終わってから押します');else{wasRun=true;poll()}});
+ document.querySelectorAll('.ngb').forEach(b=>b.onclick=async()=>{const x=rows[+b.dataset.i].r;const form=x['問い合わせフォームURL 無ければメール']||'';
+  const hostOf=v=>{try{return new URL(v).hostname.replace(/^www\./,'')}catch(e){return ''}};const host=hostOf(x['HP URL']||'');
+  const same=host?RESROWS.filter(y=>y!==x&&hostOf(y['HP URL']||'')==host).map(y=>y['企業名']):[];
+  if(!confirm(x['企業名']+' を送らない会社に入れます。'+(host?'ホームページ（'+host+'）ごと入れるので、':'')+(same.length?'同じホームページの '+same.length+' 社（'+same.slice(0,3).join('、')+(same.length>3?' ほか':'')+'）も送らない会社になります。':'')+'この画面の下の、送らない会社に入れたもの、から、あとで戻せます。よろしいですか'))return;
+  const res=await post('/api/ng',{hp:x['HP URL']||'',form:form,name:x['企業名']});if(res.error)return resNote(res.error);loadRes()});
+ ngList();portalList();banners()}
+function resNote(t){$('#sumnote').textContent=t;$('#sumnote').style.color='var(--danger-ink)';setTimeout(()=>{$('#sumnote').style.color=''},8000)}
+async function portalList(){const r=await J('/api/portals');if(!r||r.error)return;const box=$('#portalBox');if(!box)return;box.innerHTML=r.length?('<div class="why" style="margin:6px 0 2px">登録済みポータル（使うものにチェックすると、上のURL欄と合わせて集めます）</div>'+r.map(p=>`<label style="display:inline-flex;gap:6px;align-items:center;margin:2px 10px 2px 0;font-weight:400"><input type="checkbox" class="portalChk" value="${esc(p.url)}">${esc(p.name||p.url)}<button class="btn sub sm portalDel" data-u="${esc(p.url)}" type="button">削除</button></label>`).join('')):'';document.querySelectorAll('.portalDel').forEach(b=>b.onclick=async()=>{await post('/api/portals',{delete:1,url:b.dataset.u});portalList()});const add=$('#portalAdd');if(add)add.onclick=async()=>{const r2=await post('/api/portals',{name:$('#portalName').value,url:$('#portalUrl').value});if(r2.error)return alert(r2.error);$('#portalName').value='';$('#portalUrl').value='';portalList()}}
+async function ngList(){const r=await J('/api/ngscreen');if(r.error)return;$('#nglist').innerHTML=r.length?r.map((l,i)=>`<div style="margin:6px 0;color:var(--ink)">${esc(l.split('#')[0].trim().replace(/^@/,''))} <span class="why">${esc(l.split('「送らない」')[1]||'')}</span> <button class="btn sub sm ngu" data-i="${i}" type="button">戻す</button></div>`).join(''):'<div class="why">まだありません</div>';document.querySelectorAll('.ngu').forEach(b=>b.onclick=async()=>{const res=await post('/api/ng/undo',{line:r[+b.dataset.i]});if(res.error)return resNote(res.error);loadRes()})}
+$('#files').onchange=loadRes;$('#onlyOk').onchange=loadRes;$('#dl').onclick=async()=>{const f=$('#files').value;if(!f)return;const r=await fetch('/download?file='+encodeURIComponent(f),{headers:{'X-Token':TOKEN}});const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download=f;a.click()};
+// ---- 送る: 状態はサーバーが返す send_state(s0〜s7・s6a)で決め、画面はそれを描くだけ ----
+const S={flash:'',err:'',editSender:false,editMsg:false,msgInd:'default',parts:null,greet:true,opener:true,T:null,tLoading:false,read:false,dirty:'',condOpen:false,wait:'',leave7:false,smaxInit:false,shotUrl:'',shotFor:''};
+const isSF=f=>FIELDS.includes(f);
+const probs=()=>Array.isArray(META.problems)?META.problems:[];
+const senderProbs=()=>probs().filter(p=>p.field===''||isSF(p.field));
+const msgProbs=()=>probs().filter(p=>p.field!==''&&!isSF(p.field));
+function sState(){let st=META.send_state||'s0';if(S.dirty&&(st=='s4'||st=='s5'))st='s3';if(S.leave7&&st=='s7')st='s3';return st}
+function show(sel,on){const e=$(sel);if(e)e.hidden=!on}
+function errHtml(r){let h=esc(r&&r.error||'うまくいきませんでした');const f=r&&r.field;
+ if(f&&isSF(f))h+=` <button class="lnk" data-go="${esc(f)}" type="button">${esc(f)}を入れる</button>`;
+ else if((r&&r.fix)=='message'||(f&&f.startsWith('文面')))h+=` <button class="lnk" data-gomsg="${esc(r.industry||'')}" type="button">文面を直す</button>`;
+ else if((r&&r.fix)=='list')h+=` <button class="lnk" data-gob="1" type="button">結果を見るで選び直す</button>`;
+ else if((r&&r.fix)=='sender')h+=` <button class="lnk" data-go="" type="button">送信元を直す</button>`;
+ return h}
+function fieldLinks(list){const u=[...new Set(list.map(p=>p.field).filter(Boolean))];return u.map(f=>`<button class="lnk" data-go="${esc(f)}" type="button">${esc(f)}</button>`).join('・')}
+function lim(){return META.limits||null}
+function smaxCheck(){const L=lim(),raw=String($('#smax').value||'').trim().replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)),n=/^\d+$/.test(raw)?parseInt(raw,10):NaN,top=L?L.per_run:NaN;
+ if(!(n>=1)||(L&&n>top))return {ok:false,msg:L?`1〜${top}社の数を入れてください。きょうはあと${L.left_today}社です。`:'1以上の数を入れてください。'};
+ return {ok:true,n,cap:L&&n>L.left_today?L.left_today:n}}
+function limitsText(n){const L=lim();if(!L)return '';const sec=L.sec_per_company||[],h=L.hours||[];const m=(x)=>Math.max(1,Math.ceil(n*x/60));
+ return `1回に送れるのは${L.per_run}社まで。きょうはあと${L.left_today}社（1日${L.per_day}社まで）。`+(h.length==2?`送れる時間は平日${h[0]}時〜${h[1]}時。`:'')+(sec.length==2&&n>0?`1社に${sec[0]}〜${sec[1]}秒かかるので、${n}社で約${m(sec[0])}〜${m(sec[1])}分。`:'')}
+function initSmax(){if(S.smaxInit||!META.send_state)return;$('#smax').value=META.last_max||(META.first_time?3:20);if(lim())$('#smax').max=lim().per_run;S.smaxInit=true}
+function renderCond(st){const v=smaxCheck(),L=lim(),n=v.ok?v.n:0;
+ $('#smaxNote').textContent=META.first_time?'はじめての送信です。まず3社から始めると安心です。入力がうまくいかなかったフォームは、送信ボタンを押さずに、自分で送る会社に回します。':(v.ok&&n==META.last_max?`前回と同じ${n}社`:'');
+ $('#smaxErr').hidden=v.ok&&!(L&&n>L.left_today);$('#smaxErr').textContent=!v.ok?v.msg:(L&&n>L.left_today?(L.left_today>0?`きょうはあと${L.left_today}社なので、${L.left_today}社まで送ります。`:'きょうはもう1日に送れる数に達しました。あした以降に送ります。'):'');
+ $('#limitsLine').textContent=limitsText(n||0);
+ const full=st=='s3'||S.condOpen;show('#condEdit',full);show('#condSum',!full);
+ $('#condSum').innerHTML=`<span class="k">送る条件</span><span class="v">${esc(String($('#sfile').value||'リストがありません').replace(/^フォームリスト_/,'').replace(/\.csv$/,''))} ／ 1回に${esc($('#smax').value)}社</span><button class="lnk" id="condOpenBtn" type="button">変える</button>`;
+ const cb=$('#condOpenBtn');if(cb)cb.onclick=()=>{S.condOpen=true;renderSend()}}
+function sig1(){return String((META.sender||{})['署名']||'').split('\n').map(x=>x.trim()).filter(Boolean)[0]||''}
+function renderSumLines(st){const s=META.sender||{};
+ const plan=st=='s4'||st=='s5';const parts=plan?[[s['会社名'],''],[s['氏名'],''],[s['メール'],''],[s['電話'],'']]:[[s['会社名'],''],[s['氏名'],''],[s['メール'],'メール'],[s['フリガナ'],'フリガナ'],[sig1(),'署名の1行目']];
+ $('#senderLine').innerHTML='<span class="k">送信元</span><span class="v">'+parts.filter(p=>p[0]).map(p=>'<span class="nw">'+(p[1]?esc(p[1])+' ':'')+esc(p[0])+'</span>').join(' ／ ')+'</span><button class="lnk" data-go="" type="button">直す</button>';
+ const ms=msgSummary();$('#msgLine').innerHTML=`<span class="k">文面</span><span class="v">標準 1本`+(ms.length?` ／ 業種ごとの文面 ${ms.length}本（${esc(ms[0])}${ms.length>1?' ほか':''}）`:'')+`</span><button class="lnk" data-gomsg="" type="button">見る・直す</button>`}
+function msgSummary(){const s=META.message_summary;if(s&&Array.isArray(s.industries))return s.industries;const mi=META.message_info||{industries:{}};return Object.keys(mi.industries||{}).filter(n=>hasOwn(n))}
+function hasOwn(n){const s=META.message_summary;if(s&&Array.isArray(s.industries))return s.industries.includes(n);const mi=META.message_info||{industries:{}};return mi.industries&&mi.industries[n]=='専用'||!!(mi.patterns&&mi.patterns[n])}
+function markSender(){FIELDS.forEach(k=>{const e=$('#e_'+k),f=$('#f_'+k);if(e){e.hidden=true;e.textContent=''}if(f)f.classList.remove('bad')});
+ senderProbs().forEach(p=>{const e=$('#e_'+p.field),f=$('#f_'+p.field);if(e){const t=String(p.text||'').replace(/^送信元の「[^」]*」が/,'');e.hidden=false;e.textContent=(e.textContent?e.textContent+' ':'')+t}if(f)f.classList.add('bad')})}
+function band(html,btns,extra){$('#now_c').innerHTML=html+(S.err?`<p class="berr" role="alert">${S.err}</p>`:'')+(btns?`<div class="nowact">${btns}</div>`:'')+(extra||'')}
+const B=(id,t,cls)=>`<button class="btn ${cls||'big'}" id="${id}" type="button">${esc(t)}</button>`;
+function on(id,fn){const e=$('#'+id);if(e)e.onclick=fn}
+function renderSend(){if(!$('#now_c'))return;if(!META.send_state){band(NW+'読み込んでいます。少し待ちます。');return}
+ const st=sState(),j=JOB,fl=S.flash?esc(S.flash):'';
+ const prep=j.running&&j.name=='確認',sending=j.running&&j.name=='本番送信';
+ initSmax();$('#now_c').classList.toggle('stick',(st=='s4'||st=='s5')&&!j.running);
+ ['#c_cond','#c_sum','#senderEdit','#msgEdit','#c_plan','#c_run','#condMore','#aiOpen','#aiSend'].forEach(x=>show(x,false));show('#senderLine',!S.editSender);show('#msgLine',!S.editMsg);show('#senderClose',!(st=='s1'||st=='s2'&&senderProbs().length));
+ show('#c_main',st!='s0');
+ if(j.running&&!['確認','本番送信'].includes(j.name)){band(`${NW}「${esc(j.name)}」が動いています。終わってから送る準備ができます。`);return}
+ if(S.wait){band(NW+esc(S.wait));showCommon(st);return}
+ if(st=='s0'){band(NX+'先にリストを作ります。探す画面で探すと、ここで送れるようになります。',B('mainBtn','探すへ'));on('mainBtn',()=>goto('a'));return}
+ if(st=='s1'||st=='s2'){const sp=senderProbs(),mp=msgProbs();
+  if(sp.length||st=='s1'){S.editSender=true;show('#senderEdit',true);markSender();
+   const lead=fl&&/^保存しました/.test(S.flash)?'保存しました。まだ送れません: '+esc((sp[0]||{}).text||''):(st=='s1'&&META.first_time?'最初の1回だけ、送信元（相手に見える名前と連絡先）を入れます。':esc((sp[0]||{}).text||'送信元に足りない欄があります。'));
+   const fl2=fieldLinks(sp);band(NX+lead+(fl2?`<span class="hint">直す欄: ${fl2}</span>`:'<span class="hint">下の欄を入れて、保存して次へを押します。</span>'),B('mainBtn','保存して次へ'));on('mainBtn',saveSender);
+   if(mp.length){show('#c_sum',true);show('#senderLine',false);show('#msgLine',true);renderSumLines(st)}return}
+  const p=mp[0]||{};show('#c_sum',true);show('#senderLine',true);show('#msgLine',!S.editMsg);renderSumLines(st);
+  if(S.editMsg){show('#msgEdit',true);band(NX+(fl?fl+' ':'')+esc(p.text||'文面に直すところがあります。'),B('mainBtn','この文面を保存'));on('mainBtn',saveMsg)}
+  else{band(NX+(fl?fl+' ':'')+esc(p.text||'文面に直すところがあります。'),B('mainBtn','文面を直す'));on('mainBtn',()=>openMsg(p.industry||'default'))}
+  return}
+ if(st=='s3'){show('#c_cond',!S.editMsg&&!S.editSender);show('#c_sum',true);show('#condMore',true);show('#aiOpen',true);renderCond(st);showEditors();renderSumLines(st);
+  if(prep){band(NW+'送る内容を作っています。少しかかります。まだ送りません。');return}
+  const v=smaxCheck();band(NX+(fl?fl+' ':'')+'「送る内容を出す」を押します。まだ送りません。',B('mainBtn',v.ok?`送る内容を出す（${v.cap}社まで）`:'送る内容を出す'));
+  const mb=$('#mainBtn');if(!v.ok)mb.classList.add('wait');mb.onclick=()=>doPreview(false);return}
+ if(st=='s4'||st=='s5'){show('#c_cond',true);show('#c_sum',true);show('#msgLine',false);show('#senderLine',!S.editSender);renderCond(st);showEditors();renderSumLines(st);
+  if(!S.T){band(NW+'送る内容を読み込んでいます。');loadPlan();return}
+  const T=S.T,n=(T.sendable||[]).length,m=(T.skipped||[]).length;show('#c_plan',true);show('#aiSend',n>0);
+  if(!n){band(NX+`送れる会社がありません。${m}社は送りません（理由は下）。`,B('mainBtn','結果を見るで選び直す'));on('mainBtn',()=>goto('b'));return}
+  const head=(fl?fl+' ':'')+(m?`${n}社に送れます。${m}社は送りません（理由は下）。`:`${n}社に送れます。`);
+  const how=T.window?`<span class="hint">${esc(T.window)}</span>`:`<span class="hint">下の文を読み、良ければ読みましたにチェックを入れます。</span>`;
+  band(NX+head+how,B('mainBtn',`この${n}社に送る`));const mb=$('#mainBtn');if(!S.read||T.window)mb.classList.add('wait');mb.onclick=doSend;return}
+ if(st=='s6'||st=='s6a'||st=='s7'){show('#c_run',true);renderRun(st,sending);return}
+ band(NX+'画面を読み込み直します。');}
+function showEditors(){show('#senderEdit',S.editSender);if(S.editSender)markSender();show('#msgEdit',S.editMsg)}
+function showCommon(st){if(st=='s4'||st=='s5'){show('#c_plan',!!S.T);show('#c_cond',true);show('#c_sum',true);show('#msgLine',false)}if(st=='s3'){show('#c_cond',true);show('#c_sum',true)}}
+function markDirty(what){const st=META.send_state;if(st=='s4'||st=='s5'){S.dirty=what;S.flash=what+'を変えたので、もう一度送る内容を出します。';S.read=false}renderSend()}
+['#sfile','#supp'].forEach(x=>$(x).addEventListener('change',()=>markDirty(x=='#sfile'?'送るリスト':'くわしい条件')));
+$('#smax').addEventListener('input',()=>{const st=META.send_state;if(st=='s4'||st=='s5')markDirty('1回に送る社数');else renderSend()});
+// 画面の中の「欄へ移る」「文面を直す」「選び直す」の印(帯・一覧・送らない会社の理由から押される)
+document.addEventListener('click',e=>{const t=e.target.closest('[data-go],[data-gomsg],[data-gob]');if(!t)return;
+ if(t.hasAttribute('data-gob')){goto('b');return}
+ if(t.hasAttribute('data-gomsg')){openMsg(t.dataset.gomsg||S.msgInd||'default');return}
+ S.editSender=true;S.editMsg=false;renderSend();const f=t.dataset.go,el=f?$('#s_'+f):$('#s_会社名');if(el){el.scrollIntoView({block:'center'});el.focus()}});
+function renderSenderForm(){const s=META.sender||{};
+ $('#sender').innerHTML=SF.map(k=>`<div class="fld" id="f_${k}"><label for="s_${k}">${k}${SF_OPT[k]?`<span class="opt">（${SF_OPT[k]}）</span>`:''}</label><input type="text" id="s_${k}" value="${esc(k=='件名'||k=='資料URL'?toMarks(s[k]):s[k])}" autocomplete="off">${SF_HINT[k]?`<p class="hint">${SF_HINT[k]}</p>`:''}<p class="ferr" id="e_${k}" hidden></p></div>`).join('');
+ $('#s_署名').value=s['署名']||''}
+$('#sigSample').onclick=()=>{const g=k=>$('#s_'+k).value.trim();const lines=[[g('会社名'),g('氏名')].filter(Boolean).join(' '),[g('郵便番号')?'〒'+g('郵便番号'):'',g('住所')].filter(Boolean).join(' '),g('電話')?'電話 '+g('電話'):'',g('メール')?'メール '+g('メール'):'','今後このようなご案内が不要でしたら、このアドレスに不要とご返信ください。以後お送りしません。'].filter(Boolean);
+ if($('#s_署名').value.trim()&&!confirm('いまの署名を、見本で置き換えます（保存するまでは元に戻せます）。よろしいですか'))return;$('#s_署名').value=lines.join('\n');$('#s_署名').focus()};
+$('#senderClose').onclick=()=>{S.editSender=false;renderSend()};
+async function saveSender(){S.err='';S.flash='';const before=sState(),d={};FIELDS.forEach(k=>d[k]=k=='件名'||k=='資料URL'?fromMarks($('#s_'+k).value):$('#s_'+k).value);
+ const r=await post('/api/sender',d);if(r.error){S.err=errHtml(r);renderSend();return}
+ await refreshMeta(true);const left=Array.isArray(r.problems)?r.problems:senderProbs();
+ if(left.length){S.editSender=true;S.flash='保存しました。'}else{S.editSender=false;S.flash=(before=='s4'||before=='s5')?'送信元を直したので、もう一度送る内容を出します。':'保存しました。'}
+ renderSend();window.scrollTo(0,0)}
+$('#saveSender').onclick=saveSender;
+// 文面: 宛名の行・会社ごとの書き出し・署名は「自動で入る部分」として欄の外に出し、本文だけを直す。保存するときに元の形のファイルへ組み立てる
+const MK={'企業名':'相手の会社名','書き出し':'会社ごとの書き出し','資料URL':'資料のリンク','署名':'署名','識別':'会社ごとの印'};
+function toMarks(t){return String(t||'').replace(/\{([^{}\n]{1,20})\}/g,(a,k)=>'《'+(MK[k]||k)+'》')}
+function fromMarks(t){const R={};Object.entries(MK).forEach(([k,v])=>R[v]=k);return String(t||'').replace(/《([^《》\n]{1,20})》/g,(a,k)=>R[k]?'{'+R[k]+'}':a)}
+function chips(t){return esc(t).replace(/\{([^{}\n]{1,20})\}/g,(a,k)=>`<span class="mk">${esc(MK[k]=='資料のリンク'?'会社ごとの資料のリンク':(MK[k]||k))}</span>`)}
+function splitMsg(raw){const mp=META.message_parts&&META.message_parts[S.msgInd];
+ if(mp)return {ok:mp.layout_ok!==false,greet:!!mp.greeting,greetLine:mp.greeting_line||'',opener:!!mp.opener,body:toMarks(mp.body||'')};
+ const lines=String(raw||'').replace(/\r\n/g,'\n').split('\n');let i=0,j=lines.length-1;while(i<lines.length&&!lines[i].trim())i++;while(j>=0&&!lines[j].trim())j--;
+ if(j<0||lines[j].trim()!='{署名}')return {ok:false,greet:false,greetLine:'',opener:false,body:toMarks(lines.slice(Math.max(i,0),j+1).join('\n'))};
+ let k=i;const greet=lines[i]&&/\{企業名\}/.test(lines[i])&&lines[i].trim().length<=40&&i<j;let greetLine='';if(greet){greetLine=lines[i].trim();k=i+1;while(k<j&&!lines[k].trim())k++}
+ const opener=k<j&&lines[k].trim()=='{書き出し}';const bs=opener?k+1:k;
+ return {ok:true,greet,greetLine,opener,body:toMarks(lines.slice(bs,j).join('\n').replace(/^\n+|\n+$/g,''))}}
+function assemble(){const p=S.parts||{ok:false},b=fromMarks($('#mtext').value).replace(/^\n+|\s+$/g,'');
+ if(!p.ok)return b+'\n';return (S.greet?(p.greetLine||'{企業名} ご担当者さま')+'\n\n':'')+(S.opener?'{書き出し}\n\n':'')+b+'\n\n{署名}\n'}
+function rawMsg(k){const mi=META.message_info||{};const m=META.messages||{};return m[k]??(mi.pattern_texts&&mi.pattern_texts[k])??m.default??''}
+function renderMsgOptions(){const mi=META.message_info||{industries:{},orphans:[]};const orph=(mi.orphans||[]);
+ const names=['default',...(META.industries||[]),...orph.map(o=>o.name)];
+ $('#mind').innerHTML=names.map(n=>{const o=orph.find(x=>x.name==n);const t=n=='default'?'標準（業種ごとの文面が無い業種に使います）':n+(o?'（古い業種名。いまは使われません）':hasOwn(n)?'（業種ごとの文面）':'（標準を使う）');return `<option value="${esc(n)}">${esc(t)}</option>`}).join('');
+ if(names.includes(S.msgInd))$('#mind').value=S.msgInd}
+function showMsg(){const k=S.msgInd=$('#mind').value,mi=META.message_info||{orphans:[]};const o=(mi.orphans||[]).find(x=>x.name==k),own=k!='default'&&hasOwn(k);
+ S.parts=splitMsg(rawMsg(k));S.greet=S.parts.greet;S.opener=S.parts.opener;$('#mtext').value=S.parts.body;
+ $('#mstate').textContent=k=='default'?'この文面は、業種ごとの文面が無い業種すべてに使います。':o?'古い業種名で作った文面です。いまの業種の分類にこの名前は無いので、送るときには使われません。':own?'この業種には、業種ごとの文面を使います。':'この業種には、標準の文面を使います。直して保存すると、この業種だけの文面になります。';
+ const mp=msgProbs().filter(p=>(p.industry||'default')==k);$('#mprob').hidden=!mp.length&&S.parts.ok;$('#mprob').textContent=mp.map(p=>p.text).join(' ')+(S.parts.ok?'':' 自動で入る部分の位置が、ほかの文面と違います。印のところは送るときに置き換わります。');
+ $('#delMsg').hidden=!(own&&(META.messages||{})[k]!=null);$('#moveMsg').hidden=!(o&&o.to);$('#moveMsg').textContent=o&&o.to?`この文面を ${o.to} の文面にコピーする`:'';
+ renderAuto();renderSample()}
+function renderAuto(){const p=S.parts||{};show('#greetRow',!!p.ok);show('#openRow',!!p.ok);
+ $('#greetView').innerHTML=S.greet?chips(p.greetLine||'{企業名} ご担当者さま'):'<span class="mut">宛名の行は入れません</span>';$('#greetToggle').textContent=S.greet?'この行を入れない':'宛名の行を入れる';
+ $('#openView').innerHTML=S.opener?chips('{書き出し}')+' 送る内容の一覧で、会社ごとに直せます':'この文面には、会社ごとの書き出しが入りません。 <button class="lnk" id="openerAdd" type="button">書き出しを入れる</button>';on('openerAdd',()=>{S.opener=true;renderAuto()});
+ const sg=String((META.sender||{})['署名']||'');$('#sigView').textContent=sg.trim()?sg:'送信元の署名が、まだ入っていません。'}
+async function renderSample(){const k=S.msgInd;$('#sampleNote').textContent='見本を作っています。';
+ const r=await post('/api/render_sample',{industry:k,template_parts:{greeting:S.greet,opener:S.opener,body:fromMarks($('#mtext').value),text:assemble()}});
+ if(k!=S.msgInd)return;if(r.error){$('#sampleNote').innerHTML=errHtml(r);$('#sampleView').textContent='';return}
+ $('#sampleNote').textContent=`見本の会社: ${r.company_label||''}。保存するたびに作り直します。`;$('#sampleView').textContent='件名: '+(r.subject||'')+'\n\n'+(r.text||'')}
+function openMsg(k){S.editMsg=true;S.editSender=false;S.msgInd=k||'default';renderMsgOptions();showMsg();renderSend();const e=$('#msgEdit');if(e)e.scrollIntoView({block:'start'})}
+$('#mind').onchange=()=>{$('#msgSaved').textContent='';showMsg()};
+$('#greetToggle').onclick=()=>{S.greet=!S.greet;renderAuto()};
+$('#toSender').onclick=()=>{S.editMsg=false;S.editSender=true;renderSend();const e=$('#s_会社名');if(e){e.scrollIntoView({block:'center'});e.focus()}};
+$('#msgClose').onclick=()=>{S.editMsg=false;renderSend()};
+async function saveMsg(){S.err='';const k=S.msgInd,before=sState();const r=await post('/api/message',{[k]:assemble()});
+ if(r.error){$('#mprob').hidden=false;$('#mprob').innerHTML=errHtml(r);S.err=errHtml(r);renderSend();return}
+ await refreshMeta(true);S.flash=(before=='s4'||before=='s5')?'文面を直したので、もう一度送る内容を出します。':'文面を保存しました。';$('#msgSaved').textContent='保存しました。';
+ renderMsgOptions();showMsg();renderSend()}
+$('#saveMsg').onclick=saveMsg;
+$('#moveMsg').onclick=async()=>{const k=S.msgInd;const o=((META.message_info||{}).orphans||[]).find(x=>x.name==k);if(!o||!o.to)return;const r=await post('/api/message/move',{from:k,to:o.to});if(r.error){$('#msgSaved').innerHTML=errHtml(r);return}await refreshMeta(true);S.msgInd=o.to;renderMsgOptions();showMsg();$('#msgSaved').textContent=r.note||''};
+$('#delMsg').onclick=async()=>{const k=S.msgInd;if(!confirm(k+' の業種ごとの文面をやめて、標準の文面を使うようにします。前の文面は残してあります。よろしいですか'))return;const r=await post('/api/message/delete',{name:k});if(r.error){$('#msgSaved').innerHTML=errHtml(r);return}await refreshMeta(true);renderMsgOptions();showMsg();$('#msgSaved').textContent=r.note||''};
+$('#mkSample').onclick=async()=>{const r=await post('/api/sample',{material:$('#mat').value});if(r.error){$('#matNote').innerHTML=errHtml(r);return}if($('#mtext').value.trim()&&!confirm('いまの本文を、たたき台で置き換えます（保存するまでは元に戻せます）。よろしいですか'))return;
+ const p=splitMsg(r.text);$('#mtext').value=p.ok?p.body:toMarks(r.text);$('#matNote').textContent='たたき台を入れました。拾えたもの: 題 '+(r.title||'なし')+'・箇条書き'+(r.points||[]).length+'個・URL'+(r.url?'あり':'なし')+'。読んで直してから、この文面を保存を押します。'};
+const OPSRC={title:'ホームページの題から作った下書き',general:'会社名と業種から作った下書き',ai:'AI（Claude）が書き直した下書き',person:'あなたが直した書き出し'};
+async function loadPlan(){if(S.tLoading)return;S.tLoading=true;
+ const r=await J('/api/targets?file='+encodeURIComponent($('#sfile').value)+'&max='+encodeURIComponent($('#smax').value)+'&supp='+($('#supp').checked?1:0));S.tLoading=false;
+ if(r.error){S.err=errHtml(r);S.T={sendable:[],skipped:[],commons:[]};}else S.T=r;renderPlan();renderSend()}
+function renderPlan(){const T=S.T||{},sd=T.sendable||[],sk=T.skipped||[],cm=T.commons||[];let h='';
+ if(sd.length){h+='<h3 class="eh">届く文</h3><p class="hint">違うのは会社名と書き出しだけです。共通の文は1回読めば足ります。</p>';
+  h+=cm.map(c=>`<div class="common"><p class="ch">${esc(c.template_label)}の文面 ${c.count}社</p><div class="msgbody">${chips('件名: '+(c.subject||''))}\n\n${chips(c.text_with_marks||'')}</div></div>`).join('');
+  h+='<h3 class="eh">会社ごとに違うところ</h3><p class="hint">書き出しは、ホームページに書いてあることだけから作った下書きです。違えば直せます。</p>';
+  h+='<div class="tw"><table class="rt op"><tr><th style="width:20%">会社</th><th style="width:15%">使う文面</th><th>書き出し（直せます）</th><th style="width:12%">全文</th><th style="width:12%">フォーム</th></tr>'+sd.map((x,i)=>`<tr><td><b>${esc(x.name)}</b><div class="why">${esc(x.industry||'業種なし')}</div></td><td>${esc(x.template_label||'')}</td><td><textarea class="opin" data-i="${i}" data-n="${esc(x.name)}" aria-label="${esc(x.name)}の書き出し">${esc(x.opener||'')}</textarea><div class="why">${esc(OPSRC[x.opener_source]||'')}</div></td><td><button class="lnk fullbtn" data-i="${i}" type="button">全文を開く</button></td><td>${lk(x.form,'フォームを開く')}</td></tr><tr class="fullrow" id="full${i}" hidden><td colspan="5"><div class="msgbody">${esc('件名: '+(x.subject||'')+'\n\n'+(x.text||''))}</div></td></tr>`).join('')+'</table></div>';
+  h+='<div class="actions"><button class="btn sub" id="saveOp" type="button">書き出しを保存</button> <span class="hint" id="opNote"></span></div>'}
+ if(sk.length){h+=`<h3 class="eh">送らない会社 ${sk.length}社 <span class="opt">送った会社は自動で外します</span></h3><div class="tw"><table class="rt"><tr><th style="width:30%">会社</th><th>送らない理由</th></tr>`+sk.map(x=>`<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.text||'')}${x.fix=='sender'?' <button class="lnk" data-go="" type="button">送信元を直す</button>':x.fix=='message'?` <button class="lnk" data-gomsg="${esc(x.industry||'')}" type="button">文面を直す</button>`:''}</td></tr>`).join('')+'</table></div>'}
+ if(sd.length){h+=`<label class="check readck"><input type="checkbox" id="readok"${S.read?' checked':''}><span>届く文と、会社ごとに違うところを読みました</span></label><p class="hint">送ると画面の外に確認が出ます（押し間違いを防ぐため）。`+(META.first_time?'はじめての方は、1社目に入れた画面を見てから送ります。':'')+'</p>'}
+ $('#c_plan').innerHTML=h;
+ document.querySelectorAll('.fullbtn').forEach(b=>b.onclick=()=>{const r=$('#full'+b.dataset.i);r.hidden=!r.hidden;b.textContent=r.hidden?'全文を開く':'全文を閉じる'});
+ on('saveOp',saveOp);const rk=$('#readok');if(rk)rk.onchange=()=>{S.read=rk.checked;if(S.read&&S.err)S.err='';renderSend();const mb=$('#mainBtn');if(S.read&&mb){const r=mb.getBoundingClientRect();if(r.top<0||r.bottom>innerHeight)mb.scrollIntoView({block:'center',behavior:'smooth'})}}}
+async function saveOp(){const T=S.T||{},ops={};let empty=0;document.querySelectorAll('.opin').forEach(t=>{const x=(T.sendable||[])[+t.dataset.i];if(!x)return;const v=t.value.trim();if(v==(x.opener||'').trim())return;if(!v){empty++;return}ops[x.name]=v});
+ if(empty){$('#opNote').textContent='書き出しを空にはできません。消した欄に1文入れてから保存します。';return}
+ if(!Object.keys(ops).length){$('#opNote').textContent='直した書き出しはありません。';return}
+ S.err='';const r=await post('/api/openings',{file:$('#sfile').value,openings:ops,source:'person'});if(r.error){$('#opNote').innerHTML=errHtml(r);return}
+ S.flash='書き出しを直したので、送る内容を出し直しています。';S.read=false;doPreview(true)}
+async function doPreview(auto){S.err='';if(!auto)S.flash='';const v=smaxCheck();if(!v.ok){S.err=esc(v.msg);renderSend();$('#smax').focus();return}
+ S.wait='送る内容を作っています。少しかかります。まだ送りません。';renderSend();
+ const r=await post('/api/send',{file:$('#sfile').value,max:v.n,supp:$('#supp').checked,preview:true});S.wait='';
+ if(r.error){S.err=errHtml(r);renderSend();return}
+ if(!r.started){S.err='いまほかの処理が動いています。終わってから押します。';renderSend();return}
+ S.dirty='';S.condOpen=false;S.leave7=false;S.T=null;S.read=false;wasRun=true;poll()}
+function curKey(){for(let i=JOB.lines.length-1;i>=0;i--){const m=/確認番号: (\S+)/.exec(JOB.lines[i]);if(m)return m[1]}return ''}
+async function askApprove(){const T=S.T||{};const r=await post('/api/approve',{key:T.key||T.key_short||curKey()});if(r.error)return {err:r};return {ok:!!r.ok}}
+async function doSend(){const T=S.T||{};S.err='';S.flash='';
+ if(!S.read){S.err='先に、下の、読みました、にチェックを入れます。';renderSend();const c=$('#readok');if(c){c.scrollIntoView({block:'center'});c.focus()}return}
+ if(T.window){S.err=esc(T.window);renderSend();return}
+ S.wait='画面の外に確認が出ています。内容を読んで「はい」か「いいえ」を押します。';renderSend();
+ const a=await askApprove();S.wait='';
+ if(a.err){S.err=errHtml(a.err);renderSend();return}
+ if(!a.ok){S.flash='送りませんでした（確認で「いいえ」を押したため）。';S.read=false;renderPlan();renderSend();return}
+ const r=await post('/api/send',{file:$('#sfile').value,max:smaxCheck().n,supp:$('#supp').checked,send:true,confirm:'送信'});
+ if(r.error||!r.started){await post('/api/approve/cancel',{});S.err=r.error?errHtml(r):'いまほかの処理が動いています。終わってから押します。';renderSend();return}
+ S.T=null;S.read=false;wasRun=true;poll()}
+$('#approve').onclick=async()=>{if(!S.read){$('#aiNote').textContent='先に、上の、読みました、にチェックを入れます。';return}$('#aiNote').textContent='画面の外に確認が出ています。';const a=await askApprove();$('#aiNote').innerHTML=a.err?errHtml(a.err):a.ok?'承認しました。AI に、送って、と伝えます。承認は1回の送信で使い切ります。':'承認しませんでした（確認で「いいえ」を押したため）。'};
+function cnt(){const c=META.counts||{};return {total:+c.total||0,done:+c.done||0,sent:+c.sent||0,check:+c.check||0,manual:+c.manual||0,stopped:+c.stopped||0,has:!!META.counts}}
+function renderRun(st,sending){const c=cnt(),L=lim()||{},sec=L.sec_per_company||[];const box=$('#c_run');
+ if(st=='s6'){const per=sec.length==2?`・1社${sec[0]}〜${sec[1]}秒`:'';
+  if(c.stopped>0){band(NW+'1社目で止めました。ほかの会社には送りません。終わるまで少し待ちます。',B('mainBtn','送信の記録を見る'));on('mainBtn',()=>goto('d'));box.innerHTML='';return}
+  band(NW+(c.has&&c.total?`${Math.min(c.done+1,c.total)}社目を送っています（全${c.total}社${per}）。このまま待ちます。`:'送っています。このまま待ちます。'),B('mainBtn','送信の記録を見る'));on('mainBtn',()=>goto('d'));
+  box.innerHTML=c.has&&c.total?`<div class="prog2"><div style="width:${Math.round(100*c.done/c.total)}%"></div></div><p>${c.done}／${c.total}社 終わりました。送れた ${c.sent}社 ／ 送れたか確かめる ${c.check}社 ／ 自分で送る ${c.manual}社</p><p class="hint">この画面を閉じても、送るのは続きます。</p>`:'<p class="hint">この画面を閉じても、送るのは続きます。</p>';return}
+ if(st=='s6a'){const f=JOB.first_look||META.first_look||{};
+  band(NX+`1社目（${esc(f.company||'')}）のフォームに、このように入れました。送信ボタンはまだ押していません。良ければ「このまま送る」を押します。`,B('mainBtn','このまま送る')+' '+B('stopBtn','送らずに止める','sub'));on('mainBtn',()=>firstLook(true));on('stopBtn',()=>firstLook(false));
+  const rows=(f.fields||[]).map(x=>`<tr><td style="width:30%">${esc(x.label)}</td><td style="white-space:pre-wrap">${esc(x.value)}</td></tr>`).join('');
+  if(!box.querySelector('#flshot')||S.shotFor!=f.shot){box.innerHTML=`<h3 class="eh">入れた値</h3><div class="tw"><table class="rt">${rows}</table></div><h3 class="eh">入れたあとの画面</h3><p class="hint" id="flleft"></p><img id="flshot" class="flshot" alt="1社目のフォームに入れたあとの画面">`;loadShot(f.shot)}
+  const dl=deadlineMs(f.deadline),left=$('#flleft');if(left){const s=Math.max(0,Math.round((dl-Date.now())/1000));left.textContent=dl?`何も選ばないと、あと${Math.floor(s/60)}分${s%60}秒で、送らずに止めます。`:'しばらく選ばれないときは、送らずに止めます。'}return}
+ band(NX+`送り終えました。送れた会社 ${c.sent}社（相手の画面で、送れたことを確かめた会社）。送れたか確かめる会社 ${c.check}社。自分で送る会社 ${c.manual}社。`,B('mainBtn','送信の記録を見る'));on('mainBtn',()=>goto('d'));
+ box.innerHTML=`<div class="sum"><div><span class="lb">${tag('送れた','ok')}</span><span class="nm"><b>${c.sent}</b>社</span></div><div><span class="lb">${tag('送れたか確かめる','warn')}</span><span class="nm"><b>${c.check}</b>社</span></div><div><span class="lb">${tag('自分で送る','warn')}</span><span class="nm"><b>${c.manual}</b>社</span></div></div>`+(c.stopped?`<p class="hint">1社目の確認で止めた会社が ${c.stopped}社あります。送っていません。</p>`:'')+'<div class="actions">'+(c.manual?'<button class="lnk" id="toManual" type="button">自分で送る会社の一覧を見る</button>　':'')+'<button class="lnk" id="next7" type="button">次の送る準備へ</button></div>';
+ on('toManual',()=>{HF='manual';goto('d')});on('next7',()=>{S.leave7=true;S.smaxInit=false;initSmax();renderSend();window.scrollTo(0,0)})}
+function deadlineMs(d){if(!d)return 0;if(typeof d=='number')return d<1e12?d*1000:d;const t=Date.parse(d);return isNaN(t)?0:t}
+async function loadShot(p){S.shotFor=p;if(!p)return;const url=String(p).startsWith('/')?p:'/api/shot?file='+encodeURIComponent(p);
+ try{const r=await fetch(url,{headers:{'X-Token':TOKEN}});if(!r.ok)throw 0;const u=URL.createObjectURL(await r.blob());const im=$('#flshot');if(im)im.src=u}catch(e){const im=$('#flshot');if(im)im.replaceWith(Object.assign(document.createElement('p'),{className:'hint',textContent:'画面の画像を読み込めませんでした。上の入れた値で確かめます。'}))}}
+async function firstLook(go){S.err='';const r=await post('/api/firstlook',{go});if(r.error){S.err=errHtml(r);renderSend();return}S.flash=go?'':'1社目で止めました。送っていません。';await refreshMeta(true)}
+// ---- 送信の記録 ----
+const RES={'送信済み':['送れた','ok'],'不明(要確認)':['送れたか確かめる','warn'],'入力エラー(要確認)':['送れたか確かめる（入力エラーの表示あり）','warn'],'送信試行':['送れたか確かめる（結果が分からない）','warn'],'要手動':['自分で送る','warn'],'お断り表示(送らない)':['お断りの表示があり、送らない','ng'],'試走OK':['送っていない記録','gray'],'1社目の確認で止めた':['1社目の確認で止めた（送っていない）','gray']};
+let HF='';
+function hcls(r){const k=r['結果']||'',m=r['メモ']||'';if(k=='送信済み')return 'sent';if(['不明(要確認)','入力エラー(要確認)','送信試行'].includes(k))return 'check';if(k=='要手動')return /差し込みの取り残し/.test(m)?'msg':'manual';return 'other'}
+async function hist(){const rows0=await J('/api/log');if(rows0.error)return;const lastOf={};rows0.forEach(r=>{lastOf[(r['企業名']||'')+'\u0001'+(r['フォームURL']||'')]=r});const rows=rows0.filter(r=>lastOf[(r['企業名']||'')+'\u0001'+(r['フォームURL']||'')]===r||r['結果']!='送信試行');const c={sent:0,check:0,manual:0};Object.values(lastOf).forEach(r=>{const k=hcls(r);if(k in c)c[k]++});
+ const card=(t,k,n)=>`<div><span class="lb">${tag(t,k)}</span><span class="nm"><b>${n}</b>社</span></div>`;$('#hsum').innerHTML=card('送れた','ok',c.sent)+card('送れたか確かめる','warn',c.check)+card('自分で送る','warn',c.manual);
+ const nd=$('#now_d');if(c.manual){nd.innerHTML=NX+`自分で送る会社 ${c.manual}社を、フォームを開いて送ります。<div class="nowact">${B('hBtn','自分で送る会社を見る')}</div><details class="dt"><summary>自分で送る、送れたか確かめる、の意味</summary><div>${DMEAN}</div></details>`;on('hBtn',()=>{HF='manual';hist()})}
+ else if(c.check){nd.innerHTML=NX+`送れたか確かめる会社 ${c.check}社を、フォームを開いて確かめます。<div class="nowact">${B('hBtn','確かめる会社を見る')}</div><details class="dt"><summary>自分で送る、送れたか確かめる、の意味</summary><div>${DMEAN}</div></details>`;on('hBtn',()=>{HF='check';hist()})}
+ else{nd.innerHTML=NX+'次の送る準備に進めます。'+`<div class="nowact">${B('hBtn','次の送る準備へ')}</div>`;on('hBtn',()=>{S.leave7=true;goto('c')})}
+ const list=rows.slice().reverse().filter(r=>!HF||hcls(r)==HF);
+ $('#hfnote').innerHTML=HF?`${HF=='manual'?'自分で送る':'送れたか確かめる'}会社だけを出しています。 <button class="lnk" id="hAll" type="button">全部の記録を見る</button>`:'';on('hAll',()=>{HF='';hist()});
+ $('#hist').innerHTML=list.length?'<tr><th style="width:15%">日時</th><th style="width:22%">会社</th><th style="width:22%">結果</th><th>わけ・次にすること</th><th style="width:12%"></th></tr>'+list.map(r=>{const k=hcls(r);const m=k=='msg'?['文面の問題で送らなかった（フォームは開いていません）','gray']:(RES[r['結果']]||[r['結果'],'']);return `<tr><td>${esc((r['日時']||'').slice(5))}</td><td><b>${esc(r['企業名'])}</b></td><td>${tag(m[0],m[1])}</td><td>${esc(plain(r['メモ']))}</td><td>${lk(r['フォームURL'],'フォームを開く')}</td></tr>`}).join(''):'<tr><td>まだ記録がありません</td></tr>'}
+const DMEAN='自分で送る: フォームを開き、送る画面の文面をコピーして貼り、自分で送信します。<br>送れたか確かめる: 送信ボタンは押しています。相手から自動返信のメールが届いていれば送れています。届かなくても、送れていないとは限りません。送り直す前に、フォームを開いて確かめます。';
+$('#reload').onclick=hist;
+// ---- 探す(画面の動きは変えない) ----
 $('#go').onclick=async()=>{const r=await post('/api/search',{area:$('#area').value,limit:$('#limit').value,fetch_limit:$('#fetchLimit').value,include_large:$('#large').checked,resume_checks:!$('#resumeChecks')||$('#resumeChecks').checked,official_research:!$('#officialResearch')||$('#officialResearch').checked,portal:$('#portal').value,portals:[...document.querySelectorAll('.portalChk:checked')].map(x=>x.value),ng:$('#ng').value,keywords:$('#kw').value,sources:[...document.querySelectorAll('#srcs input:checked')].map(x=>x.value),industries:[...document.querySelectorAll('#inds input:checked')].map(x=>x.value)});
  if(r.error)return alert(r.error);if(!r.started)alert('この画面では、ほかの処理が動いています。別の条件で同時に探すときは、「別のタブで、別の条件の検索を始める」を押してください');else wasRun=true;poll()};
 const stopNow=async()=>{if(!confirm('ここで止めます。調べ終えた分でリストを作って終わります（数十秒かかります）。よろしいですか'))return;const r=await post('/api/stop',{});if(r.error)return alert(r.error);alert(r.note)};
@@ -272,74 +500,35 @@ let planTimer;function refreshPlan(){clearTimeout(planTimer);planTimer=setTimeou
  const r=await post('/api/plan',{area,limit:$('#limit').value,keywords:$('#kw').value,industries:[...document.querySelectorAll('#inds input:checked')].map(x=>x.value)});if(r.error||!r.searches){$('#plan').textContent='';return}
  $('#plan').textContent=`この条件は、Googleマップの検索が${r.searches}件（${r.terms}語 × ${r.areas}か所）です。地図だけで約${r.minutes}分かかります。`+(r.whole_area?'この地域は町名に分けられないため、1語につき1検索です。取りこぼしが出やすくなります。':'')+(r.minutes>=20?'長いときは、条件を分けて「別のタブ」で同時に探すと早く終わります。':'')},400)}
 ['#area','#kw','#limit'].forEach(x=>$(x).addEventListener('input',refreshPlan));
-async function send(real,preview){const d={file:$('#sfile').value,max:$('#smax').value,send:real,preview:!!preview,confirm:$('#confirm').value,supp:$('#supp').checked};
- if(!d.file)return alert('先にリストを作ってください');
- if(!preview){STATE.prevOk=false}
- if(real&&!confirm('本番で '+TGN+' 社に送ります。送信元は「'+(META.sender['会社名']||'')+' '+(META.sender['氏名']||'')+'」です。一覧の文面を開いて読みましたか？送り始めたら、途中で文面は変えられません。'))return;
- if(real&&!(await askApprove())){await post('/api/approve/cancel',{});return}
- const r=await post('/api/send',d);if(real)$('#confirm').value='';if(r.error){banners();return alert(r.error)}if(!r.started)alert('ほかの処理が動いています');else wasRun=true;poll()}
-$('#dry').onclick=()=>send(false);$('#real').onclick=()=>send(true);$('#prev').onclick=()=>{STATE.prevOk=false;STATE.pkey='';send(false,true)};
-// 前回の探索の内訳(どの段階で何社になったか・失敗した検索・取りこぼし)。結果の欄に、探し終えるたびと画面を開くたびに出す
-async function loadFunnel(){
- try{
-  const s=await J('/api/summary');const box=$('#funnelCard');
-  if(!s||s.error||!s.outcome||s.outcome==='running'){box.hidden=true;return}
-  const m=s.map||{};
-  const rows=(s.funnel||[]).map(f=>`<tr><td>${esc(f.label)}</td><td style="text-align:right;white-space:nowrap"><b>${f.n}</b>件</td><td class="hint">${esc(f.note||'')}</td></tr>`).join('');
-  const maprows=m.searches?[['Googleマップの検索',m.searches+'回'],['うち、結果が0件だった検索',(m.empty||0)+'回'],['うち、取得に失敗した検索',(s.fetch_failed||0)+'回'],['読めなかった店・施設ページ',(m.unreadable||0)+'件']].map(r=>`<tr><td>${r[0]}</td><td style="text-align:right;white-space:nowrap"><b>${r[1]}</b></td><td></td></tr>`).join(''):'';
-  box.innerHTML=`<h2>前回の探索の内訳</h2><p>${esc(s.message||'')}</p>`+(s.area?`<p class="hint">探した場所: ${esc(s.area)}</p>`:'')+((rows||maprows)?`<div class="tw"><table class="rt"><tbody>${maprows}${rows}</tbody></table></div><p class="hint">各行は別々に数えた件数です。足し引きで合わないことがあります（同じ店が複数の理由で外れるため）。</p>`:'');
-  box.hidden=false
- }catch(e){}
-}
+// ---- 動いている処理の見張り ----
 let timer,wasRun=false,updWait=false;
 function paint(id,own){const j=JOB;$(id).textContent=own&&(j.lines.length||j.running)?(j.running?'【'+j.name+'を実行中】\n':'')+j.lines.join('\n'):'まだ何も動いていません';$(id).scrollTop=1e9}
+const JN={'探す':'「探す」を実行しています','確認':'送る内容を作っています','本番送信':'送っています','手動入力':'フォームを開いています'};
 function status(){const j=JOB,mine=j.name=='探す',last=(j.lines.filter(l=>l.trim()).slice(-1)[0]||'');
- const f=(own)=>!own||!j.name?'まだ何も動いていません':j.running?`【${j.name}】実行中… ${last}`:j.code===0?`【${j.name}】終わりました。`:`【${j.name}】途中で止まりました。くわしい経過の最後の行を見てください。`;
- $('#st_a').textContent=f(mine);$('#st_c').textContent=f(!mine);
- $('#jobbar').classList.toggle('on',!!j.running);const canStop=!!j.running&&j.name=='探す';$('#stop').hidden=!canStop;$('#stop2').hidden=!canStop;if(j.running){$('#jobname').textContent='「'+j.name+'」を実行しています';$('#jobline').textContent=last}}
-async function poll(){clearInterval(timer);const t=async()=>{const j=await J('/api/job');if(j.error)return;JOB=j;const mine=j.name=='探す';paint('#log',mine);paint('#log2',!mine);status();banners();
+ $('#st_a').textContent=!mine||!j.name?'まだ何も動いていません':j.running?`【${j.name}】実行中… ${last}`:j.code===0?`【${j.name}】終わりました。`:`【${j.name}】途中で止まりました。くわしい経過の最後の行を見てください。`;
+ $('#jobbar').classList.toggle('on',!!j.running);const canStop=!!j.running&&mine;$('#stop').hidden=!canStop;$('#stop2').hidden=!canStop;
+ if(j.running){$('#jobname').textContent=JN[j.name]||'処理をしています';const c=cnt();$('#jobline').textContent=mine?last:(j.name=='本番送信'&&c.has&&c.total?`${c.done}／${c.total}社`:'')}}
+async function refreshMeta(quiet){const m=await J('/api/meta');if(!m||m.error){if(!quiet){S.err=esc((m&&m.error)||'ツールから読み込めませんでした');renderSend()}return}
+ const prev=META.send_state;META=m;if(!$('#sender').children.length)renderSenderForm();
+ const st=META.send_state;if(st!=prev&&(st=='s4'||st=='s5'))S.T=null;if(st!='s7')S.leave7=false;renderSend()}
+async function poll(){clearInterval(timer);const t=async()=>{const j=await J('/api/job');if(j.error)return;JOB=j;const mine=j.name=='探す',sj=['確認','本番送信'].includes(j.name);paint('#log',mine);paint('#log2',!mine);status();
  if(j.running)wasRun=true;
+ if(sj&&j.running)await refreshMeta(true);else banners();
  if(!j.running){clearInterval(timer);const fin=wasRun&&mine&&j.code===0;if(wasRun&&updWait){updWait=false;setTimeout(checkUpdate,500)}
-  if(wasRun&&j.code!==0&&j.code!==null)alert('「'+j.name+'」が途中で止まりました。進み具合のくわしい経過に、理由が出ています');
-  opts($('#files'),j.files,fin?j.files[0]:$('#files').value);opts($('#sfile'),j.files,fin?j.files[0]:$('#sfile').value);META.files=j.files;
-  if(wasRun&&j.name=='確認'&&j.code===0){STATE.prevOk=true;STATE.pkey='';STATE.pkey=curKey();loadTargets()}
-  if(wasRun&&j.name=='本番送信'&&j.code===0)goto('d');
+  if(wasRun&&mine&&j.code!==0&&j.code!==null)alert('「探す」が途中で止まりました。進み具合のくわしい経過に、理由が出ています');
+  if(wasRun&&sj&&j.code!==0&&j.code!==null)S.err=j.name=='確認'?'送る内容を出す途中で止まりました。もう一度押しても止まるときは、この画面を写して連絡します（くわしい記録に理由が残っています）。':'送る途中で止まりました。送れた会社と送れなかった会社は、送信の記録で読めます。';
+  opts($('#files'),j.files,fin?j.files[0]:$('#files').value);opts($('#sfile'),j.files,fin||!$('#sfile').value?j.files[0]:$('#sfile').value);META.files=j.files;
+  if(wasRun&&sj){S.T=null;if(/出し直しています。$/.test(S.flash))S.flash='書き出しを直して、送る内容を出し直しました。';await refreshMeta(true)}
   wasRun=false;banners();if(fin){loadFunnel();goto('b')}}};t();timer=setInterval(t,1500)}
-async function loadTargets(){const r=await J('/api/targets?file='+encodeURIComponent($('#sfile').value)+'&max='+encodeURIComponent($('#smax').value)+'&supp='+($('#supp').checked?1:0));
- if(r.error){$('#tg').innerHTML=`<p class="warn">${esc(r.error)}</p>`;return}
- TGN=r.length;if(!r.length){$('#tg').innerHTML='<p class="warn">送る対象の会社はありません（すでに送った・お断り・「送らない」に入れた会社だけでした）。</p>';banners();return}
- $('#tg').innerHTML=`<p>次の <b>${r.length} 社</b>に、それぞれの会社名を入れた文面が送られます。送信元は「${esc(META.sender['会社名'])} ${esc(META.sender['氏名'])} ${esc(META.sender['メール'])}」です。文面をすべて読んでから、下の「本番で送る」へ進みます。</p>${r.length>5?'<button class="btn sub sm" id="openAll" type="button">文面を全部開く</button>':''}<div class="tw"><table class="rt"><tr><th style="width:24%">会社</th><th style="width:14%">業種</th><th style="width:14%">フォーム</th><th>文面</th></tr>`+r.map(x=>`<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.industry||'指定なし')}</td><td>${lk(x.form,'フォームを開く')}</td><td>${x.warn?'<div class="w-bad">'+esc(x.warn)+'</div>':''}${x.notice?'<div class="w-note">'+esc(x.notice)+'</div>':''}<details class="tgx"${r.length<=5?' open':''}><summary>文面を見る</summary><div class="msgbody">${esc("件名: "+x.subject+"\n\n"+x.text)}</div></details></td></tr>`).join('')+'</table></div>';
- const oa=$('#openAll');if(oa)oa.onclick=()=>{const all=[...document.querySelectorAll('#tg details.tgx')],op=!all.every(d=>d.open);all.forEach(d=>d.open=op);oa.textContent=op?'文面を全部閉じる':'文面を全部開く'};
- banners()}
-async function loadRes(){const f=$('#files').value;if(!f){$('#res').innerHTML='<tr><td>まだリストがありません</td></tr>';RESROWS=[];$('#sum').innerHTML='';$('#sum2').innerHTML='';banners();return}
- const all=await J('/api/results?file='+encodeURIComponent(f));if(all.error)return;RESROWS=all;const s=summ(all);
- const card=(lb,n,u)=>`<div><span class="lb">${lb}</span><span class="nm"><b>${n}</b>${u}</span></div>`;
- $('#sum').innerHTML=card('全体',all.length,'社')+card(tag('フォーム検出','ok'),s.ok,'社')+card(tag('要確認','warn'),s.warn,'社')+card(tag('対象外','ng'),s.ng,'社');
- $('#sumnote').textContent=$('#onlyOk').checked&&s.ng?'対象外の会社は、今は一覧に表示していません。':'';
- $('#sum2').innerHTML=card('自動確認',s.auto,'件')+card('候補込み',s.cand,'件')+card('未発見',s.missing,'件')+card('公式HP再探索待ち',s.official,'件');
- const rank={ok:0,warn:1,ng:2,'':3};let rows=all.map(r=>({r,v:verdict(r)}));if($('#onlyOk').checked)rows=rows.filter(x=>x.v.k=='ok'||x.v.k=='warn');rows.sort((a,b)=>rank[a.v.k]-rank[b.v.k]);
- // 2社以上で同じ説明は表の上に1回だけ出し、各行はタグだけにする(その会社だけの説明は行に残す)
- const wc={};rows.forEach(({v})=>{if(v.why)wc[v.why]=(wc[v.why]||0)+1});const shared=new Map();rows.forEach(({v})=>{if(v.why&&wc[v.why]>1&&!shared.has(v.why))shared.set(v.why,v)});
- $('#legend').hidden=!shared.size;$('#legend').innerHTML='<b style="color:var(--ink)">表示の意味</b>'+[...shared.values()].map(v=>`<div>${tag(v.t,v.k)}${esc(v.why)}</div>`).join('');
- $('#res').innerHTML='<tr><th style="width:27%">会社</th><th style="width:34%">検出状態</th><th style="width:20%">開いて確かめる</th><th style="width:19%">送る対象から外す</th></tr>'+(rows.length?rows.map(({r,v},i)=>{const form=r['問い合わせフォームURL 無ければメール']||'',mail=r['メールアドレス']||(form.startsWith('http')?'':form);
-  return `<tr><td><b>${esc(r['企業名'])}</b><div class="why">${esc(r['業種'])}</div><details class="dt"><summary>くわしく</summary><div>取得元: ${esc(r['取得元'])}<br>メール: ${esc(mail||'なし')}<br>メモ: ${esc(plain(r['判定メモ']))||'なし'}</div></details></td><td>${tag(v.t,v.k)}${v.why&&wc[v.why]==1?`<div class="why">${esc(v.why)}</div>`:''}</td><td>${lk(r['HP URL'],'ホームページを開く')}<br>${lk(form,'フォームを開く')}</td><td><button class="btn sub sm ngb" data-i="${i}" type="button">送らない</button></td></tr>`}).join(''):'<tr><td colspan="4">表示できる会社がありません。「問い合わせ候補だけ表示」を外すと、対象外の会社も見えます。</td></tr>');
- document.querySelectorAll('.ngb').forEach(b=>b.onclick=async()=>{const x=rows[+b.dataset.i].r;const form=x['問い合わせフォームURL 無ければメール']||'';
-  const hostOf=v=>{try{return new URL(v).hostname.replace(/^www\./,'')}catch(e){return ''}};const host=hostOf(x['HP URL']||'');
-  const same=host?RESROWS.filter(y=>y!==x&&hostOf(y['HP URL']||'')==host).map(y=>y['企業名']):[];
-  if(!confirm('「'+x['企業名']+'」を送らない会社に入れます。'+(host?'ホームページ（'+host+'）ごと入れるので、':'')+(same.length?'同じホームページの '+same.length+' 社（'+same.slice(0,3).join('、')+(same.length>3?' ほか':'')+'）も送らない会社になります。':'')+'この画面の下の「送らない会社に入れたもの」から、あとで戻せます。よろしいですか'))return;
-  const res=await post('/api/ng',{hp:x['HP URL']||'',form:form,name:x['企業名']});if(res.error)return alert(res.error);loadRes()});
- ngList();portalList();banners()}
-async function portalList(){const r=await J('/api/portals');if(!r||r.error)return;const box=$('#portalBox');if(!box)return;box.innerHTML=r.length?('<div class="why" style="margin:6px 0 2px">登録済みポータル（使うものにチェックすると、上のURL欄と合わせて集めます）</div>'+r.map(p=>`<label style="display:inline-flex;gap:6px;align-items:center;margin:2px 10px 2px 0;font-weight:400"><input type="checkbox" class="portalChk" value="${esc(p.url)}">${esc(p.name||p.url)}<button class="btn sub sm portalDel" data-u="${esc(p.url)}" type="button">削除</button></label>`).join('')):'';document.querySelectorAll('.portalDel').forEach(b=>b.onclick=async()=>{await post('/api/portals',{delete:1,url:b.dataset.u});portalList()});const add=$('#portalAdd');if(add)add.onclick=async()=>{const r2=await post('/api/portals',{name:$('#portalName').value,url:$('#portalUrl').value});if(r2.error)return alert(r2.error);$('#portalName').value='';$('#portalUrl').value='';portalList()}}
-async function ngList(){const r=await J('/api/ngscreen');if(r.error)return;$('#nglist').innerHTML=r.length?r.map((l,i)=>`<div style="margin:6px 0;color:var(--ink)">${esc(l.split('#')[0].trim().replace(/^@/,''))} <span class="why">${esc(l.split('「送らない」')[1]||'')}</span> <button class="btn sub sm ngu" data-i="${i}" type="button">戻す</button></div>`).join(''):'<div class="why">まだありません</div>';document.querySelectorAll('.ngu').forEach(b=>b.onclick=async()=>{const res=await post('/api/ng/undo',{line:r[+b.dataset.i]});if(res.error)return alert(res.error);loadRes()})}
-$('#files').onchange=loadRes;$('#onlyOk').onchange=loadRes;$('#dl').onclick=async()=>{const f=$('#files').value;if(!f)return;const r=await fetch('/download?file='+encodeURIComponent(f),{headers:{'X-Token':TOKEN}});const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download=f;a.click()};
-const RES={'試走OK':['練習OK（送信ボタンは押していません）','ok'],'送信済み':['送信済み','ok'],'要手動':['手で送る必要あり','warn'],'不明(要確認)':['送れたか確認が要る','warn'],'入力エラー(要確認)':['入力エラーの表示あり（届いていない可能性が高い。自動では再送しません）','warn'],'送信試行':['送信ボタンを押した（結果が未確認）','warn'],'お断り表示(送らない)':['お断りの表示があり、送らない','ng']};
-async function hist(){const rows=await J('/api/log');if(rows.error)return;const cnt={};rows.forEach(r=>{const n=(RES[r['結果']]||[r['結果']])[0];cnt[n]=(cnt[n]||0)+1});
- $('#hsum').innerHTML=Object.entries(cnt).map(([k,v])=>`<div><span class="lb">${esc(k)}</span><span class="nm"><b>${v}</b>件</span></div>`).join('');
- $('#hist').innerHTML=rows.length?'<tr><th style="width:15%">日時</th><th style="width:22%">会社</th><th style="width:20%">結果</th><th>わけ・次にすること</th><th style="width:14%"></th></tr>'+rows.slice().reverse().map(r=>{const m=RES[r['結果']]||[r['結果'],''];return `<tr><td>${esc((r['日時']||'').slice(5))}</td><td><b>${esc(r['企業名'])}</b></td><td>${tag(m[0],m[1])}</td><td>${esc(plain(r['メモ']))}</td><td>${lk(r['フォームURL'],'フォームを開く')}</td></tr>`}).join(''):'<tr><td>まだ記録がありません</td></tr>'}
-$('#reload').onclick=hist;
+$('#restart').onclick=async()=>{if(!confirm('ツールを再起動します。数秒で戻ります。よろしいですか'))return;try{const r=await post('/api/restart',{});if(r&&r.error){alert(r.error);return}}catch(e){}
+ document.body.innerHTML='<p style="padding:40px">再起動しています。数秒で自動で戻ります。</p>';
+ for(let i=0;i<150;i++){await new Promise(x=>setTimeout(x,1000));try{const w=await (await fetch("/api/whoami")).json();if(w.tool==="formlist"&&i>=2){location.reload();return}}catch(e){}}
+ document.body.innerHTML='<p style="padding:40px">戻るまで時間がかかっています。デスクトップの「AIまるなげ営業」を押してください。</p>'};
+async function showVer(){try{const w=await (await fetch('/api/whoami')).json();$('#ver').textContent='版 '+(w.build||'').slice(0,8)+(w.version?' / '+w.version.slice(0,6):'')}catch(e){}}
+showVer();
 $('#quit').onclick=async()=>{if(!confirm('ツールを終了します。送信などの処理が動いている場合は止まります。よろしいですか'))return;try{await post('/api/quit',{})}catch(e){}document.body.innerHTML='<p style="padding:40px">終了しました。このタブは閉じてください。再び使うときは、デスクトップの「AIまるなげ営業」を押します。</p>'};
 // 狭い画面では「ツールを終了する」をタブより上ではなく、画面の一番下へ移す
-const MQ=matchMedia('(max-width:640px)');function placeQuit(){(MQ.matches?$('#foot'):$('.hd')).appendChild($('#quit'))}
+const MQ=matchMedia('(max-width:640px)');function placeQuit(){const t=MQ.matches?$('#foot'):$('.hd');t.appendChild($('#restart'));t.appendChild($('#quit'))}
 placeQuit();if(MQ.addEventListener)MQ.addEventListener('change',placeQuit);
 document.title='AIまるなげ営業'+(location.port&&location.port!='8780'?'（検索'+(parseInt(location.port)-8779)+'）':'');// 別のタブで見分けがつくように
 // 画面を開く・読み込み直すたびに、公開されている最新の版と照合する。古ければ(探す・送る処理が動いていないときだけ)自動で更新して、画面を読み込み直す
@@ -357,5 +546,16 @@ async function checkUpdate(){
   box.textContent='更新のあと、画面が立ち上がるまで時間がかかっています。1分ほど待って、この画面を読み込み直してください。立ち上がらないときは、前の版へ自動で戻します'
  }catch(e){}
 }
-init();poll();checkUpdate();loadFunnel();
+async function checkLicense(){
+ try{
+  const r=await J('/api/license');const b=$('#lic');if(!b)return;
+  if(r&&r.allowed===false){b.textContent='探す・送るは、いま使えません。'+r.message+'（できたリストの閲覧と書き出しは使えます）';b.hidden=false}else{b.hidden=true}
+ }catch(e){}
+}
+async function init(){META=await J('/api/meta');if(META.error){$('#now_c').textContent=META.error;return}
+ $('#inds').innerHTML=(META.industries||[]).map(i=>`<label class="chip"><input type="checkbox" value="${esc(i)}"><span>${esc(i)}</span></label>`).join('');
+ $('#inds').onchange=()=>{const n=document.querySelectorAll('#inds input:checked').length;$('#indcnt').textContent=n?`${n}つ選んでいます`:'';refreshPlan()};
+ renderSenderForm();opts($('#files'),META.files||[]);opts($('#sfile'),META.files||[]);renderMsgOptions();est();banners()}
+setInterval(()=>{if($('#c').classList.contains('on')&&sState()=='s6a')renderSend()},1000);
+init();poll();checkUpdate();checkLicense();setInterval(checkLicense,600000);loadFunnel();
 </script></body></html>

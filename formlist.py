@@ -1109,6 +1109,14 @@ def clear_stop():
 
 
 
+def search_plan_message(budget, n_jobs, minutes, workers):
+    """探す前に出す説明。実際に走る検索の上限と打ち切りの挙動を先に、全部の検索の数と所要時間は参考値として後ろに置く"""
+    return (f"\n実際に走る検索の上限: 候補が全体で{budget}件（検索する数の上限）に達したら、残りの検索は始めずに次へ進みます。"
+            f"候補が0件の検索はそこで終えて次の検索へ進み、0件が続くと自動で止まります。画面の「ここで止める」でもいつでも止められます。"
+            f"（参考）全部の検索（検索語×町名）は最大{n_jobs}件で、最後まで走った場合の地図だけの所要時間は最大およそ{minutes}分です。"
+            f"上限に達すればそれより早く終わります。最大{workers}本ずつ並行して取得し、1件ごとに「[終わった数/全体]」が出ます。このあとホームページの検索とフォームの確認が続きます。")
+
+
 def prefetch_google(area, units, limit, workers, block_check=None, stop_check=None, fetch_limit=None):
     """Googleマップの検索を、検索語(業種・キーワード)×町名の単位で並列に取る。戻りは {(単位の番号, 検索語, 町): 行の一覧 か 例外}。
     どれか1つがGoogleに止められたら、まだ始めていない検索は実行しない(ブロックされたときに叩き続けないため)。
@@ -1216,10 +1224,7 @@ def prefetch_google(area, units, limit, workers, block_check=None, stop_check=No
     workers = max(1, min(PARALLEL_MAX, workers))
     if jobs:
         minutes = estimate_minutes(len(jobs), limit, workers)
-        log(f"\n{len(jobs)}件の検索（検索語×町名）を、最大{workers}本ずつ並行して取得します。1検索で最大{limit}件の店を1件ずつ開くため、"
-            f"地図だけでおよそ{minutes}分かかることがあります（店が少ない検索は早く終わります。このあとホームページの検索とフォームの確認が続きます）。"
-            f"1件ごとに「[終わった数/全体]」が出ます。0件が続くと自動で止まり、画面の「ここで止める」でいつでも止められます。"
-            f"候補が全体で{budget}件（検索する数の上限）に達したら、残りの検索は始めずに次へ進みます")
+        log(search_plan_message(budget, len(jobs), minutes, workers))
         RUN_STATS["estimate_minutes"] = minutes
     with ThreadPoolExecutor(max_workers=workers) as ex:
         got = dict(ex.map(run, jobs))
@@ -1266,6 +1271,11 @@ def _main(budget=None):
     ap.add_argument("--check-retry-limit", type=int, default=2, help="--resume-checks 時の取得再試行上限")
     ap.add_argument("--official-research", action="store_true", help="SNS/portal/no-contact URLs are re-searched for an official HP, then checked again")
     a = ap.parse_args()
+    import license_check  # 画面を通らない直接実行でも、利用許可の確認を通す
+    ok, why = license_check.gate()
+    if not ok:
+        print(why)
+        return 7
     blocked = set()  # Googleに止められた取得元。ポータル指定の回でも、最後の内訳を書くために先に用意する
     clear_stop()  # 前の回に置かれたまま残った止める指示で、この回を止めない
     write_run_summary("running", area=a.area)  # 前の回の印を、この回の結果と取り違えさせない

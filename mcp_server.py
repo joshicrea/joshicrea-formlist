@@ -40,7 +40,7 @@ def _base():
 _OPEN = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 _MAIN_RESOLVED = False
 mcp = FastMCP("formlist", instructions="""AIまるなげ営業（営業部）。接続したら最初に formlist_guide を呼び、その手順で利用者を案内する。
-会社探し→ホームページの照合→文面→全文の確認→本人の承認（画面の外の確認ダイアログ）→送信、の順を守る。
+会社探し→ホームページの照合→文面→送る内容を出す(送る会社と届く全文)→本人の承認（画面の外の確認ダイアログ）→送信、の順を守る。練習(試走)は無い。
 本人が全文を見て「送って」と明示するまで、formlist_send の本番（send=true）を呼ばない。承認を代わりに押さない。""")
 _LOADED = hashlib.sha256((HERE / "mcp_server.py").read_bytes()).hexdigest()  # 起動したときの版。ディスクの版と違えば、古いMCPが動いている
 Count = Annotated[int, Field(ge=1, le=300)]  # 0 を渡すとサーバー側で既定の20社に化けるので、最初から断る
@@ -268,7 +268,7 @@ def formlist_guide() -> dict:
 
 @mcp.tool()
 def formlist_status() -> dict:
-    """いま動いている処理（探す・確認・練習・本番送信）と、最後の経過・終了コード、作成済みのリスト一覧、ツールの版（別のパソコンと同じ版か照合する印）を返す。
+    """いま動いている処理（探す・送る内容を出す・本番送信）と、最後の経過・終了コード、作成済みのリスト一覧、ツールの版（別のパソコンと同じ版か照合する印）を返す。
     update は公開されている最新の版との照合(最新/古い/未確認)。古いときは message をそのまま利用者に伝える。未確認を「最新」と言い換えない。"""
     _, j = api("GET", "/api/job")
     others = []
@@ -280,6 +280,10 @@ def formlist_status() -> dict:
            "update": _update_check()}
     if hashlib.sha256((HERE / "mcp_server.py").read_bytes()).hexdigest() != _LOADED:  # 更新後もClaudeが古いMCPを動かし続けている
         out["warning"] = "このMCPは更新前の古い版のまま動いています。利用者にClaudeを完全に終了して(タスクトレイも)開き直してもらってください。開き直すまで、新しい手引きと道具が使えません"
+    _, lic = api("GET", "/api/license")  # 利用許可。許可が無いとき、探す・送るの道具は理由つきで断る(閲覧と書き出しは使える)
+    if isinstance(lic, dict) and lic.get("allowed") is False:
+        out["license"] = lic.get("message") or "利用が許可されていません。担当者にご連絡ください"
+        out["warning"] = "探す・送るは、いま使えません: " + out["license"] + "（できたリストの閲覧と書き出しは使えます）。この文をそのまま利用者に伝える"
     _, unsure = api("GET", "/api/unsure")
     if isinstance(unsure, list) and unsure:
         out["need_check"] = f"届いたか確かめが要る会社が{len(unsure)}社あります。formlist_unsure で一覧を出し、利用者に確かめてもらって formlist_outcome_set で記録する"
@@ -450,7 +454,7 @@ _CHROMIUM_OK = False
 
 @mcp.tool()
 def formlist_stop() -> dict:
-    """動いている「探す」処理を止める。調べ終わった分だけでリストを作って終わる(数十秒かかる)。送信(本番送信・確認・練習)は止めない。
+    """動いている「探す」処理を止める。調べ終わった分だけでリストを作って終わる(数十秒かかる)。送信(本番送信・送る内容を出す)は止めない。
     利用者が「やめて」「時間がかかりすぎ」と言ったときに使う。"""
     stopped = []
     for port in POOL:
@@ -491,18 +495,21 @@ def formlist_ng_undo(line: str) -> dict:
 
 @mcp.tool()
 def formlist_sender_get() -> dict:
-    """保存されている送信元（会社名・氏名・メール・電話・住所・署名など）と、足りない必須項目。"""
+    """保存されている送信元（会社名・氏名・フリガナ・メール・電話・住所・件名・署名など）と、送る前に直すところ。
+    problems は画面・送る内容を出す・本番と同じ関門(send_rules.sender_problems)の結果で、欄の名前(field)と1文(text)が入る。missing_required はその欄の名前だけ。
+    problems があるあいだは送る内容を出せない。利用者に text をそのまま伝え、直す値を聞いて formlist_sender_set で保存する。"""
     _, m = api("GET", "/api/meta")
     s = m.get("sender", {})
-    miss = [k for k in ("会社名", "氏名", "メール", "署名") if not (s.get(k) or "").strip() or "【" in s.get(k, "")]
-    return {"sender": s, "missing_required": miss}
+    probs = [p for p in (m.get("problems") or []) if p.get("field") != "文面"]
+    return {"sender": s, "problems": probs, "missing_required": list(dict.fromkeys(p.get("field") or "送信元" for p in probs))}
 
 
 @mcp.tool()
 def formlist_sender_set(fields: dict) -> dict:
     """送信元の項目を更新する（渡した項目だけ変わる）。使える項目: 会社名 氏名 フリガナ メール 電話 郵便番号 住所 件名 署名 資料URL（文面の {資料URL} に入る。https:// で始まるURL。費用を載せた資料は置かない）と 計測キー（資料URLの {識別} 用。担当者から届いた設定の文に書いてあるものを、そのまま渡す。保存して、画面にも応答にも出さない。先に渡してから資料URLを渡す）。
     署名は顧客に届く。変更内容の全文をユーザーに見せ、承認を得てから保存する。署名には連絡先と配信停止の案内を含める。
-    保存すると確認済みの印は無効になり、formlist_preview からやり直しになる。それ以外の項目名は断る。"""
+    保存すると確認済みの印は無効になり、formlist_preview からやり直しになる。それ以外の項目名は断る。
+    返り値の problems に、保存したあとも送る前に直すところ(欄の名前つき)が入る。空でなければ、まだ送れないことを利用者に伝える。"""
     code, d = api("POST", "/api/sender", fields)
     return d if code == 200 else {"error": d.get("error")}
 
@@ -510,18 +517,20 @@ def formlist_sender_set(fields: dict) -> dict:
 @mcp.tool()
 def formlist_message_get(name: str = "default") -> dict:
     """送る文面を読む。name は default（標準）か業種名（業種の一覧は formlist_status ではなく、返り値の by_industry）。{企業名}{書き出し}{署名} は送るとき自動で置き換わる。
-    by_industry は、業種ごとに「専用」(その業種専用の文面がある)か「標準」(専用が無く、標準の文面が使われる)。orphans は、古い業種名で作った文面(いまは使われない)で、to が引き継ぎ先の候補。
+    by_industry は、業種ごとに「専用」(その業種専用の文面がある)か「標準」(専用が無く、標準の文面が使われる)。
+    by_industry_uses は画面と同じ1つの印で、「業種ごと」(業種ごとの文面=専用の文面か割り当て済みのパターンが使われる)か「標準」。利用者にはこちらで伝える。orphans は、古い業種名で作った文面(いまは使われない)で、to が引き継ぎ先の候補。
     業種ごとに文面が違うので、最初の設定のときに、探す業種ぶんをまとめて決める(手引きの「文面を業種ごとに用意する」)。"""
     _, m = api("GET", "/api/meta")
     msgs = m.get("messages", {})
     info = m.get("message_info", {})
     return {"name": name, "text": msgs.get(name, msgs.get("default", "")), "uses": "専用" if name in msgs and name != "default" else "標準",
-            "by_industry": info.get("industries", {}), "orphans": info.get("orphans", []), "available": list(msgs)}
+            "by_industry": info.get("industries", {}), "by_industry_uses": info.get("uses", {}), "orphans": info.get("orphans", []), "available": list(msgs)}
 
 
 @mcp.tool()
 def formlist_message_set(name: str, text: str) -> dict:
-    """送る文面を保存する。顧客に届く文面なので、ユーザーに全文を見せて承認を得てから保存する。保存すると確認済みの印は無効になる。"""
+    """送る文面を保存する。顧客に届く文面なので、ユーザーに全文を見せて承認を得てから保存する。保存すると確認済みの印は無効になる。
+    返り値の problems に、見本の文字(例: 見本の「拠点エリア」)が残っている箇所が入る。保存はできるが、残っているあいだは送る内容を出せない。"""
     code, d = api("POST", "/api/message", {name: text})
     return d if code == 200 else {"error": d.get("error")}
 
@@ -549,40 +558,40 @@ def formlist_message_sample(material: str) -> dict:
 
 
 @mcp.tool()
-def formlist_openings_missing(file: str) -> dict:
-    """書き出しが空の会社の一覧(会社名・業種・ホームページ)。文面に {書き出し} がある場合、空の会社は送信の対象から外れる。
-    各社のホームページを読み、その会社に合う1〜2文の書き出しを書いて formlist_openings_set で保存する。顧客に届く文なので、全文をユーザーに見せて承認を得てから保存する。"""
-    code, d = api("GET", f"/api/openings?file={urllib.request.quote(file)}")
-    return d if code == 200 else {"error": d.get("error")}
+def formlist_openings_get(file: str, supp: bool = False) -> dict:
+    """送る会社の全部(会社名・業種・ホームページ・ホームページ概要 overview・いまの書き出し opener・作り方 opener_source・型どおりの下書き draft)。
+    opener_source は title(ホームページの題から作った下書き)/general(会社名と業種から作った下書き)/ai(AIが書き直した)/person(利用者が直した)/""(不明)。
+    AIが書き直すときは、各社のホームページ(と overview)に書いてあることだけで1〜2文を書く。ホームページに無い事実・数字・実績を書かない。
+    利用者が直した書き出し(person)は、頼まれない限り書き直さない。顧客に届く文なので、全文をユーザーに見せて承認を得てから formlist_openings_set で保存する。"""
+    code, d = api("GET", f"/api/openings?file={urllib.request.quote(file)}&supp={1 if supp else 0}")
+    if code != 200:
+        return {"error": d.get("error")}
+    return {"file": file, "companies": d.get("companies", []), "total_rows": d.get("total")}
 
 
 @mcp.tool()
 def formlist_openings_set(file: str, openings: dict[str, str]) -> dict:
-    """会社ごとの書き出しをリストのCSVに保存する(会社名 → 書き出し)。保存すると確認済みの印は無効になる。ユーザーに全文を見せて承認を得てから呼ぶ。"""
-    code, d = api("POST", "/api/openings", {"file": file, "openings": openings})
+    """AIが書き直した会社ごとの書き出しをリストのCSVに保存する(会社名 → 書き出し)。作り方は「AI(Claude)が書き直した下書き」として記録され、画面にもそう出る。
+    ホームページに書いてあることだけで書く。保存すると確認済みの印は無効になる。ユーザーに全文を見せて承認を得てから呼ぶ。"""
+    code, d = api("POST", "/api/openings", {"file": file, "openings": openings, "source": "ai"})
     return d if code == 200 else {"error": d.get("error")}
 
 
 @mcp.tool()
-def formlist_practice(file: str, max_companies: Annotated[int, Field(ge=1, le=3)] = 3, supp: bool = False, wait_seconds: int = 120, user_agreed: bool = False) -> dict:
-    """練習: 実際のフォームに入力して画面を保存するだけ。送信ボタンは押さない。ただし、入力の途中で内容を先方に届く作りのフォームがある
-    （氏名・電話・文面が先方に渡りうる）。必ず利用者にその旨を伝えて了解を得てから、user_agreed=true で呼ぶ。了解なしには動かさない。一度に3社まで。"""
-    if not user_agreed:
-        return {"started": False, "error": "練習は、実在の会社のフォームに入力します。入力の途中で内容が先方に届く作りのフォームもあります。利用者に伝えて了解を得てから、user_agreed=true で呼んでください"}
-    code, d = api("POST", "/api/send", {"file": file, "max": max_companies, "supp": supp, "send": False})
-    if code != 200 or not d.get("started"):
-        return {"started": False, "error": d.get("error") or "ほかの処理が動いています"}
-    return {"started": True, **_brief(_wait(wait_seconds), 40)}
-
-
-@mcp.tool()
 def formlist_preview(file: str, max_companies: Count = 3, supp: bool = False) -> dict:
-    """本番の前の確認。送る対象の会社と、各社に送る文面の全文を返す（送らない）。本番を通すための「確認済みの印」を立てる操作でもある。
-    本番は、送る会社と各社の全文がこの確認と同じときだけ通る。送らないリスト・送信済み・文面・送信元が変われば、やり直しになる。
-    返った全文は、そのままユーザーに見せる。人が読んだかどうかは、この呼び出しでは確かめられない。"""
+    """送る内容を出す(画面の「送る内容を出す」と同じ)。送る会社と、各社に届く件名と全文、送らない会社と理由を返す(送らない)。本番を通すための印を立てる操作でもある。
+    本番は、送る会社と各社の全文がこれと同じときだけ通る。送らないリスト・送信済み・文面・送信元・書き出しが変われば、やり直しになる。
+    書き出しが空の会社には、型どおりの下書きがリストに書き込まれてから全文が作られる。
+    返った全文は、そのままユーザーに見せる。人が読んだかどうかは、この呼び出しでは確かめられない。送信元や文面に直すところがあれば、欄の名前(field)つきの error で止まる。"""
     code, d = api("POST", "/api/send", {"file": file, "max": max_companies, "supp": supp, "send": False, "preview": True})
     if code != 200 or not d.get("started"):
-        return {"started": False, "error": d.get("error") or "ほかの処理が動いています"}
+        out = {"started": False, "error": d.get("error") or "ほかの処理が動いています"}
+        if d.get("field"):
+            out["field"] = d["field"]
+        if d.get("code") == "nothing_to_send":  # 送れる会社が0。理由を会社ごとに返す
+            _, t = api("GET", f"/api/targets?file={urllib.request.quote(file)}&max={max_companies}&supp={1 if supp else 0}")
+            out["skipped"] = t.get("skipped", []) if isinstance(t, dict) else []
+        return out
     j = _wait(120)
     if j.get("running") or j.get("code") != 0:
         return {"ok": False, **_brief(j, 40)}
@@ -591,11 +600,15 @@ def formlist_preview(file: str, max_companies: Count = 3, supp: bool = False) ->
         return {"ok": False, "error": t.get("error")}
     _, m = api("GET", "/api/meta")
     s = m.get("sender", {})
-    return {"ok": True, "count": len(t), "sender": f"{s.get('会社名', '')} {s.get('氏名', '')} {s.get('メール', '')}",
-            "companies": [{"company": x["name"], "industry": x["industry"], "form": x["form"], "message": x["text"]} for x in t],
+    rows = t.get("sendable", [])
+    return {"ok": True, "count": len(rows), "sender": f"{s.get('会社名', '')} {s.get('氏名', '')} {s.get('メール', '')}",
+            "companies": [{"company": x["name"], "industry": x["industry"], "form": x["form"], "template": x.get("template_label", ""),
+                           "subject": x.get("subject", ""), "message": x["text"]} for x in rows],
+            "skipped": t.get("skipped", []),
             "screen": f"http://127.0.0.1:{_port()}/",
-            "next": ("1) この全文を利用者に見せる。2) 利用者に、ツールの画面(screen のアドレス)の「3 送る」を開いてもらい、同じ全文が出ていることを確かめてもらう。"
-                     "3) 利用者が画面の本番のボタンを押すと、画面の外に確認ダイアログが出るので、本人が「はい」を押す。4) そのあと利用者が「送って」と言ったら formlist_send を同じ引数で呼ぶ。"
+            "next": ("1) この全文を利用者に見せる。2) 利用者に、ツールの画面(screen のアドレス)の「3 送る」を開いてもらい、同じ送る内容が出ていることを確かめてもらう。"
+                     "3) 利用者が画面で「読みました」にチェックを入れて送るボタンを押すと、画面の外に確認ダイアログが出るので、本人が「はい」を押す。"
+                     "4) そのあと利用者が「送って」と言ったら formlist_send を同じ引数で呼ぶ。"
                      "AIは承認を押せない。見せたあとに送らない会社などを変えたら、preview からやり直す"),
             "legal_missing": t_legal(s)}
 
@@ -604,7 +617,8 @@ def formlist_preview(file: str, max_companies: Count = 3, supp: bool = False) ->
 def formlist_send(file: str, max_companies: Count, supp: bool, confirm: str) -> dict:
     """本番送信。顧客に実際に届く。formlist_preview の全文をユーザーに見せ、ユーザーが「送って」と明示した後にだけ呼ぶ。
     file・max_companies・supp は直前の formlist_preview と同じ値にする。confirm には「送信」と入れる。
-    人の承認が要る: ユーザーがツールの画面で全文を読み、「この全文で送ることを承認する」を押すまで、送れない(AIは承認を押せない。承認は1回の送信で使い切る)。
+    人の承認が要る: ユーザーがツールの画面で送る内容を読み、送るボタンのあとに画面の外に出る確認で「はい」を押すまで、送れない(AIは承認を押せない。承認は1回の送信で使い切る)。
+    はじめての人(送った記録が0件)は、1社目のフォームに入れた画面がツールの画面に出て、本人が「このまま送る」を押すまで送信ボタンを押さない(5分で止まる)。
     送信中は文面と送信元を保存できない。"""
     code, d = api("POST", "/api/send", {"file": file, "max": max_companies, "supp": supp, "send": True, "confirm": confirm})
     if code != 200 or not d.get("started"):
@@ -678,8 +692,9 @@ def formlist_opens() -> dict:
 
 @mcp.tool()
 def formlist_log(limit: int = 30) -> dict:
-    """送信の記録（練習・本番）。結果の意味: 練習OK=送っていない／送信済み／手で送る必要あり=フォームを開いて手で送る／
-    送れたか確認が要る=送信ボタンは押した。相手の自動返信メールで確かめる。"""
+    """送信の記録。結果の意味: 送信済み=相手の完了画面を確かめた／要手動=フォームを開いて手で送る(自分で送る会社)／
+    不明(要確認)・送信試行・入力エラー(要確認)=送信ボタンは押した。相手の自動返信メールで確かめる／1社目の確認で止めた=送信ボタンは押していない／
+    試走OK=以前の練習の記録で、送っていない。"""
     _, rows = api("GET", "/api/log")
     return {"total": len(rows), "recent": rows[-limit:][::-1]}
 

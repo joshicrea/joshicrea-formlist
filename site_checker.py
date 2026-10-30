@@ -25,6 +25,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+import form_kind
 import hp_verify
 import netguard
 
@@ -280,6 +281,16 @@ def titles_of(soup):
     return " ".join(parts)
 
 
+def form_kind_result(soup, page_url, title=""):
+    """ページの問い合わせフォームを種別で選ぶ。(種別, 理由)。汎用があれば汎用、無ければ判定できない、その次に用途限定。フォームが無ければ ("", "")"""
+    forms = [f for f in soup.find_all("form") if _is_inquiry_form(f)]
+    general, unknown, purpose = form_kind.prefer_general([(f, page_url) for f in forms], title)
+    for kind, group in (("general", general), ("unknown", unknown), ("purpose", purpose)):
+        if group:
+            return kind, group[0][2]["reasons"][0]
+    return "", ""
+
+
 def page_form_state(soup):
     """'form' / 'widget' / None for one page."""
     for f in soup.find_all("form"):
@@ -378,7 +389,7 @@ def find_line_url(html):
     return m.group(0).rstrip(".,;") if m else ""
 
 
-CHECK_RULES = "r5"  # フォーム判定・照合・URL欄の規則を変えたら必ず上げる。古い規則で出た判定を保存結果から再利用しない(行の指紋に含める)
+CHECK_RULES = "r6"  # フォーム判定・照合・URL欄の規則を変えたら必ず上げる。古い規則で出た判定を保存結果から再利用しない(行の指紋に含める)
 
 
 RECRUIT_TITLE = re.compile(r"求人|採用|募集|リクルート|recruit|career", re.I)  # 迷う題名は要目視へ(安全側)
@@ -437,7 +448,7 @@ def set_external_form_result(res, form_url):
 def check(url, max_pages=MAX_CONTACT_PAGES, row=None, budget=None, line_id=None):
     """Returns dict: verdict, form_url, email, refuse, refuse_text, note, overview, ev, ev_why。
     row(名前・電話・住所を持つ辞書)を渡すと、このHPがその会社のものかを hp_verify で照合して ev・ev_why に入れる"""
-    res = {"verdict": "見つからず", "form_url": "", "email": "", "refuse": False, "refuse_text": "", "note": "", "overview": "", "ev": "", "ev_why": "", "line_url": ""}
+    res = {"verdict": "見つからず", "form_url": "", "email": "", "refuse": False, "refuse_text": "", "note": "", "overview": "", "ev": "", "ev_why": "", "line_url": "", "form_kind": "", "form_kind_why": ""}
     if not url.startswith("http"):
         url = "http://" + url
     if is_not_company_site(url):
@@ -498,7 +509,12 @@ def check(url, max_pages=MAX_CONTACT_PAGES, row=None, budget=None, line_id=None)
             if OTHER_PURPOSE.search(cf + " " + head):
                 res.update(verdict="要目視", form_url=cf, note="出店・広告・採用など別の用途のフォームの可能性")
             else:
-                res.update(verdict="フォームあり", form_url=cf)
+                kind, why = form_kind_result(cs, cf, head)
+                res.update(verdict="フォームあり", form_url=cf, form_kind=kind, form_kind_why=why)
+                if kind == "unknown":  # 汎用の問い合わせと確認できないフォームは、汎用として数えない
+                    res.update(verdict="要目視", note="フォームの用途を判定できない: " + why)
+                elif kind == "purpose":
+                    res.update(verdict="要目視", note="用途限定のフォーム(入居相談・見学申込・資料請求など)。営業の送り先から外す: " + why)
             break
         if st == "widget" or looks_script_rendered(cs):
             widget_seen = True
