@@ -538,7 +538,7 @@ function status(){const j=JOB,mine=j.name=='探す',last=(j.lines.filter(l=>l.tr
  $('#st_a').textContent=os?`【探す】実行中… ${os.last}`:!mine||!j.name?'まだ何も動いていません':j.running?`【${j.name}】実行中… ${last}`:j.code===0?`【${j.name}】終わりました。`:`【${j.name}】途中で止まりました。くわしい経過の最後の行を見てください。`;
  $('#jobbar').classList.toggle('on',!!j.running);const canStop=(!!j.running&&mine)||!!os;$('#stop').hidden=!canStop;$('#stop2').hidden=!canStop;
  if(j.running){$('#jobname').textContent=JN[j.name]||'処理をしています';const c=cnt();$('#jobline').textContent=mine?last:(j.name=='本番送信'&&c.has&&c.total?`${c.done}／${c.total}社`:'')}}
-async function refreshMeta(quiet){const m=await J('/api/meta');if(!m||m.error){if(!quiet){S.err=esc((m&&m.error)||'ツールから読み込めませんでした');renderSend()}return}
+async function refreshMeta(quiet){const sf=$('#sfile'),m=await J('/api/meta'+(sf&&sf.value?'?file='+encodeURIComponent(sf.value):''));if(!m||m.error){if(!quiet){S.err=esc((m&&m.error)||'ツールから読み込めませんでした');renderSend()}return}
  const prev=META.send_state;META=m;if(!$('#sender').children.length)renderSenderForm();
  const st=META.send_state;if(st!=prev&&(st=='s4'||st=='s5'))S.T=null;if(st!='s7')S.leave7=false;renderSend()}
 async function poll(){clearInterval(timer);const t=async()=>{const j=await J('/api/job');if(j.error)return;JOB=j;const mine=j.name=='探す',sj=['確認','本番送信'].includes(j.name);paint('#log',mine);paint('#log2',!mine);status();
