@@ -328,7 +328,7 @@ function renderSend(){if(!$('#now_c'))return;if(!META.send_state){band(NW+'読�
  initSmax();$('#now_c').classList.toggle('stick',(st=='s4'||st=='s5')&&!j.running);
  ['#c_cond','#c_sum','#senderEdit','#msgEdit','#c_plan','#c_run','#condMore','#aiOpen','#aiSend'].forEach(x=>show(x,false));show('#senderLine',!S.editSender);show('#msgLine',!S.editMsg);show('#senderClose',!(st=='s1'||st=='s2'&&senderProbs().length));
  show('#c_main',st!='s0');
- if(j.running&&!['確認','本番送信'].includes(j.name)){band(`${NW}「${esc(j.name)}」が動いています。終わってから送る準備ができます。`);return}
+ if(j.running&&!['確認','本番送信','探す'].includes(j.name)){band(`${NW}「${esc(j.name)}」が動いています。終わってから送る準備ができます。`);return}
  if(S.wait){band(NW+esc(S.wait));showCommon(st);return}
  if(st=='s0'){band(NX+'先にリストを作ります。探す画面で探すと、ここで送れるようになります。',B('mainBtn','探すへ'));on('mainBtn',()=>goto('a'));return}
  if(st=='s1'||st=='s2'){const sp=senderProbs(),mp=msgProbs();
@@ -521,8 +521,9 @@ let timer,wasRun=false,updWait=false;
 function paint(id,own){const j=JOB;$(id).textContent=own&&(j.lines.length||j.running)?(j.running?'【'+j.name+'を実行中】\n':'')+j.lines.join('\n'):'まだ何も動いていません';$(id).scrollTop=1e9}
 const JN={'探す':'「探す」を実行しています','確認':'送る内容を作っています','本番送信':'送っています','手動入力':'フォームを開いています'};
 function status(){const j=JOB,mine=j.name=='探す',last=(j.lines.filter(l=>l.trim()).slice(-1)[0]||'');
- $('#st_a').textContent=!mine||!j.name?'まだ何も動いていません':j.running?`【${j.name}】実行中… ${last}`:j.code===0?`【${j.name}】終わりました。`:`【${j.name}】途中で止まりました。くわしい経過の最後の行を見てください。`;
- $('#jobbar').classList.toggle('on',!!j.running);const canStop=!!j.running&&mine;$('#stop').hidden=!canStop;$('#stop2').hidden=!canStop;
+ const os=j.other&&j.other.name=='探す'?j.other:null;
+ $('#st_a').textContent=os?`【探す】実行中… ${os.last}`:!mine||!j.name?'まだ何も動いていません':j.running?`【${j.name}】実行中… ${last}`:j.code===0?`【${j.name}】終わりました。`:`【${j.name}】途中で止まりました。くわしい経過の最後の行を見てください。`;
+ $('#jobbar').classList.toggle('on',!!j.running);const canStop=(!!j.running&&mine)||!!os;$('#stop').hidden=!canStop;$('#stop2').hidden=!canStop;
  if(j.running){$('#jobname').textContent=JN[j.name]||'処理をしています';const c=cnt();$('#jobline').textContent=mine?last:(j.name=='本番送信'&&c.has&&c.total?`${c.done}／${c.total}社`:'')}}
 async function refreshMeta(quiet){const m=await J('/api/meta');if(!m||m.error){if(!quiet){S.err=esc((m&&m.error)||'ツールから読み込めませんでした');renderSend()}return}
  const prev=META.send_state;META=m;if(!$('#sender').children.length)renderSenderForm();

@@ -47,6 +47,7 @@ assert 8780 <= PORT <= 8790, PORT
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 PY = sys.executable[:-len("pythonw.exe")] + "python.exe" if sys.executable.lower().endswith("pythonw.exe") else sys.executable
 JOB = {"lines": [], "running": False, "name": ""}
+SJOB = {"lines": [], "running": False, "name": ""}  # 「探す」専用の枠。送る系(確認・本番送信・手入力)と同時に動かせる(2026-10-30 運用者の指示「ほかの処理が動いていても同時に動くように」)
 def opener_draft(overview):
     """書き出しの下書き。ホームページのタイトルに書いてあることだけを引く(見ていないことは書かない)。タイトルが無ければ空"""
     t = re.split(r"\s*/\s*", (overview or "").strip(), maxsplit=1)[0]
@@ -152,10 +153,11 @@ def start_peer():
 
 
 def run_job(name, args, stdin_text=None, on_ok=None, extra_env=None):
+    slot = SJOB if name == "探す" else JOB
     with LOCK:
-        if JOB["running"]:
+        if slot["running"]:
             return False
-        JOB.update(lines=[], running=True, name=name, code=None, proc=None, started=time.strftime("%Y-%m-%dT%H:%M:%S"))
+        slot.update(lines=[], running=True, name=name, code=None, proc=None, started=time.strftime("%Y-%m-%dT%H:%M:%S"))
 
     def work():
         code = None
@@ -164,23 +166,23 @@ def run_job(name, args, stdin_text=None, on_ok=None, extra_env=None):
             p = subprocess.Popen([PY, "-X", "utf8", *args], cwd=HERE, env=env, stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                                  errors="replace", creationflags=NO_WINDOW)
-            JOB["proc"] = p
+            slot["proc"] = p
             if stdin_text is not None:
                 p.stdin.write(stdin_text)
             p.stdin.close()
             for line in p.stdout:
-                JOB["lines"].append(line.rstrip())
+                slot["lines"].append(line.rstrip())
             code = p.wait()
-            JOB["lines"].append(f"（終了 コード{code}）")
+            slot["lines"].append(f"（終了 コード{code}）")
         except Exception as e:
-            JOB["lines"].append(f"（処理を始められませんでした: {e!r}）")
+            slot["lines"].append(f"（処理を始められませんでした: {e!r}）")
         finally:
             with LOCK:  # 確認の印を立てるのも、動いている印を下ろすのも、同じ排他の内側で行う
                 try:
                     if code == 0 and on_ok:
                         on_ok()
                 finally:
-                    JOB.update(running=False, code=code, proc=None)
+                    slot.update(running=False, code=code, proc=None)
 
     threading.Thread(target=work, daemon=True).start()
     return True
@@ -679,6 +681,15 @@ def _write_rows(p, rows):
     filelock.atomic_write(p, buf.getvalue())
 
 
+def job_view():
+    """画面に見せる処理(動いている方。両方動いていれば送る系)と、もう一方。どちらも止まっていれば、あとに始めた方"""
+    if JOB["running"]:
+        return JOB, SJOB
+    if SJOB["running"]:
+        return SJOB, JOB
+    return (JOB if JOB.get("started", "") >= SJOB.get("started", "") else SJOB), None
+
+
 def busy_error():
     """E-17。ほかの処理が動いているとき、何が動いているかを言う"""
     if not JOB["running"]:
@@ -1107,7 +1118,7 @@ class H(BaseHTTPRequestHandler):
                                    "send_file": st["file"], "first_time": first, "last_max": last_max, "max_kind": max_kind, "limits": limits(), "first_look": first_look_view(),
                                    "message_summary": {"default": 1, "industries": [n for n, v in info["uses"].items() if v == "業種ごと"]}})
         if u.path == "/api/whoami":
-            return self.send(200, {"tool": "formlist", "here": str(HERE), "version": VERSION, "build": BUILD, "port": PORT, "running": JOB["running"], "name": JOB["name"]})
+            return self.send(200, {"tool": "formlist", "here": str(HERE), "version": VERSION, "build": BUILD, "port": PORT, "running": JOB["running"] or SJOB["running"], "name": JOB["name"] if JOB["running"] else SJOB["name"]})
         if u.path == "/api/summary":
             # この画面(番号)の、最後の探索の内訳(段階別の件数・結果・理由)。画面の「結果を見る」が読む
             try:
@@ -1119,14 +1130,16 @@ class H(BaseHTTPRequestHandler):
             now = time.time()
             if not UPDATE_CACHE or now - UPDATE_CACHE["at"] > 300 or q.get("force"):
                 UPDATE_CACHE.update(at=now, result=updater.check())
-            busy = JOB["running"] or any((ports.job(p) or {}).get("running") for p in ports.POOL if p != PORT)
+            busy = JOB["running"] or SJOB["running"] or any((ports.job(p) or {}).get("running") for p in ports.POOL if p != PORT)
             return self.send(200, {**UPDATE_CACHE["result"], "busy": bool(busy), "restart_needed": updater.build() != BUILD, "build": BUILD})
         if u.path == "/api/license":  # 利用許可の状態(通信はしない。手元の記録だけから答える)
             return self.send(200, license_check.status())
         if u.path == "/api/job":
             fl = first_look_view()
-            return self.send(200, {"lines": JOB["lines"][-300:], "running": JOB["running"], "name": JOB["name"], "code": JOB.get("code"), "files": outputs(), "version": VERSION, "build": BUILD, "here": str(HERE), "started": JOB.get("started", ""), "port": PORT,
-                                   "first_look": fl})
+            v, o = job_view()
+            other = {"name": o["name"], "last": ([l for l in o["lines"] if l.strip()] or [""])[-1][:120]} if o is not None and o["running"] else None
+            return self.send(200, {"lines": v["lines"][-300:], "running": v["running"], "name": v["name"], "code": v.get("code"), "files": outputs(), "version": VERSION, "build": BUILD, "here": str(HERE), "started": v.get("started", ""), "port": PORT,
+                                   "first_look": fl, "other": other})
         if u.path == "/api/shot":
             # 1社目の確認で見せる、押す直前に保存した画面。出力/送信画面 の中の .png だけを返す(ほかの場所は読ませない)
             name = q.get("file") or q.get("name", "")
@@ -1264,10 +1277,11 @@ class H(BaseHTTPRequestHandler):
                 OUT.mkdir(exist_ok=True)
                 ng.write_text(d["ng"], encoding="utf-8")
                 args += ["--ng", str(ng)]
-            return self.send(200, {"started": run_job("探す", args)})
+            ok = run_job("探す", args)
+            return self.send(200, {"started": ok} if ok else {"started": False, "error": "いま「探す」が動いています。終わってから押します"})
         if self.path == "/api/stop":
             # 手で止める。「探す」だけ止める(印のファイルを置くと、探す処理が次の区切り(検索1回・会社1社)で止まり、調べ終えた分でリストを作る)。送信は止めない
-            if not (JOB["running"] and JOB["name"] == "探す"):
+            if not SJOB["running"]:
                 return self.send(200, {"stopped": False, "note": "止める「探す」処理は動いていません"})
             OUT.mkdir(exist_ok=True)
             (OUT / f"探す_止める_{PORT}.flag").write_text(time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
@@ -1284,7 +1298,7 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"url": f"http://127.0.0.1:{pt}/", "port": pt})
         if self.path == "/api/update":
             # 最新版へ入れ替えて、起動し直す。探す・送るの最中(どのサーバーでも)は断る。入れ替えは、検査に全部通ったときだけ(updater.py)
-            if JOB["running"] or any((ports.job(p) or {}).get("running") for p in ports.POOL if p != PORT):
+            if JOB["running"] or SJOB["running"] or any((ports.job(p) or {}).get("running") for p in ports.POOL if p != PORT):
                 return self.send(409, {"error": "探す・送る処理の最中は、更新できません。終わってから、もう一度この画面を開いてください"})
             if not UPDATE_BUSY.acquire(blocking=False):
                 return self.send(409, {"error": "ほかの画面が、いま更新しています。数秒待ってください"})
@@ -1308,7 +1322,7 @@ class H(BaseHTTPRequestHandler):
                 UPDATE_BUSY.release()
         if self.path == "/api/restart":
             # 終了して、同じ番号で起動し直す。探す・送るの最中は断る(タスクマネージャーを使わせない)
-            if JOB["running"]:  # 自分のサーバーだけを起動し直す。ほかの番号の検索は別のプロセスなので巻き込まない
+            if JOB["running"] or SJOB["running"]:  # 自分のサーバーだけを起動し直す。ほかの番号の検索は別のプロセスなので巻き込まない
                 return self.send(409, {"error": "探す・送る処理の最中は、再起動できません。終わってから押してください"})
             self.send(200, {"ok": True})
             updater.relaunch(PORT, "")
@@ -1317,8 +1331,9 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/api/quit":
             if JOB["running"] and (JOB["name"] == "本番送信" or d.get("if_idle")):
                 return self.send(409, {"error": f"「{JOB['name']}」の最中は終了できません。終わってから押してください"})
-            if JOB.get("proc"):
-                JOB["proc"].terminate()
+            for _j in (JOB, SJOB):
+                if _j.get("proc"):
+                    _j["proc"].terminate()
             self.send(200, {"ok": True})
             threading.Timer(0.5, lambda: os._exit(0)).start()
             return
@@ -1582,7 +1597,7 @@ def page():
 
 
 def _busy_anywhere():
-    return bool(JOB["running"] or any((ports.job(p) or {}).get("running") for p in ports.POOL if p != PORT))
+    return bool(JOB["running"] or SJOB["running"] or any((ports.job(p) or {}).get("running") for p in ports.POOL if p != PORT))
 
 
 def auto_update_once(why):
