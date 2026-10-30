@@ -161,8 +161,8 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
   </div>
   <div id="c_sum"><div class="sumline" id="senderLine"></div><div class="sumline" id="msgLine"></div></div>
   <div class="edit" id="senderEdit" hidden>
-   <h3 class="eh">送信元（相手に見える名前と連絡先）</h3><p class="hint">一度保存すれば残ります。直すときもここだけです。</p>
-   <p class="hint"><label>受け取った「設定ファイル」があれば、ここで読み込めます（送信元・基本の文面・業種ごとの文面が入ります。今の内容は置き換わります）: <input type="file" id="importFile" accept=".json,application/json"></label><br><label>計測キー（担当者から届いた鍵。初めて読み込むときだけ入れます）: <input type="password" id="importKey" autocomplete="off" size="40"></label></p>
+   <h3 class="eh">送信元（相手に見える名前と連絡先）</h3><p class="hint">一度保存すれば残ります。</p>
+   <p class="hint"><label>受け取った「設定ファイル」があれば、ここで読み込めます（今の内容は置き換わります）:<input type="file" id="importFile" accept=".json,application/json"></label><br><label>計測キー（担当者から届いた鍵・初回だけ）:<input type="password" id="importKey" autocomplete="off" size="40"></label></p>
    <div class="row" id="sender"></div>
    <div class="fld" id="f_署名"><label for="s_署名">署名</label><p class="hint">住所・電話・お名前と、不要ならご返信くださいの案内を入れます（法律で決まっている表示です）。</p><textarea id="s_署名" style="min-height:130px"></textarea><p class="ferr" id="e_署名" hidden></p><button class="btn sub sm" id="sigSample" type="button" style="margin-top:8px">見本を入れる</button></div>
    <div class="actions"><button class="btn sub" id="saveSender" type="button">この送信元を保存</button> <button class="lnk" id="senderClose" type="button">閉じる</button></div>
@@ -331,7 +331,7 @@ function renderSumLines(st){const s=META.sender||{};
 function msgSummary(){const s=META.message_summary;if(s&&Array.isArray(s.industries))return s.industries;const mi=META.message_info||{industries:{}};return Object.keys(mi.industries||{}).filter(n=>hasOwn(n))}
 function hasOwn(n){const s=META.message_summary;if(s&&Array.isArray(s.industries))return s.industries.includes(n);const mi=META.message_info||{industries:{}};return mi.industries&&mi.industries[n]=='専用'||!!(mi.patterns&&mi.patterns[n])}
 function markSender(){FIELDS.forEach(k=>{const e=$('#e_'+k),f=$('#f_'+k);if(e){e.hidden=true;e.textContent=''}if(f)f.classList.remove('bad')});
- senderProbs().forEach(p=>{const e=$('#e_'+p.field),f=$('#f_'+p.field);if(e){const t=String(p.text||'').replace(/^送信元の「[^」]*」が/,'');e.hidden=false;e.textContent=(e.textContent?e.textContent+' ':'')+t}if(f)f.classList.add('bad')})}
+ senderProbs().forEach(p=>{const e=$('#e_'+p.field),f=$('#f_'+p.field);if(e){const t=String(p.text||'').replace(/^送信元の「[^」]*」が/,'').replace(/^見本の「[^」]*」のままです$/,'見本のままです');e.hidden=false;e.textContent=(e.textContent?e.textContent+' ':'')+t}if(f)f.classList.add('bad')})}
 function band(html,btns,extra){$('#now_c').innerHTML=html+(S.err?`<p class="berr" role="alert">${S.err}</p>`:'')+(btns?`<div class="nowact">${btns}</div>`:'')+(extra||'')}
 const B=(id,t,cls)=>`<button class="btn ${cls||'big'}" id="${id}" type="button">${esc(t)}</button>`;
 function on(id,fn){const e=$('#'+id);if(e)e.onclick=fn}
