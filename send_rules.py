@@ -24,7 +24,7 @@ import ng_list
 import placeholders
 import state
 
-ENFORCE_WINDOW = True  # テストが時刻に左右されないよう、conftest が切る
+ENFORCE_WINDOW = False  # 2026-10-30 運用者の指示「送信時間が9－18時とあるけれどもこの制約は外してください、使い勝手が悪いです」で外した。時間帯の検査そのもの(window_refusal)は、入れ直したテストのために残す
 HOURS = (9, 18)
 DAILY_LIMIT = 300
 REPEAT_DAYS = 14

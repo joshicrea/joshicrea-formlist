@@ -122,7 +122,7 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
   <div class="grid-chips" id="inds"></div>
   <label for="kw">3. キーワード（無くても探せます）</label><input id="kw" type="text" placeholder="例 サロン、フラワー、ケアハウス">
   <details class="dt"><summary>キーワードの使い方</summary><div>地図に載っている店名・施設名に含まれる語で探します。事業内容では探せません。スペースか「、」で区切ると、いくつでも入れられます。業種を選ばず、キーワードだけでも探せます。業種とキーワードを両方入れると、両方で探します。キーワードは最大3つずつ同時に探します（同時に探しすぎるとGoogleマップに止められやすいため）。</div></details>
-  <div class="row"><div><label for="limit">4. 出力する会社の数（リストに入れる上限）</label><input id="limit" type="number" value="300" min="1"><p class="hint" id="est"></p></div><div><label for="fetchLimit">5. 検索する数の上限（候補を集める数）</label><input id="fetchLimit" type="number" min="1" value="200"><p class="hint">候補をこの件数まで集めたら、残りの検索はせずにリストを作ります。止まる条件はこの数字だけで、出力する会社の数とは連動しません。</p></div></div>
+  <div class="row"><div><label for="limit">4. 出力する会社の数（リストに入れる上限）</label><input id="limit" type="number" value="10" min="1"><p class="hint" id="est"></p></div><div><label for="fetchLimit">5. 検索する数の上限（候補を集める数）</label><input id="fetchLimit" type="number" min="1" value="10"><p class="hint">候補をこの件数まで集めたら、残りの検索はせずにリストを作ります。止まる条件はこの数字だけで、出力する会社の数とは連動しません。</p></div></div>
   <label class="check"><input type="checkbox" id="large" checked><span>大手・チェーンの会社も含める<span class="hint d">ふつうは入れたままにします。一人サロンや小さな会社だけにしたいときに外します。自動車販売店・保険代理店・ホテルなど、チェーンの多い業種は、外すと全部が除かれることがあります。</span></span></label>
   <details class="more"><summary>くわしい設定（最初は開かなくて大丈夫です）</summary>
    <label class="check"><input type="checkbox" id="resumeChecks" checked><span>途中で止まっても確認済みの行を再利用する</span></label>
@@ -162,20 +162,23 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
   <div id="c_sum"><div class="sumline" id="senderLine"></div><div class="sumline" id="msgLine"></div></div>
   <div class="edit" id="senderEdit" hidden>
    <h3 class="eh">送信元（相手に見える名前と連絡先）</h3><p class="hint">一度保存すれば残ります。直すときもここだけです。</p>
+   <p class="hint"><label>受け取った「設定ファイル」があれば、ここで読み込めます（送信元・基本の文面・業種ごとの文面が入ります。今の内容は置き換わります）: <input type="file" id="importFile" accept=".json,application/json"></label><br><label>計測キー（担当者から届いた鍵。初めて読み込むときだけ入れます）: <input type="password" id="importKey" autocomplete="off" size="40"></label></p>
    <div class="row" id="sender"></div>
    <div class="fld" id="f_署名"><label for="s_署名">署名</label><p class="hint">住所・電話・お名前と、不要ならご返信くださいの案内を入れます（法律で決まっている表示です）。</p><textarea id="s_署名" style="min-height:130px"></textarea><p class="ferr" id="e_署名" hidden></p><button class="btn sub sm" id="sigSample" type="button" style="margin-top:8px">見本を入れる</button></div>
    <div class="actions"><button class="btn sub" id="saveSender" type="button">この送信元を保存</button> <button class="lnk" id="senderClose" type="button">閉じる</button></div>
   </div>
   <div class="edit" id="msgEdit" hidden>
    <h3 class="eh">文面</h3>
+   <p class="hint"><label><input type="checkbox" id="expandOn"> 業種ごとの文面を使う（希望する人だけ。オフなら、下の基本の文面だけを使います）</label> <button type="button" id="expandMake">基本の文面から、業種ごとの文面を作る</button></p>
    <label for="mind">どの業種の文面か</label><select id="mind"></select>
    <p class="hint" id="mstate"></p><p class="ferr" id="mprob" hidden></p>
+   <p class="hint" id="mwhere"></p>
    <div class="autobox"><p class="ah">自動で入る部分（ここは書き換えません）</p>
     <div class="arow" id="greetRow"><span class="al">宛名</span><span id="greetView"></span> <button class="lnk" id="greetToggle" type="button"></button></div>
     <div class="arow" id="openRow"><span class="al">書き出し</span><span id="openView"></span></div></div>
    <label for="mtext">本文（ここを直します）</label><textarea id="mtext" style="min-height:260px"></textarea>
    <div class="autobox"><p class="ah">自動で入る部分</p><div class="arow"><span class="al">署名（送信元から）</span><button class="lnk" id="toSender" type="button">送信元を直す</button></div><div class="msgbody" id="sigView"></div></div>
-   <div class="actions"><button class="btn sub" id="saveMsg" type="button">この文面を保存</button> <button class="btn sub" id="moveMsg" type="button" hidden></button> <button class="btn sub" id="delMsg" type="button" hidden>この業種の文面をやめる（標準に戻す）</button> <button class="lnk" id="msgClose" type="button">閉じる</button></div>
+   <div class="actions"><button class="btn sub" id="saveMsg" type="button">この文面を保存</button> <button class="btn sub" id="moveMsg" type="button" hidden></button> <button class="btn sub" id="delMsg" type="button" hidden>この業種の文面をやめる（基本の文面に戻す）</button> <button class="lnk" id="msgClose" type="button">閉じる</button></div>
    <p class="hint" id="msgSaved"></p>
    <h3 class="eh">実際に届く文の見本</h3><p class="hint" id="sampleNote"></p><div class="msgbody" id="sampleView"></div>
    <details class="dt"><summary>営業資料から、文面のたたき台を作る</summary><div><p class="why">営業資料の文章を貼ります。見出し・箇条書き・URLを拾って、本文の欄にたたき台を入れます。保存するまでは、文面は変わりません。AIは使っていません。自分で読んで直します。</p><textarea id="mat" style="min-height:120px" placeholder="営業資料の文章をここに貼り付け"></textarea><button class="btn sub" id="mkSample" type="button">たたき台を作って、本文に入れる</button><p class="hint" id="matNote"></p></div></details>
@@ -299,9 +302,9 @@ function smaxCheck(){const L=lim(),raw=String($('#smax').value||'').trim().repla
  return {ok:true,n,cap:L&&n>L.left_today?L.left_today:n}}
 function limitsText(n){const L=lim();if(!L)return '';const sec=L.sec_per_company||[],h=L.hours||[];const m=(x)=>Math.max(1,Math.ceil(n*x/60));
  return `1回に送れるのは${L.per_run}社まで。きょうはあと${L.left_today}社（1日${L.per_day}社まで）。`+(h.length==2?`送れる時間は平日${h[0]}時〜${h[1]}時。`:'')+(sec.length==2&&n>0?`1社に${sec[0]}〜${sec[1]}秒かかるので、${n}社で約${m(sec[0])}〜${m(sec[1])}分。`:'')}
-function initSmax(){if(S.smaxInit||!META.send_state)return;$('#smax').value=META.last_max||(META.first_time?3:20);if(lim())$('#smax').max=lim().per_run;S.smaxInit=true}
+function initSmax(){if(S.smaxInit||!META.send_state)return;$('#smax').value=META.last_max||20;if(lim())$('#smax').max=lim().per_run;S.smaxInit=true}
 function renderCond(st){const v=smaxCheck(),L=lim(),n=v.ok?v.n:0;
- $('#smaxNote').textContent=META.first_time?'はじめての送信です。まず3社から始めると安心です。入力がうまくいかなかったフォームは、送信ボタンを押さずに、自分で送る会社に回します。':(v.ok&&n==META.last_max?`前回と同じ${n}社`:'');
+ $('#smaxNote').textContent=META.first_time?'はじめての送信です。入力がうまくいかなかったフォームは、送信ボタンを押さずに、自分で送る会社に回します。':(v.ok&&n==META.last_max?`前回と同じ${n}社`:'');
  $('#smaxErr').hidden=v.ok&&!(L&&n>L.left_today);$('#smaxErr').textContent=!v.ok?v.msg:(L&&n>L.left_today?(L.left_today>0?`きょうはあと${L.left_today}社なので、${L.left_today}社まで送ります。`:'きょうはもう1日に送れる数に達しました。あした以降に送ります。'):'');
  $('#limitsLine').textContent=limitsText(n||0);
  const full=st=='s3'||S.condOpen;show('#condEdit',full);show('#condSum',!full);
@@ -311,7 +314,7 @@ function sig1(){return String((META.sender||{})['署名']||'').split('\n').map(x
 function renderSumLines(st){const s=META.sender||{};
  const plan=st=='s4'||st=='s5';const parts=plan?[[s['会社名'],''],[s['氏名'],''],[s['メール'],''],[s['電話'],'']]:[[s['会社名'],''],[s['氏名'],''],[s['メール'],'メール'],[s['フリガナ'],'フリガナ'],[sig1(),'署名の1行目']];
  $('#senderLine').innerHTML='<span class="k">送信元</span><span class="v">'+parts.filter(p=>p[0]).map(p=>'<span class="nw">'+(p[1]?esc(p[1])+' ':'')+esc(p[0])+'</span>').join(' ／ ')+'</span><button class="lnk" data-go="" type="button">直す</button>';
- const ms=msgSummary();$('#msgLine').innerHTML=`<span class="k">文面</span><span class="v">標準 1本`+(ms.length?` ／ 業種ごとの文面 ${ms.length}本（${esc(ms[0])}${ms.length>1?' ほか':''}）`:'')+`</span><button class="lnk" data-gomsg="" type="button">見る・直す</button>`}
+ const ms=msgSummary();$('#msgLine').innerHTML=`<span class="k">文面</span><span class="v">基本の文面 1本`+(ms.length?` ／ 業種ごとの文面 ${ms.length}本（${esc(ms[0])}${ms.length>1?' ほか':''}）`:'')+`</span><button class="lnk" data-gomsg="" type="button">見る・直す</button>`}
 function msgSummary(){const s=META.message_summary;if(s&&Array.isArray(s.industries))return s.industries;const mi=META.message_info||{industries:{}};return Object.keys(mi.industries||{}).filter(n=>hasOwn(n))}
 function hasOwn(n){const s=META.message_summary;if(s&&Array.isArray(s.industries))return s.industries.includes(n);const mi=META.message_info||{industries:{}};return mi.industries&&mi.industries[n]=='専用'||!!(mi.patterns&&mi.patterns[n])}
 function markSender(){FIELDS.forEach(k=>{const e=$('#e_'+k),f=$('#f_'+k);if(e){e.hidden=true;e.textContent=''}if(f)f.classList.remove('bad')});
@@ -387,13 +390,13 @@ function splitMsg(raw){const mp=META.message_parts&&META.message_parts[S.msgInd]
 function assemble(){const p=S.parts||{ok:false},b=fromMarks($('#mtext').value).replace(/^\n+|\s+$/g,'');
  if(!p.ok)return b+'\n';return (S.greet?(p.greetLine||'{企業名} ご担当者さま')+'\n\n':'')+(S.opener?'{書き出し}\n\n':'')+b+'\n\n{署名}\n'}
 function rawMsg(k){const mi=META.message_info||{};const m=META.messages||{};return m[k]??(mi.pattern_texts&&mi.pattern_texts[k])??m.default??''}
-function renderMsgOptions(){const mi=META.message_info||{industries:{},orphans:[]};const orph=(mi.orphans||[]);
+function renderMsgOptions(){syncExpand();showWhere();const mi=META.message_info||{industries:{},orphans:[]};const orph=(mi.orphans||[]);
  const names=['default',...(META.industries||[]),...orph.map(o=>o.name)];
- $('#mind').innerHTML=names.map(n=>{const o=orph.find(x=>x.name==n);const t=n=='default'?'標準（業種ごとの文面が無い業種に使います）':n+(o?'（古い業種名。いまは使われません）':hasOwn(n)?'（業種ごとの文面）':'（標準を使う）');return `<option value="${esc(n)}">${esc(t)}</option>`}).join('');
+ $('#mind').innerHTML=names.map(n=>{const o=orph.find(x=>x.name==n);const t=n=='default'?'基本の文面':n+(o?'（古い業種名。いまは使われません）':hasOwn(n)?'（業種ごとの文面）':'（基本の文面を使う）');return `<option value="${esc(n)}">${esc(t)}</option>`}).join('');
  if(names.includes(S.msgInd))$('#mind').value=S.msgInd}
 function showMsg(){const k=S.msgInd=$('#mind').value,mi=META.message_info||{orphans:[]};const o=(mi.orphans||[]).find(x=>x.name==k),own=k!='default'&&hasOwn(k);
  S.parts=splitMsg(rawMsg(k));S.greet=S.parts.greet;S.opener=S.parts.opener;$('#mtext').value=S.parts.body;
- $('#mstate').textContent=k=='default'?'この文面は、業種ごとの文面が無い業種すべてに使います。':o?'古い業種名で作った文面です。いまの業種の分類にこの名前は無いので、送るときには使われません。':own?'この業種には、業種ごとの文面を使います。':'この業種には、標準の文面を使います。直して保存すると、この業種だけの文面になります。';
+ $('#mstate').textContent=k=='default'?'':o?'古い業種名で作った文面です。いまの業種の分類にこの名前は無いので、送るときには使われません。':own?'この業種には、業種ごとの文面を使います。':'この業種には、基本の文面を使います。直して保存すると、この業種だけの文面になります。';
  const mp=msgProbs().filter(p=>(p.industry||'default')==k);$('#mprob').hidden=!mp.length&&S.parts.ok;$('#mprob').textContent=mp.map(p=>p.text).join(' ')+(S.parts.ok?'':' 自動で入る部分の位置が、ほかの文面と違います。印のところは送るときに置き換わります。');
  $('#delMsg').hidden=!(own&&(META.messages||{})[k]!=null);$('#moveMsg').hidden=!(o&&o.to);$('#moveMsg').textContent=o&&o.to?`この文面を ${o.to} の文面にコピーする`:'';
  renderAuto();renderSample()}
@@ -415,8 +418,21 @@ async function saveMsg(){S.err='';const k=S.msgInd,before=sState();const r=await
  await refreshMeta(true);S.flash=(before=='s4'||before=='s5')?'文面を直したので、もう一度送る内容を出します。':'文面を保存しました。';$('#msgSaved').textContent='保存しました。';
  renderMsgOptions();showMsg();renderSend()}
 $('#saveMsg').onclick=saveMsg;
+async function importSettings(file){S.err='';let b;try{b=JSON.parse(await file.text())}catch(e){S.err='設定ファイルとして読めませんでした。受け取ったファイルをそのまま選んでください。';renderSend();return}
+ if(!b||b.format!=='formlist-settings-1'||typeof b.sender!=='object'||typeof b.messages!=='object'){S.err='このファイルは、設定ファイルではないようです。';renderSend();return}
+ const n=Object.keys(b.messages).length;
+ if(!confirm('送信元（'+Object.keys(b.sender).length+'項目）と、文面'+n+'本を読み込みます。今の送信元と、同じ名前の文面は置き換わります。よろしいですか。'))return;
+ const key=$('#importKey').value.trim();const snd=key?Object.assign({},b.sender,{'計測キー':key}):b.sender;const r1=await post('/api/sender',snd);if(r1.error){S.err=errHtml(r1);renderSend();return}
+ const r2=await post('/api/message',b.messages);if(r2.error){S.err=errHtml(r2);renderSend();return}
+ $('#importKey').value='';await refreshMeta(true);renderSenderForm();renderMsgOptions();showMsg();S.flash='設定ファイルを読み込みました（送信元と文面'+n+'本）。送る前に、内容をご確認ください。';renderSend()}
+setInterval(async()=>{const a=document.activeElement;if(document.hidden||(a&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)))return;const before=(META.message_info||{}).msg_mtime;await refreshMeta(true);const mi=META.message_info||{};if(mi.msg_mtime!==before&&S.editMsg){renderMsgOptions();showMsg()}else showWhere()},8000);
+$('#importFile').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f)importSettings(f)};
+function showWhere(){const mi=META.message_info||{};const e=$('#mwhere');if(e)e.textContent=mi.msg_dir?('文面の保存先: '+mi.msg_dir+'（最後に変わった時刻 '+(mi.msg_mtime||'まだありません')+'）'):''}
+function syncExpand(){const e=$('#expandOn');if(e)e.checked=((META.message_info||{}).expand_on)!==false}
+$('#expandOn').onchange=async()=>{const r=await post('/api/message/expand',{on:$('#expandOn').checked});if(r.error){S.err=errHtml(r);renderSend();return}await refreshMeta(true);syncExpand();renderMsgOptions();showMsg();renderSend()};
+$('#expandMake').onclick=async()=>{if(!confirm('基本の文面を写して、まだ専用の文面が無い業種すべてに専用の文面を作ります。作ったあと、業種ごとに直せます。すでにある専用の文面は上書きしません。よろしいですか。'))return;const r=await post('/api/message/expand',{make:true,on:true});if(r.error){S.err=errHtml(r);renderSend();return}await refreshMeta(true);syncExpand();renderMsgOptions();showMsg();S.flash=r.made.length+'業種に専用の文面を作りました。';renderSend()};
 $('#moveMsg').onclick=async()=>{const k=S.msgInd;const o=((META.message_info||{}).orphans||[]).find(x=>x.name==k);if(!o||!o.to)return;const r=await post('/api/message/move',{from:k,to:o.to});if(r.error){$('#msgSaved').innerHTML=errHtml(r);return}await refreshMeta(true);S.msgInd=o.to;renderMsgOptions();showMsg();$('#msgSaved').textContent=r.note||''};
-$('#delMsg').onclick=async()=>{const k=S.msgInd;if(!confirm(k+' の業種ごとの文面をやめて、標準の文面を使うようにします。前の文面は残してあります。よろしいですか'))return;const r=await post('/api/message/delete',{name:k});if(r.error){$('#msgSaved').innerHTML=errHtml(r);return}await refreshMeta(true);renderMsgOptions();showMsg();$('#msgSaved').textContent=r.note||''};
+$('#delMsg').onclick=async()=>{const k=S.msgInd;if(!confirm(k+' の業種ごとの文面をやめて、基本の文面を使うようにします。前の文面は残してあります。よろしいですか'))return;const r=await post('/api/message/delete',{name:k});if(r.error){$('#msgSaved').innerHTML=errHtml(r);return}await refreshMeta(true);renderMsgOptions();showMsg();$('#msgSaved').textContent=r.note||''};
 $('#mkSample').onclick=async()=>{const r=await post('/api/sample',{material:$('#mat').value});if(r.error){$('#matNote').innerHTML=errHtml(r);return}if($('#mtext').value.trim()&&!confirm('いまの本文を、たたき台で置き換えます（保存するまでは元に戻せます）。よろしいですか'))return;
  const p=splitMsg(r.text);$('#mtext').value=p.ok?p.body:toMarks(r.text);$('#matNote').textContent='たたき台を入れました。拾えたもの: 題 '+(r.title||'なし')+'・箇条書き'+(r.points||[]).length+'個・URL'+(r.url?'あり':'なし')+'。読んで直してから、この文面を保存を押します。'};
 const OPSRC={title:'ホームページの題から作った下書き',general:'会社名と業種から作った下書き',ai:'AI（Claude）が書き直した下書き',person:'あなたが直した書き出し'};

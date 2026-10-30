@@ -78,10 +78,15 @@ DONE = re.compile(r"送信(が)?完了|送信しました|受け付けました|
 CONSENT = re.compile(r"同意|承諾|プライバシー|個人情報|privacy|agree", re.I)
 
 
+EXPAND_OFF = "業種展開.オフ"  # 文面フォルダにこのファイルがあるとき、業種ごとの文面は使わない(無い=使う。これまでの動きのまま)
+
+
 def pick_message_source(path, industry):
     """(どの文面か, 本文)。どの文面か は「標準」か、業種ごとの文面の業種名(ファイルを1つ指定したときは「指定の文面」)。
     --message がフォルダなら 業種名.txt を優先し、無ければ割り当てた業種別パターン、それも無ければ default.txt"""
     p = Path(path)
+    if p.is_dir() and (p / EXPAND_OFF).exists():  # 画面の「業種ごとの文面を使う」がオフ: 業種ごとの文面・割り当てパターンは使わず、標準(原本)だけを使う
+        return "標準", (p / "default.txt").read_text(encoding="utf-8-sig")
     if p.is_dir():
         # 業種は、書かれたとおりの名前 → 新しい分類の名前(古い名前で作ったリストも、新しい分類の文面を使う) の順に探す
         import industries

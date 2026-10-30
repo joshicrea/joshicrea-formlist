@@ -233,7 +233,9 @@ def message_info():
     texts = {n: t for n, t in texts.items() if t}  # 割り当てはあっても、パターンのファイルが無い環境(公開版)では標準が使われる
     # uses: 画面の1つの印。その業種に「業種ごとの文面」(業種名.txt か、割り当て済みのパターン)が使われるか、「標準」か(D-8。専用とパターンを分けて見せない)
     uses = {n: ("業種ごと" if (n in have or n in texts) else "標準") for n in names}
-    return {"industries": {n: ("専用" if n in have else "標準") for n in names}, "uses": uses,
+    import autosend
+    mt = max([f.stat().st_mtime for f in MSG.glob("*.txt")] or [0]) if MSG.exists() else 0  # 画面が「文面が変わったか」を見分け、保存先と最終更新を利用者に見せる
+    return {"msg_dir": str(MSG), "msg_mtime": time.strftime("%m/%d %H:%M:%S", time.localtime(mt)) if mt else "", "expand_on": not (MSG / autosend.EXPAND_OFF).exists(), "industries": {n: ("専用" if n in have else "標準") for n in names}, "uses": uses,
             "patterns": {n: pat[n] for n in texts}, "pattern_texts": texts,
             "orphans": [{"name": n, "to": industries.LEGACY.get(n, "")} for n in sorted(have) if n != "default" and n not in names and not n.startswith("承認")]}
 
@@ -596,7 +598,7 @@ PER_RUN = 300  # 1回に送れる社数の上限(count(…,1,300) と同じ値)
 
 def limits():
     left = max(0, send_rules.DAILY_LIMIT - send_rules.pressed_today(_log()))
-    return {"per_run": PER_RUN, "per_day": send_rules.DAILY_LIMIT, "left_today": left, "hours": list(send_rules.HOURS),
+    return {"per_run": PER_RUN, "per_day": send_rules.DAILY_LIMIT, "left_today": left, "hours": list(send_rules.HOURS) if send_rules.ENFORCE_WINDOW else [],
             "sec_per_company": [30, 60], "window": send_rules.window_refusal()}
 
 
@@ -1024,10 +1026,22 @@ class H(BaseHTTPRequestHandler):
                 return self.send(409, excel_error(f))
             rows = [r for r in rows if not industry or r.get("業種") == industry] or rows
             if rows:
-                r = rows[0]
-                name, url = r["企業名"], r.get("問い合わせフォームURL 無ければメール", "")
-                opener = (r.get("書き出し") or "").strip() or opener_draft_for(r.get("HP概要", ""), r.get("業種", ""))[0]
-                label = f"送るリストの1社目({name})で作りました"
+                # 「送らない」を選んだ会社・送れない会社は見本に使わない。確認・本番と同じ数え方(plan)で、実際に送る会社の中から選ぶ
+                try:
+                    todo = plan(f, False, PER_RUN, _NG_STORE, explain=True)["todo"]
+                except Exception:
+                    todo = None
+                if todo is None:  # 数えられないときは、送らないリストに載る会社だけは避けて、先頭の会社を使う
+                    r = rows[0]
+                else:
+                    sendable = {(n, u) for (n, u, _i, _o, _h) in todo}
+                    r = next((x for x in rows if (x["企業名"], x.get("問い合わせフォームURL 無ければメール", "")) in sendable), None)
+                if r is not None:
+                    name, url = r["企業名"], r.get("問い合わせフォームURL 無ければメール", "")
+                    opener = (r.get("書き出し") or "").strip() or opener_draft_for(r.get("HP概要", ""), r.get("業種", ""))[0]
+                    label = f"実際に送る会社の1社目({name})で作りました"
+                else:
+                    label = "見本の会社(株式会社サンプル)。送る会社がいまは無い（全社が「送らない」などの理由で止まっています）ので、この名前で作りました"
         if not opener:
             opener = opener_draft_for("", industry)[0]
         try:
@@ -1068,6 +1082,13 @@ class H(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         ng_store = _NG_STORE
         if u.path == "/":
+            if PORT != ports.MAIN and self.headers.get("Sec-Fetch-Mode") == "navigate" and ports.job(ports.MAIN, timeout=1):
+                # 画面のURLは常に入口の番号(8780)に固定する。8781・8782 をブックマークしていても、動いている入口へ案内する(古い画面のまま使わせない)
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{ports.MAIN}/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             extra = {}
             if self.headers.get("Sec-Fetch-Mode") == "navigate" and self.headers.get("Sec-Fetch-Dest") == "document":  # ブラウザが画面として開いたときだけ。APIの呼び出しには渡さない
                 extra["Set-Cookie"] = f"{UI_COOKIE}={UI_SESSION}; HttpOnly; SameSite=Strict; Path=/"
@@ -1457,6 +1478,20 @@ class H(BaseHTTPRequestHandler):
             # 見本の文字が残っていても保存はできる(途中で保存したい人のため)。送る内容を出すところで止まる。ここでは何が残っているかを返す
             probs = message_problems({("標準" if k == "default" else k): v for k, v in saved.items()})
             return self.send(200, {"ok": True, "problems": probs, "parts": {k: split_message(v) for k, v in saved.items()}})
+        if self.path == "/api/message/expand":
+            # 業種ごとの文面の切り替え(希望者だけ): {"on": true|false} は使う/使わないの印、{"make": true} は標準(原本)を写して、まだ専用の無い業種に専用の文面を作る
+            import autosend
+            if not (MSG / "default.txt").exists():
+                return self.send(400, {"error": "先に標準の文面を保存してください"})
+            if "on" in d:
+                (MSG / autosend.EXPAND_OFF).unlink(missing_ok=True) if d["on"] else (MSG / autosend.EXPAND_OFF).write_text("業種ごとの文面を使わない\n", encoding="utf-8")
+            made = []
+            if d.get("make"):
+                for n in osm_source.INDUSTRY_TAGS:
+                    if not (MSG / f"{n}.txt").exists():  # 作り済みの業種は上書きしない
+                        shutil.copy2(MSG / "default.txt", MSG / f"{n}.txt")
+                        made.append(n)
+            return self.send(200, {"ok": True, "expand_on": not (MSG / autosend.EXPAND_OFF).exists(), "made": made})
         if self.path in ("/api/message/move", "/api/message/delete"):
             # 業種の文面の引き継ぎ(古い名前→新しい分類。コピーなので元は残る)と、削除(専用をやめて「標準」に戻す。消さずに 文面/_削除済み に移す)
             info = message_info()
@@ -1586,7 +1621,7 @@ def auto_update_once(why):
 def auto_update_loop():
     """起動から少し待って1回(起動時)、そのあとは一定の間隔(定期)で、auto_update_once を呼ぶ"""
     first = float(os.environ.get("FORMLIST_AUTO_UPDATE_FIRST") or 20)
-    every = float(os.environ.get("FORMLIST_AUTO_UPDATE_EVERY") or 6 * 3600)
+    every = float(os.environ.get("FORMLIST_AUTO_UPDATE_EVERY") or 30 * 60)  # 古い画面のまま使われないよう30分ごと(処理中は入れ替えない)
     time.sleep(first)
     why = "起動時"
     while True:
