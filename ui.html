@@ -355,7 +355,7 @@ function renderSend(){if(!$('#now_c'))return;if(!META.send_state){band(NW+'読�
   return}
  if(st=='s3'){show('#c_cond',!S.editMsg&&!S.editSender);show('#c_sum',true);show('#condMore',true);show('#aiOpen',true);renderCond(st);showEditors();renderSumLines(st);
   if(prep){band(NW+'送る内容を作っています。少しかかります。まだ送りません。');return}
-  const v=smaxCheck();band(NX+(fl?fl+' ':'')+'「送る内容を出す」を押します。まだ送りません。',B('mainBtn',v.ok?`送る内容を出す（${v.cap}社まで）`:'送る内容を出す'));
+  const v=smaxCheck(),LL=lim(),over=v.ok&&LL&&v.n>LL.left_today?(LL.left_today>0?`きょうはあと${LL.left_today}社です。${LL.left_today}社だけ送ります。 `:'きょうは、もう1日に送れる数に達しました。あした以降に送ります。 '):'';band(NX+(fl?fl+' ':'')+over+'「送る内容を出す」を押します。まだ送りません。',B('mainBtn',v.ok?`送る内容を出す（${v.cap}社まで）`:'送る内容を出す'));
   const mb=$('#mainBtn');if(!v.ok)mb.classList.add('wait');mb.onclick=()=>doPreview(false);return}
  if(st=='s4'||st=='s5'){show('#c_cond',true);show('#c_sum',true);show('#msgLine',false);show('#senderLine',!S.editSender);renderCond(st);showEditors();renderSumLines(st);
   if(!S.T){band(NW+'送る内容を読み込んでいます。');loadPlan();return}
