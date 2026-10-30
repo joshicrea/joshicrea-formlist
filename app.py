@@ -157,7 +157,7 @@ def run_job(name, args, stdin_text=None, on_ok=None, extra_env=None):
     with LOCK:
         if slot["running"]:
             return False
-        slot.update(lines=[], running=True, name=name, code=None, proc=None, started=time.strftime("%Y-%m-%dT%H:%M:%S"))
+        slot.update(lines=[], running=True, name=name, code=None, proc=None, fresh=False, started=time.strftime("%Y-%m-%dT%H:%M:%S"))
 
     def work():
         code = None
@@ -182,7 +182,7 @@ def run_job(name, args, stdin_text=None, on_ok=None, extra_env=None):
                     if code == 0 and on_ok:
                         on_ok()
                 finally:
-                    slot.update(running=False, code=code, proc=None)
+                    slot.update(running=False, code=code, proc=None, fresh=True)
 
     threading.Thread(target=work, daemon=True).start()
     return True
@@ -683,7 +683,7 @@ def _write_rows(p, rows):
 
 def job_view():
     """画面に見せる処理(動いている方。両方動いていれば送る系)と、もう一方。どちらも止まっていれば、あとに始めた方"""
-    if JOB["running"]:
+    if JOB["running"] or JOB.get("fresh"):  # 送る系が終わったのに、画面へまだ返していない間は、探すが動いていても送る系を主にして返す
         return JOB, SJOB
     if SJOB["running"]:
         return SJOB, JOB
@@ -1137,6 +1137,8 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/job":
             fl = first_look_view()
             v, o = job_view()
+            if v is JOB and not JOB["running"]:
+                JOB["fresh"] = False
             other = {"name": o["name"], "last": ([l for l in o["lines"] if l.strip()] or [""])[-1][:120]} if o is not None and o["running"] else None
             return self.send(200, {"lines": v["lines"][-300:], "running": v["running"], "name": v["name"], "code": v.get("code"), "files": outputs(), "version": VERSION, "build": BUILD, "here": str(HERE), "started": v.get("started", ""), "port": PORT,
                                    "first_look": fl, "other": other})

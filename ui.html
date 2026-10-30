@@ -549,7 +549,7 @@ async function poll(){clearInterval(timer);const t=async()=>{const j=await J('/a
   if(wasRun&&sj&&j.code!==0&&j.code!==null)S.err=j.name=='確認'?'送る内容を出す途中で止まりました。もう一度押しても止まるときは、この画面を写して連絡します（くわしい記録に理由が残っています）。':'送る途中で止まりました。送れた会社と送れなかった会社は、送信の記録で読めます。';
   opts($('#files'),j.files,fin?j.files[0]:$('#files').value);opts($('#sfile'),j.files,fin||!$('#sfile').value?j.files[0]:$('#sfile').value);META.files=j.files;
   if(wasRun&&sj){S.T=null;if(/出し直しています。$/.test(S.flash))S.flash='書き出しを直して、送る内容を出し直しました。';await refreshMeta(true)}
-  wasRun=false;banners();if(fin){loadFunnel();goto('b')}}};t();timer=setInterval(t,1500)}
+  wasRun=false;banners();if(fin){loadFunnel();goto('b')}if(j.other&&j.other.name=='探す'){wasRun=true;setTimeout(poll,300)}}};t();timer=setInterval(t,1500)}
 $('#restart').onclick=async()=>{if(!confirm('ツールを再起動します。数秒で戻ります。よろしいですか'))return;try{const r=await post('/api/restart',{});if(r&&r.error){alert(r.error);return}}catch(e){}
  document.body.innerHTML='<p style="padding:40px">再起動しています。数秒で自動で戻ります。</p>';
  for(let i=0;i<150;i++){await new Promise(x=>setTimeout(x,1000));try{const w=await (await fetch("/api/whoami")).json();if(w.tool==="formlist"&&i>=2){location.reload();return}}catch(e){}}
