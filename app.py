@@ -1510,9 +1510,8 @@ class H(BaseHTTPRequestHandler):
                     FIRST_LOOK["answer"] = False
                 return self.send(200, dict({"go": FIRST_LOOK["answer"]}, **({"wait": FIRST_LOOK.get("wait")} if wait else {})))
         if self.path == "/api/firstlook":
-            # 画面で人が「このまま送る」「送らずに止める」を押した。ブラウザの画面からだけ受ける(承認と同じ Origin の検査)
-            origin = self.headers.get("Origin") or ""
-            if origin.replace("http://", "") not in HOSTS:
+            # 画面で人が「このまま送る」「送らずに止める」を押した。ブラウザの画面からだけ受ける(承認と同じ検査: Origin に加え、画面を開いたときの cookie)
+            if not self.from_browser_screen():
                 return self.send(403, {"error": "1社目の確認は、ツールの画面(ブラウザ)で押してください"})
             if not isinstance(d.get("go"), bool):
                 return self.send(400, {"error": "「このまま送る」か「送らずに止める」を選んでください"})
