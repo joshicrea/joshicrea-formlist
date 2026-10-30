@@ -363,7 +363,7 @@ function renderSend(){if(!$('#now_c'))return;if(!META.send_state){band(NW+'読�
   if(!n){band(NX+`送れる会社がありません。${m}社は送りません（理由は下）。`,B('mainBtn','結果を見るで選び直す'));on('mainBtn',()=>goto('b'));return}
   const head=(fl?fl+' ':'')+(m?`${n}社に送れます。${m}社は送りません（理由は下）。`:`${n}社に送れます。`);
   const how=T.window?`<span class="hint">${esc(T.window)}</span>`:`<span class="hint">下の文を読み、良ければ読みましたにチェックを入れます。</span>`;
-  band(NX+head+how,B('mainBtn',`この${n}社に送る`));const mb=$('#mainBtn');if(!S.read||T.window)mb.classList.add('wait');mb.onclick=doSend;return}
+  band(NX+head+how+`<label class="check readck"><input type="checkbox" id="readok"${S.read?' checked':''}><span>届く文と、会社ごとに違うところを読みました</span></label>`,B('mainBtn',`この${n}社に送る`));const mb=$('#mainBtn');if(!S.read||T.window)mb.classList.add('wait');mb.onclick=doSend;const rk=$('#readok');if(rk)rk.onchange=()=>{S.read=rk.checked;if(S.read&&S.err)S.err='';renderSend()};return}
  if(st=='s6'||st=='s6a'||st=='s7'){show('#c_run',true);renderRun(st,sending);return}
  band(NX+'画面を読み込み直します。');}
 function showEditors(){show('#senderEdit',S.editSender);if(S.editSender)markSender();show('#msgEdit',S.editMsg)}
@@ -459,10 +459,10 @@ function renderPlan(){const T=S.T||{},sd=T.sendable||[],sk=T.skipped||[],cm=T.co
   h+='<div class="tw"><table class="rt op"><tr><th style="width:20%">会社</th><th style="width:15%">使う文面</th><th>書き出し（直せます）</th><th style="width:12%">全文</th><th style="width:12%">フォーム</th></tr>'+sd.map((x,i)=>`<tr><td><b>${esc(x.name)}</b><div class="why">${esc(x.industry||'業種なし')}</div></td><td>${esc(x.template_label||'')}</td><td><textarea class="opin" data-i="${i}" data-n="${esc(x.name)}" aria-label="${esc(x.name)}の書き出し">${esc(x.opener||'')}</textarea><div class="why">${esc(OPSRC[x.opener_source]||'')}</div></td><td><button class="lnk fullbtn" data-i="${i}" type="button">全文を開く</button></td><td>${lk(x.form,'フォームを開く')}</td></tr><tr class="fullrow" id="full${i}" hidden><td colspan="5"><div class="msgbody">${esc('件名: '+(x.subject||'')+'\n\n'+(x.text||''))}</div></td></tr>`).join('')+'</table></div>';
   h+='<div class="actions"><button class="btn sub" id="saveOp" type="button">書き出しを保存</button> <span class="hint" id="opNote"></span></div>'}
  if(sk.length){h+=`<h3 class="eh">送らない会社 ${sk.length}社 <span class="opt">送った会社は自動で外します</span></h3><div class="tw"><table class="rt"><tr><th style="width:30%">会社</th><th>送らない理由</th></tr>`+sk.map(x=>`<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.text||'')}${x.fix=='sender'?' <button class="lnk" data-go="" type="button">送信元を直す</button>':x.fix=='message'?` <button class="lnk" data-gomsg="${esc(x.industry||'')}" type="button">文面を直す</button>`:''}</td></tr>`).join('')+'</table></div>'}
- if(sd.length){h+=`<label class="check readck"><input type="checkbox" id="readok"${S.read?' checked':''}><span>届く文と、会社ごとに違うところを読みました</span></label><p class="hint">送ると画面の外に確認が出ます（押し間違いを防ぐため）。`+(META.first_time?'はじめての方は、1社目に入れた画面を見てから送ります。':'')+'</p>'}
+ if(sd.length){h+=`<p class="hint">送ると画面の外に確認が出ます（押し間違いを防ぐため）。`+(META.first_time?'はじめての方は、1社目に入れた画面を見てから送ります。':'')+'</p>'}
  $('#c_plan').innerHTML=h;
  document.querySelectorAll('.fullbtn').forEach(b=>b.onclick=()=>{const r=$('#full'+b.dataset.i);r.hidden=!r.hidden;b.textContent=r.hidden?'全文を開く':'全文を閉じる'});
- on('saveOp',saveOp);const rk=$('#readok');if(rk)rk.onchange=()=>{S.read=rk.checked;if(S.read&&S.err)S.err='';renderSend();const mb=$('#mainBtn');if(S.read&&mb){const r=mb.getBoundingClientRect();if(r.top<0||r.bottom>innerHeight)mb.scrollIntoView({block:'center',behavior:'smooth'})}}}
+ on('saveOp',saveOp)}
 async function saveOp(){const T=S.T||{},ops={};let empty=0;document.querySelectorAll('.opin').forEach(t=>{const x=(T.sendable||[])[+t.dataset.i];if(!x)return;const v=t.value.trim();if(v==(x.opener||'').trim())return;if(!v){empty++;return}ops[x.name]=v});
  if(empty){$('#opNote').textContent='書き出しを空にはできません。消した欄に1文入れてから保存します。';return}
  if(!Object.keys(ops).length){$('#opNote').textContent='直した書き出しはありません。';return}
@@ -477,7 +477,7 @@ async function doPreview(auto){S.err='';if(!auto)S.flash='';const v=smaxCheck();
 function curKey(){for(let i=JOB.lines.length-1;i>=0;i--){const m=/確認番号: (\S+)/.exec(JOB.lines[i]);if(m)return m[1]}return ''}
 async function askApprove(){const T=S.T||{};const r=await post('/api/approve',{key:T.key||T.key_short||curKey()});if(r.error)return {err:r};return {ok:!!r.ok}}
 async function doSend(){const T=S.T||{};S.err='';S.flash='';
- if(!S.read){S.err='先に、下の、読みました、にチェックを入れます。';renderSend();const c=$('#readok');if(c){c.scrollIntoView({block:'center'});c.focus()}return}
+ if(!S.read){S.err='先に、ボタンの上の、読みました、にチェックを入れます。';renderSend();const c=$('#readok');if(c){c.scrollIntoView({block:'center'});c.focus()}return}
  if(T.window){S.err=esc(T.window);renderSend();return}
  S.wait='画面の外に確認が出ています。内容を読んで「はい」か「いいえ」を押します。';renderSend();
  const a=await askApprove();S.wait='';

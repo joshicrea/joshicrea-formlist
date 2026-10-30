@@ -1313,8 +1313,9 @@ class H(BaseHTTPRequestHandler):
                 if not r["updated"] and updater.build() == BUILD:
                     return self.send(200, {"updated": [], "restart": False})
                 self.send(200, {"updated": r["updated"], "restart": True})
-                if JOB.get("proc"):
-                    JOB["proc"].terminate()
+                for _j in (JOB, SJOB):
+                    if _j.get("proc"):
+                        _j["proc"].terminate()
                 updater.relaunch(PORT, r["backup"], version=r.get("version", ""))
                 threading.Timer(0.5, lambda: os._exit(0)).start()
                 return
@@ -1329,8 +1330,9 @@ class H(BaseHTTPRequestHandler):
             threading.Timer(0.5, lambda: os._exit(0)).start()
             return
         if self.path == "/api/quit":
-            if JOB["running"] and (JOB["name"] == "本番送信" or d.get("if_idle")):
-                return self.send(409, {"error": f"「{JOB['name']}」の最中は終了できません。終わってから押してください"})
+            if (JOB["running"] and JOB["name"] == "本番送信") or (d.get("if_idle") and (JOB["running"] or SJOB["running"])):
+                _busy = JOB if JOB["running"] else SJOB
+                return self.send(409, {"error": f"「{_busy['name']}」の最中は終了できません。終わってから押してください"})
             for _j in (JOB, SJOB):
                 if _j.get("proc"):
                     _j["proc"].terminate()
