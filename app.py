@@ -1052,7 +1052,7 @@ class H(BaseHTTPRequestHandler):
                     opener = (r.get("書き出し") or "").strip() or opener_draft_for(r.get("HP概要", ""), r.get("業種", ""))[0]
                     label = f"実際に送る会社の1社目({name})で作りました"
                 else:
-                    label = "見本の会社(株式会社サンプル)。送る会社がいまは無い（全社が「送らない」などの理由で止まっています）ので、この名前で作りました"
+                    label = "見本の会社(株式会社サンプル)。送る会社が無いので、この名前で作りました"
         if not opener:
             opener = opener_draft_for("", industry)[0]
         try:

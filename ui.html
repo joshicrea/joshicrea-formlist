@@ -169,11 +169,11 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
   </div>
   <div class="edit" id="msgEdit" hidden>
    <h3 class="eh">文面</h3>
-   <p class="hint"><label><input type="checkbox" id="expandOn"> 業種ごとの文面を使う（オフなら基本の文面だけ）</label> <button type="button" id="expandMake">基本の文面から、業種ごとの文面を作る</button></p>
+   <p class="hint"><label><input type="checkbox" id="expandOn"> 業種ごとの文面を使う</label> <button type="button" id="expandMake">基本の文面から、業種ごとの文面を作る</button></p>
    <label for="mind">どの業種の文面か</label><select id="mind"></select>
    <p class="hint" id="mstate"></p><p class="ferr" id="mprob" hidden></p>
    <p class="hint" id="mwhere"></p>
-   <div class="autobox"><p class="ah">自動で入る部分（ここは書き換えません）</p>
+   <div class="autobox"><p class="ah">自動で入る部分</p>
     <div class="arow" id="greetRow"><span class="al">宛名</span><span id="greetView"></span> <button class="lnk" id="greetToggle" type="button"></button></div>
     <div class="arow" id="openRow"><span class="al">書き出し</span><span id="openView"></span></div></div>
    <label for="mtext">本文（ここを直します）</label><textarea id="mtext" style="min-height:260px"></textarea>
@@ -410,17 +410,17 @@ function renderMsgOptions(){syncExpand();showWhere();const mi=META.message_info|
 function showMsg(){const k=S.msgInd=$('#mind').value,mi=META.message_info||{orphans:[]};const o=(mi.orphans||[]).find(x=>x.name==k),own=k!='default'&&hasOwn(k);
  S.parts=splitMsg(rawMsg(k));S.greet=S.parts.greet;S.opener=S.parts.opener;$('#mtext').value=S.parts.body;
  $('#mstate').textContent=k=='default'?'':o?'古い業種名で作った文面です。いまの業種の分類にこの名前は無いので、送るときには使われません。':own?'この業種には、業種ごとの文面を使います。':'この業種には、基本の文面を使います。直して保存すると、この業種だけの文面になります。';
- const mp=msgProbs().filter(p=>(p.industry||'default')==k);$('#mprob').hidden=!mp.length&&S.parts.ok;$('#mprob').textContent=mp.map(p=>p.text).join(' ')+(S.parts.ok?'':' 自動で入る部分の位置が、ほかの文面と違います。印のところは送るときに置き換わります。');
+ const mp=msgProbs().filter(p=>(p.industry||'default')==k);const bt=($('#now_c')&&$('#now_c').textContent)||'',mt=mp.map(p=>p.text).filter(t=>!bt.includes(t));$('#mprob').hidden=!mt.length&&S.parts.ok;$('#mprob').textContent=mt.join(' ')+(S.parts.ok?'':' 自動で入る部分の位置が、ほかの文面と違います。印のところは送るときに置き換わります。');
  $('#delMsg').hidden=!(own&&(META.messages||{})[k]!=null);$('#moveMsg').hidden=!(o&&o.to);$('#moveMsg').textContent=o&&o.to?`この文面を ${o.to} の文面にコピーする`:'';
  renderAuto();renderSample()}
 function renderAuto(){const p=S.parts||{};show('#greetRow',!!p.ok);show('#openRow',!!p.ok);
  $('#greetView').innerHTML=S.greet?chips(p.greetLine||'{企業名} ご担当者さま'):'<span class="mut">宛名の行は入れません</span>';$('#greetToggle').textContent=S.greet?'この行を入れない':'宛名の行を入れる';
- $('#openView').innerHTML=S.opener?chips('{書き出し}')+' 送る内容の一覧で、会社ごとに直せます':'この文面には、会社ごとの書き出しが入りません。 <button class="lnk" id="openerAdd" type="button">書き出しを入れる</button>';on('openerAdd',()=>{S.opener=true;renderAuto()});
+ $('#openView').innerHTML=S.opener?chips('{書き出し}')+' 一覧で会社ごとに直せます':'この文面には、会社ごとの書き出しが入りません。 <button class="lnk" id="openerAdd" type="button">書き出しを入れる</button>';on('openerAdd',()=>{S.opener=true;renderAuto()});
  const sg=String((META.sender||{})['署名']||'');$('#sigView').textContent=sg.trim()?sg:'送信元の署名が、まだ入っていません。'}
 async function renderSample(){const k=S.msgInd;$('#sampleNote').textContent='見本を作っています。';
  const r=await post('/api/render_sample',{industry:k,template_parts:{greeting:S.greet,opener:S.opener,body:fromMarks($('#mtext').value),text:assemble()}});
  if(k!=S.msgInd)return;if(r.error){$('#sampleNote').innerHTML=errHtml(r);$('#sampleView').textContent='';return}
- $('#sampleNote').textContent=`見本の会社: ${r.company_label||''}。保存するたびに作り直します。`;$('#sampleView').textContent='件名: '+(r.subject||'')+'\n\n'+(r.text||'')}
+ $('#sampleNote').textContent=`見本の会社: ${r.company_label||''}。`;$('#sampleView').textContent='件名: '+(r.subject||'')+'\n\n'+(r.text||'')}
 function openMsg(k){S.editMsg=true;S.editSender=false;S.msgInd=k||'default';renderMsgOptions();showMsg();renderSend();const e=$('#msgEdit');if(e)e.scrollIntoView({block:'start'})}
 $('#mind').onchange=()=>{$('#msgSaved').textContent='';showMsg()};
 $('#greetToggle').onclick=()=>{S.greet=!S.greet;renderAuto()};
@@ -440,7 +440,7 @@ async function importSettings(file){S.err='';let b;try{b=JSON.parse(await file.t
  $('#importKey').value='';await refreshMeta(true);renderSenderForm();renderMsgOptions();showMsg();S.flash='設定ファイルを読み込みました（送信元と文面'+n+'本）。送る前に、内容をご確認ください。';renderSend()}
 setInterval(async()=>{const a=document.activeElement;if(document.hidden||(a&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)))return;const before=(META.message_info||{}).msg_mtime;await refreshMeta(true);const mi=META.message_info||{};if(mi.msg_mtime!==before&&S.editMsg){renderMsgOptions();showMsg()}else showWhere()},8000);
 $('#importFile').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f)importSettings(f)};
-function showWhere(){const mi=META.message_info||{};const e=$('#mwhere');if(e)e.textContent=mi.msg_dir?('文面の保存先: '+mi.msg_dir+'（最後に変わった時刻 '+(mi.msg_mtime||'まだありません')+'）'):''}
+function showWhere(){const mi=META.message_info||{};const e=$('#mwhere');if(e)e.textContent=mi.msg_dir?('文面の保存先: '+mi.msg_dir+'（更新 '+(mi.msg_mtime||'まだありません')+'）'):''}
 function syncExpand(){const e=$('#expandOn');if(e)e.checked=((META.message_info||{}).expand_on)!==false}
 $('#expandOn').onchange=async()=>{const r=await post('/api/message/expand',{on:$('#expandOn').checked});if(r.error){S.err=errHtml(r);renderSend();return}await refreshMeta(true);syncExpand();renderMsgOptions();showMsg();renderSend()};
 $('#expandMake').onclick=async()=>{if(!confirm('基本の文面を写して、まだ専用の文面が無い業種すべてに専用の文面を作ります。作ったあと、業種ごとに直せます。すでにある専用の文面は上書きしません。よろしいですか。'))return;const r=await post('/api/message/expand',{make:true,on:true});if(r.error){S.err=errHtml(r);renderSend();return}await refreshMeta(true);syncExpand();renderMsgOptions();showMsg();S.flash=r.made.length+'業種に専用の文面を作りました。';renderSend()};
