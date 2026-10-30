@@ -586,11 +586,11 @@ def first_time():
 
 
 def default_max(first):
-    """最大の社数の既定。前回の値(画面の設定.json)があればそれ。無ければ、はじめての人は3、使い続ける人は20"""
+    """最大の社数の既定。前回の値(画面の設定.json)があればそれ。無ければ20(はじめての人も同じ。3社に絞らない)"""
     v = load_settings().get("last_max")
     if isinstance(v, int) and 1 <= v <= PER_RUN:
         return v, "last"
-    return (3, "first") if first else (20, "default")
+    return (20, "first") if first else (20, "default")
 
 
 PER_RUN = 300  # 1回に送れる社数の上限(count(…,1,300) と同じ値)
