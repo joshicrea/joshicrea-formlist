@@ -142,7 +142,7 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
 </section>
 <section id="b"><div class="now" id="now_b"></div><div class="card">
   <div class="toolbar"><div class="grow"><label for="files">見るリスト</label><select id="files"></select></div><label class="check inl"><input type="checkbox" id="onlyOk" checked><span>フォームがある会社だけ表示</span></label><div style="margin-bottom:6px"><button class="btn sub sm" id="dl" type="button">CSVをダウンロード</button></div></div>
-  <div class="sum" id="sum"></div><p class="mut" id="sumnote" style="margin:6px 0 0"></p>
+  <div id="rtabs" role="tablist" aria-label="結果の見方" style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0"></div><div id="mailbar" hidden style="margin:6px 0 10px"><button class="btn sub sm" id="mailAll" type="button">全部選ぶ</button> <button class="btn sub sm" id="mailNone" type="button">選びなおす</button> <button class="btn" id="mailGo" type="button">選んだ会社に送る内容を確かめる</button><p class="why" id="mailNote" style="margin:6px 0 0"></p></div><div class="sum" id="sum"></div><p class="mut" id="sumnote" style="margin:6px 0 0"></p>
   <details class="dt"><summary>くわしい内訳</summary><div class="sum sm" id="sum2"></div></details>
   <details class="dt" id="funnelBox" hidden><summary>前回の探索の内訳</summary><div id="funnelCard"></div></details>
   <div class="legend" id="legend" hidden></div>
@@ -235,6 +235,9 @@ function verdict(r){const cc=r['contact_confidence']||'',sp=r['sales_permission'
  if(v=='robots禁止')return {k:'ng',t:'対象外',why:'ホームページ側が、自動で読むことを断っています'};
  if(v=='取得失敗')return {k:'ng',t:'対象外',why:'ホームページを読み込めませんでした（時間を置くと読めることがあります）'};
  return {k:'',t:v||'まだ調べていません',why:''}}
+let RTAB='all';const MAILSEL=new Set();
+function tabOf(v){if(v.t=='フォームあり')return 'form';if(v.t=='メールだけ')return 'mail';if(v.k=='ng')return 'ng';return 'check'}
+const RTABS=[['all','すべて'],['form','フォームあり'],['check','手で確かめる'],['mail','メールだけ'],['ng','送れない']];
 function summ(rows){const c={ok:0,warn:0,ng:0,auto:0,cand:0,missing:0,official:0};rows.forEach(r=>{const k=verdict(r).k;if(k in c)c[k]++;const cc=r['contact_confidence']||'';if(cc=='自動確認:フォーム'||cc=='自動確認:メール')c.auto++;if(r['contact_candidate']=='True'||r['contact_candidate']===true||['自動確認:フォーム','自動確認:メール','候補:要目視'].includes(cc))c.cand++;if(cc=='未発見')c.missing++;if(cc=='公式HP再探索待ち')c.official++});return c}
 function est(){const n=Math.max(1,parseInt($('#limit').value)||0);const a=Math.max(1,Math.round((n*3+30)/60)),b=Math.max(1,Math.round((n*15+60)/60));$('#est').textContent=`最大${n}社まで調べます。目安は約${a}〜${b}分です（実測の一例: ホテル・旅館10社で約40秒。会社数や通信で変わります）`}
 $('#limit').oninput=est;
@@ -266,17 +269,27 @@ async function loadRes(){const f=$('#files').value;if(!f){$('#res').innerHTML='<
  $('#sumnote').textContent=$('#onlyOk').checked&&s.ng?'フォームが無い会社は、いまは表示していません。':'';
  $('#sum2').innerHTML=card('自動で確かめた',s.auto,'件')+card('候補を含む',s.cand,'件')+card('見つからず',s.missing,'件')+card('公式のページを探す前',s.official,'件');
  const rank={ok:0,warn:1,ng:2,'':3};let rows=all.map(r=>({r,v:verdict(r)}));if($('#onlyOk').checked)rows=rows.filter(x=>x.v.k=='ok'||x.v.k=='warn');rows.sort((a,b)=>rank[a.v.k]-rank[b.v.k]);
+ const tc={all:rows.length,form:0,check:0,mail:0,ng:0};rows.forEach(x=>{tc[tabOf(x.v)]++});
+ $('#rtabs').innerHTML=RTABS.map(([k,n])=>`<button class="btn sub sm rtab" data-k="${k}" type="button" role="tab" aria-selected="${RTAB==k}"${RTAB==k?' style="border-color:var(--ink);font-weight:700"':''}>${n}（${tc[k]}）</button>`).join('');
+ document.querySelectorAll('.rtab').forEach(b=>b.onclick=()=>{RTAB=b.dataset.k;loadRes()});
+ if(RTAB!='all')rows=rows.filter(x=>tabOf(x.v)==RTAB);
+ $('#mailbar').hidden=RTAB!='mail';
  const wc={};rows.forEach(({v})=>{if(v.why)wc[v.why]=(wc[v.why]||0)+1});const shared=new Map();rows.forEach(({v})=>{if(v.why&&wc[v.why]>1&&!shared.has(v.why))shared.set(v.why,v)});
  $('#legend').hidden=!shared.size;$('#legend').innerHTML='<b style="color:var(--ink)">表示の意味</b>'+[...shared.values()].map(v=>`<div>${tag(v.t,v.k)}${esc(v.why)}</div>`).join('');
  $('#res').innerHTML='<tr><th style="width:30%">会社</th><th style="width:30%">状態</th><th style="width:20%">開いて確かめる</th><th style="width:20%">送らない</th></tr>'+(rows.length?rows.map(({r,v},i)=>{const form=r['問い合わせフォームURL 無ければメール']||'',mail=r['メールアドレス']||(form.startsWith('http')?'':form);
-  return `<tr><td><b>${esc(r['企業名'])}</b><div class="why">${esc(r['業種'])}</div><details class="dt"><summary>くわしく</summary><div>取得元: ${esc(r['取得元'])}<br>メール: ${esc(mail||'なし')}<br>メモ: ${esc(plain(r['判定メモ']))||'なし'}</div></details></td><td>${tag(v.t,v.k)}${v.why&&wc[v.why]==1?`<div class="why">${esc(v.why)}</div>`:''}</td><td>${lk(r['HP URL'],'ホームページを開く')}<br>${lk(form,'フォームを開く')}</td><td><button class="btn sub sm ngb" data-i="${i}" type="button">送らない</button>${form&&/^https?:/.test(form)?`<br><button class="btn sub sm manb" data-i="${i}" type="button" style="margin-top:6px" title="フォームを開き、入れられる欄だけ自動で入れます。送信ボタンは押しません">自分で送る</button>`:''}</td></tr>`}).join(''):'<tr><td colspan="4">表示できる会社がありません。上の、フォームがある会社だけ表示、を外すと、ほかの会社も見えます。</td></tr>');
+  return `<tr><td>${RTAB=='mail'?`<label style="display:flex;gap:6px;align-items:center;font-weight:400"><input type="checkbox" class="mailChk" data-n="${esc(r['企業名'])}"${MAILSEL.has(r['企業名'])?' checked':''}>この会社に送る</label>`:''}<b>${esc(r['企業名'])}</b><div class="why">${esc(r['業種'])}</div><details class="dt"><summary>くわしく</summary><div>取得元: ${esc(r['取得元'])}<br>メール: ${esc(mail||'なし')}<br>メモ: ${esc(plain(r['判定メモ']))||'なし'}</div></details></td><td>${tag(v.t,v.k)}${v.why&&wc[v.why]==1?`<div class="why">${esc(v.why)}</div>`:''}</td><td>${lk(r['HP URL'],'ホームページを開く')}<br>${lk(form,'フォームを開く')}</td><td><button class="btn sub sm ngb" data-i="${i}" type="button">送らない</button>${form&&/^https?:/.test(form)?`<br><button class="btn sub sm manb" data-i="${i}" type="button" style="margin-top:6px" title="フォームを開き、入れられる欄だけ自動で入れます。送信ボタンは押しません">自分で送る</button>`:''}</td></tr>`}).join(''):'<tr><td colspan="4">表示できる会社がありません。上の、フォームがある会社だけ表示、を外すと、ほかの会社も見えます。</td></tr>');
  document.querySelectorAll('.manb').forEach(b=>b.onclick=async()=>{const x=rows[+b.dataset.i].r;if(!confirm(x['企業名']+' のフォームを別の画面で開き、入れられる欄だけ自動で入れます。\n送信ボタンは押しません。中身を確かめて、ご自分で送ってください。よろしいですか'))return;const r=await post('/api/manual',{file:$('#files').value,name:x['企業名']});if(r.error)return resNote(r.error);if(!r.started)resNote('いまほかの処理が動いています。終わってから押します');else{wasRun=true;poll()}});
  document.querySelectorAll('.ngb').forEach(b=>b.onclick=async()=>{const x=rows[+b.dataset.i].r;const form=x['問い合わせフォームURL 無ければメール']||'';
   const hostOf=v=>{try{return new URL(v).hostname.replace(/^www\./,'')}catch(e){return ''}};const host=hostOf(x['HP URL']||'');
   const same=host?RESROWS.filter(y=>y!==x&&hostOf(y['HP URL']||'')==host).map(y=>y['企業名']):[];
   if(!confirm(x['企業名']+' を送らない会社に入れます。'+(host?'ホームページ（'+host+'）ごと入れるので、':'')+(same.length?'同じホームページの '+same.length+' 社（'+same.slice(0,3).join('、')+(same.length>3?' ほか':'')+'）も送らない会社になります。':'')+'この画面の下の、送らない会社に入れたもの、から、あとで戻せます。よろしいですか'))return;
   const res=await post('/api/ng',{hp:x['HP URL']||'',form:form,name:x['企業名']});if(res.error)return resNote(res.error);loadRes()});
- ngList();portalList();banners()}
+ document.querySelectorAll('.mailChk').forEach(c=>c.onchange=()=>{c.checked?MAILSEL.add(c.dataset.n):MAILSEL.delete(c.dataset.n);mailNote()});
+ $('#mailAll').onclick=()=>{document.querySelectorAll('.mailChk').forEach(c=>{c.checked=true;MAILSEL.add(c.dataset.n)});mailNote()};
+ $('#mailNone').onclick=()=>{MAILSEL.clear();document.querySelectorAll('.mailChk').forEach(c=>{c.checked=false});mailNote()};
+ $('#mailGo').onclick=()=>{if(!MAILSEL.size){$('#mailNote').textContent='送る会社を選んでください。';return}$('#mailNote').textContent=MAILSEL.size+'社を選びました。メールの送信は、送信用メールの認証(SMTP)の入力が要ります。入力するまで、1通も送りません。'};
+ mailNote();ngList();portalList();banners()}
+function mailNote(){const n=$('#mailNote');if(n)n.textContent=MAILSEL.size?MAILSEL.size+'社を選んでいます。':'メールだけの会社を選ぶと、まとめて送る内容を確かめられます。'}
 function resNote(t){$('#sumnote').textContent=t;$('#sumnote').style.color='var(--danger-ink)';setTimeout(()=>{$('#sumnote').style.color=''},8000)}
 async function portalList(){const r=await J('/api/portals');if(!r||r.error)return;const box=$('#portalBox');if(!box)return;box.innerHTML=r.length?('<div class="why" style="margin:6px 0 2px">登録済みポータル（使うものにチェックすると、上のURL欄と合わせて集めます）</div>'+r.map(p=>`<label style="display:inline-flex;gap:6px;align-items:center;margin:2px 10px 2px 0;font-weight:400"><input type="checkbox" class="portalChk" value="${esc(p.url)}">${esc(p.name||p.url)}<button class="btn sub sm portalDel" data-u="${esc(p.url)}" type="button">削除</button></label>`).join('')):'';document.querySelectorAll('.portalDel').forEach(b=>b.onclick=async()=>{await post('/api/portals',{delete:1,url:b.dataset.u});portalList()});const add=$('#portalAdd');if(add)add.onclick=async()=>{const r2=await post('/api/portals',{name:$('#portalName').value,url:$('#portalUrl').value});if(r2.error)return alert(r2.error);$('#portalName').value='';$('#portalUrl').value='';portalList()}}
 async function ngList(){const r=await J('/api/ngscreen');if(r.error)return;$('#nglist').innerHTML=r.length?r.map((l,i)=>`<div style="margin:6px 0;color:var(--ink)">${esc(l.split('#')[0].trim().replace(/^@/,''))} <span class="why">${esc(l.split('「送らない」')[1]||'')}</span> <button class="btn sub sm ngu" data-i="${i}" type="button">戻す</button></div>`).join(''):'<div class="why">まだありません</div>';document.querySelectorAll('.ngu').forEach(b=>b.onclick=async()=>{const res=await post('/api/ng/undo',{line:r[+b.dataset.i]});if(res.error)return resNote(res.error);loadRes()})}
