@@ -16,10 +16,28 @@ INDUSTRY_TO_PATTERN = {
     "宿泊・観光": 7,
     "ブライダル・婚活": 8,
     "製造・メーカー": 9,
-    "教育・学習": 10,
-    "福祉・介護": 10,
+    "教育・学習": 11,  # 2026-11-01 運用者の指示: 旧パターン10(自治体・教育機関・福祉施設)を、10=自治体・地域団体 / 11=教育機関 / 12=福祉施設の3つに分けた
+    "福祉・介護": 12,
     "自治体・公共・団体": 10,
 }
+SPLIT_FROM_10 = (10, 11, 12)  # 旧パターン10から分かれた3つ。11・12 の文面ファイルが無いうちは、旧パターン10の文面を呼び名つきで使う(今までの動きを変えない)
+
+# 業種別の件名の初期値(12パターン・2026-11-01 運用者の指示)。利用者が 文面/パターン/件名.json で業種ごとに変えられる(キーはパターン番号。空・無いキーは初期値)
+DEFAULT_SUBJECTS = {
+    1: "来館促進や顧客交流につながるハンドメイド体験について",
+    2: "ブランドの魅力発信や購入者特典に活かせるハンドメイド企画について",
+    3: "来店時の待ち時間や顧客交流に活かせるハンドメイド体験について",
+    4: "来場促進やご家族との思い出づくりにつながるハンドメイド体験について",
+    5: "お客様との関係づくりや感謝イベントに活かせるハンドメイド体験について",
+    6: "来店促進や購入者向けイベントに活かせるハンドメイド体験について",
+    7: "宿泊・観光の魅力を高めるハンドメイド体験や記念品制作について",
+    8: "ブライダルフェアや記念日に活かせるハンドメイド体験・ギフト制作について",
+    9: "社員交流や福利厚生に活かせるハンドメイド体験について",
+    10: "地域交流や多世代交流につながるハンドメイド体験について",
+    11: "子どもたちの創造力を育むハンドメイド体験・体験学習について",
+    12: "施設利用者様の楽しみや交流につながるハンドメイド体験について",
+}
+SUBJECT_FILE = "件名.json"
 # パターン6(家電量販店)は17業種のどれにも対応しない。業種を問わず、個別に指定したときだけ使う。
 EXPLICIT_ONLY = (6,)
 
@@ -34,10 +52,12 @@ def pattern_for(industry):
 def load_pattern(number, industry="", directory=None):
     d = Path(directory) if directory else PATTERN_DIR
     files = sorted(d.glob("パターン%02d_*.txt" % number))
+    if len(files) != 1 and number in SPLIT_FROM_10 and number != 10:
+        files = sorted(d.glob("パターン10_*.txt"))  # 11・12 の文面が未作成なら、分割前のパターン10を使う
     if len(files) != 1:
         return None
     text = files[0].read_text(encoding="utf-8-sig")
-    if number == 10:
+    if number in SPLIT_FROM_10:
         text = text.replace("貴団体", CALLNAME_10.get(industry, "貴団体"))
     return text
 
@@ -46,3 +66,23 @@ def text_for_industry(industry, directory=None):
     """業種に割り当てたパターンの文面。割り当てが無ければ None"""
     n = pattern_for(industry)
     return load_pattern(n, industry, directory) if n else None
+
+
+def subject_for_pattern(number, directory=None):
+    """パターン番号の件名。利用者の 件名.json(例 {"11": "..."})に空でない値があればそれ、無ければ初期値。番号が表に無ければ None"""
+    d = Path(directory) if directory else PATTERN_DIR
+    try:
+        import json
+        over = json.loads((d / SUBJECT_FILE).read_text(encoding="utf-8-sig"))
+        v = over.get(str(number)) if isinstance(over, dict) else None
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    except (OSError, ValueError):
+        pass
+    return DEFAULT_SUBJECTS.get(number)
+
+
+def subject_for_industry(industry, directory=None):
+    """業種に割り当てたパターンの件名。割り当てが無ければ None(呼び出し側が送り主設定の件名を使う)"""
+    n = pattern_for(industry)
+    return subject_for_pattern(n, directory) if n else None

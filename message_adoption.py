@@ -28,9 +28,17 @@ def case_for(name, url):
         raise AdoptionError('承認した会社名とフォームURLの組合せではありません')
     return matches[0]
 
-def effective_sender(name, url, sender):
+def effective_sender(name, url, sender, industry=None):
+    """送信元。件名の優先順: 採用記録の上書き > 業種別の件名(industry を渡したとき・patterns) > 送信元設定の件名。
+    採用記録のある会社は、承認時の件名(subject)・送信元の照合値を変えないため、業種別の件名を当てない"""
     case = case_for(name, url)
-    return dict(sender, **case['sender_overrides']) if case else dict(sender)
+    base = dict(sender)
+    if industry and not case:
+        import patterns
+        subject = patterns.subject_for_industry(industry)
+        if subject:
+            base['件名'] = subject
+    return dict(base, **case['sender_overrides']) if case else base
 
 def resolve_row(row, message_path, sender, pick_message):
     name, url, industry, opener, hp = row

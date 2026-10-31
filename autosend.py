@@ -142,18 +142,34 @@ def prepare_message_plan(todo, message_path, sender):
 
 
 
-def plan_digest(todo, bodies, sender):
-    """送る会社・各社の全文・送信元(フォームに入れる値を全部含む)の照合番号。確認(--preview)と本番(--send --expect)で同じ関数を使う"""
-    rows = [(t[0], t[1], b, message_adoption.effective_sender(t[0], t[1], sender)) for t, b in zip(todo, bodies)]
+def plan_digest(todo, bodies, sender, message_path=None):
+    """送る会社・各社の全文・送信元(フォームに入れる値を全部含む。業種別の件名も入る)の照合番号。確認(--preview)と本番(--send --expect)で同じ関数を使う"""
+    rows = [(t[0], t[1], b, message_adoption.effective_sender(t[0], t[1], sender, subject_industry(message_path, t[2]))) for t, b in zip(todo, bodies)]
     return hashlib.sha256(json.dumps({"rows": rows, "sender": sender, "adoptions": message_adoption.record_digest()}, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
 CONTACT = re.compile(r"@|\d{2,4}-\d{2,4}-\d{3,4}")  # 最終の本文に送信者の連絡先(メールか電話)があるか
 
 
-def subject_for(name, url, sender):
-    """その会社に実際に入れる件名(採用記録の送信元を反映し、{企業名}を置き換えたもの)"""
-    return message_adoption.effective_sender(name, url, sender).get("件名", "").replace("{企業名}", name)
+def subject_industry(message_path, industry):
+    """件名を業種別にしてよいときだけ業種名を返す(それ以外は None=送信元設定の件名)。
+    業種ごとの文面がオフ(EXPAND_OFF)・文面が1ファイル指定のときは標準の文面なので、業種別の件名にしない"""
+    if not industry or not message_path:
+        return None
+    p = Path(message_path)
+    if not p.is_dir() or (p / EXPAND_OFF).exists():
+        return None
+    import industries
+    import patterns
+    for n in dict.fromkeys([industry, industries.canonical(industry)]):
+        if n and patterns.pattern_for(n):
+            return n
+    return None
+
+
+def subject_for(name, url, sender, industry=None):
+    """その会社に実際に入れる件名(採用記録の送信元・業種別の件名を反映し、{企業名}を置き換えたもの)。industry は subject_industry の結果"""
+    return message_adoption.effective_sender(name, url, sender, industry).get("件名", "").replace("{企業名}", name)
 
 
 MASK = "〇"  # 仮の文字の検査で、相手の会社名・書き出しの部分の代わりに置く1文字(括弧ではないので、それ自体は止まらない)
@@ -176,9 +192,9 @@ def body_leftovers(body, name, opener, words=None, headings=None):
     return placeholders.leftovers(_masked(body, name, opener), words, headings=headings)
 
 
-def subject_leftovers(name, url, sender, words=None):
+def subject_leftovers(name, url, sender, words=None, industry=None):
     """件名に残った仮の文字。{企業名} に入る相手の会社名の部分は見ない(会社名の【公式】で「件名が置き換わらない」と言わない)"""
-    template = message_adoption.effective_sender(name, url, sender).get("件名", "")
+    template = message_adoption.effective_sender(name, url, sender, industry).get("件名", "")
     return placeholders.leftovers(template.replace("{企業名}", MASK), words, allow_heading=False)
 
 
@@ -256,8 +272,9 @@ def build_plan(csv_path, include_supplemented, gate, max_count, message_path, se
     keep_todo, keep_bodies, subjects, labels = [], [], [], []
     for row, body in zip(todo, bodies):
         name, url = row[0], row[1]
-        subject = subject_for(name, url, sender)
-        left_subject = subject_leftovers(name, url, sender, words)
+        sub_ind = subject_industry(message_path, row[2])
+        subject = subject_for(name, url, sender, sub_ind)
+        left_subject = subject_leftovers(name, url, sender, words, sub_ind)
         left_body = body_leftovers(body, name, row[3], words, headings)
         if left_subject:
             item = {"reason_code": "subject", "text": f"件名の「{left_subject[0]['match']}」の部分が置き換わりません", "fix": "sender"}
@@ -280,7 +297,7 @@ def build_plan(csv_path, include_supplemented, gate, max_count, message_path, se
         skipped.append(dict(item, name=name, url=url))
     stop = "" if keep_todo else ("送れる会社がありません" if not skipped else "送れる会社がありません(理由は送らない会社の一覧)")
     return {"todo": keep_todo, "bodies": keep_bodies, "subjects": subjects, "labels": labels, "skipped": skipped,
-            "digest": plan_digest(keep_todo, keep_bodies, sender) if keep_todo else None, "over_limit": over, "stop": stop}
+            "digest": plan_digest(keep_todo, keep_bodies, sender, message_path) if keep_todo else None, "over_limit": over, "stop": stop}
 
 
 class LogError(Exception):
@@ -290,16 +307,34 @@ class LogError(Exception):
 STATE = {"clicked": False}  # 送信ボタンを押したあとか。押したあとの失敗は「要手動」ではなく「不明(要確認)」にする
 
 
+def _append_log(row):
+    new = not LOG.exists()
+    with open(LOG, "a", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        if new:
+            w.writerow(LOG_COLS)
+        w.writerow(row)
+
+
 def log_row(row):
     try:
         LOG.parent.mkdir(exist_ok=True)
         with filelock.locked(LOG):  # 新規判定・見出しの追加・行の追加を、他の実行と交ぜずに行う
-            new = not LOG.exists()
-            with open(LOG, "a", encoding="utf-8-sig", newline="") as f:
-                w = csv.writer(f)
-                if new:
-                    w.writerow(LOG_COLS)
-                w.writerow(row)
+            _append_log(row)
+    except (OSError, TimeoutError) as e:
+        raise LogError(repr(e))
+
+
+def claim_mail_attempt(row, addr):
+    """メールの「送信試行」の行を書く。ただし送信の記録がまだ無いときだけ。確認と書き込みを同じ鍵の中で行う
+    (2つの実行が同時に動いても、同じアドレスへ両方が送らない)。書いたら True、すでに記録があれば書かずに False"""
+    try:
+        LOG.parent.mkdir(exist_ok=True)
+        with filelock.locked(LOG):
+            if ng_list.norm_email(addr) in _sent_mail_addrs():
+                return False
+            _append_log(row)
+        return True
     except (OSError, TimeoutError) as e:
         raise LogError(repr(e))
 
@@ -461,13 +496,54 @@ def mail_skip_reason(row, include_supplemented=False, gate=None, done=None):
     return ""
 
 
+def _mail_channel():
+    """メール送信の部品を読む。公開版には含めていない(実送信の前提が揃うまで)ので、importlib で読み、無ければ ImportError"""
+    import importlib
+    return importlib.import_module("mail_channel")
+
+
+MAILTO = "mailto:"  # メールの送信ログの「フォームURL」欄は mailto:アドレス で書く(フォームの鍵と混ざらない)
+
+
+def _sent_mail_addrs():
+    """メールを送った(押した)アドレス(正規化)。送信ログを順に読み、試行・送信済み・不明に入ったアドレスは送り直さない。
+    外れるのは、「送信試行」の直後に「要手動」(未送信が確実な失敗)が書かれたときだけ。
+    送る関門で止めた「要手動」(送信の記録が前にある・NG・同じ会社)の行は、送信済みの印を消さない"""
+    if not LOG.exists():
+        return set()
+    blocked, prev = {}, {}
+    with open(LOG, encoding="utf-8-sig", newline="") as f:
+        for r in csv.DictReader(f):
+            u = r.get("フォームURL") or ""
+            if not u.startswith(MAILTO):
+                continue
+            a, res = ng_list.norm_email(u[len(MAILTO):]), r.get("結果")
+            if res in send_rules.PRESSED:
+                blocked[a] = True
+            elif res == "要手動" and prev.get(a) == "送信試行":
+                blocked[a] = False
+            prev[a] = res
+    return {a for a, v in blocked.items() if v}
+
+
+def optout_destination_missing(text, sender):
+    """受信拒否の連絡先(送信元のメールアドレスか URL)が、配信停止の案内の近くに無ければ True。メールは本文が唯一の表示の場"""
+    t = unicodedata.normalize("NFKC", text)
+    mail = unicodedata.normalize("NFKC", str(sender.get("メール") or "")).strip().lower()
+    for m in send_rules.OPT_OUT.finditer(t):
+        window = t[max(0, m.start() - 200): m.end() + 200]
+        if (mail and mail in window.lower()) or re.search(r"https?://", window):
+            return False
+    return True
+
+
 def _mail_scan(csv_path, include_supplemented=False, gate=None):
     """メールのみの行を1回だけ走査し、(対象, 対象外) を返す(対象と内訳を別々に数えない)。
     同じ会社へフォームとメールの両方が行かないよう、フォームで送る行・送信済みの行のHPを先に目印として入れる"""
     with open(csv_path, encoding="utf-8-sig", newline="") as f:
         rows = list(csv.DictReader(f))
     form_done = _done_keys(gate)
-    done = set()
+    done = _sent_mail_addrs()  # すでにメールを送った(押した)アドレス。次の回で同じ宛先へ送り直さない
     for r in rows:
         if row_channel(r) == "フォーム":
             key = (state.keys_of([r.get(formlist.LEDGER_COLS[7], "")]) or [""])[0]
@@ -821,7 +897,7 @@ def manual_prefill_company(csv_path, sender_path, message_path, company_name):
     if rejected or len(todo) != 1:
         print("本文を作れないため停止:", rejected)
         return 5
-    eff = dict(sender, 件名=sender.get("件名", "").replace("{企業名}", row[0]))
+    eff = dict(sender, 件名=subject_for(row[0], row[1], sender, subject_industry(message_path, row[2])))
     print(f"手動入力: {row[0]} のフォームを開きます。入力できる項目だけ自動で埋めます。送信ボタンは押しません。")
     memo, skipped = prefill_manual(row[1], eff, bodies[0])
     print("入力のメモ: " + str(memo))
@@ -1228,6 +1304,163 @@ def check_adopted_message(csv_path, sender_path, message_path, company_name):
         return 4
 
 
+def build_mail_plan(csv_path, include_supplemented, gate, max_count, message_path, sender):
+    """メール対象(フォーム無し・公開アドレスあり)の送る計画。文面は業種別を土台に会社ごとに生成し、件名は本文1行目の「件名:」、
+    無ければ業種別・送信元設定の件名。仮の文字が残る・件名が空・連絡先が無い会社は、理由つきで外す(止めずに次へ)"""
+    mail_channel = _mail_channel()
+    targets_ = mail_targets(csv_path, include_supplemented, gate)
+    if max_count is not None:
+        targets_ = targets_[:max_count]
+    todo, bodies, rejected = prepare_message_plan(targets_, message_path, sender)
+    skipped = [{"name": n, "url": u, "text": "書き出しが空です" if "書き出し" in w else w} for n, u, w in rejected]
+    words = placeholders.sample_words()
+    headings = placeholders.heading_words(words=words)
+    settings_error = ""
+    try:
+        settings = mail_channel.load_settings()
+    except mail_channel.MailError as e:
+        settings, settings_error = None, str(e)  # 確認の段階では無くても出せる(本番の前に必ず要る)。あれば実際の送信元を確認番号に入れる
+    identity = mail_channel.sender_identity(settings, sender)
+    keep, keep_bodies, subjects = [], [], []
+    for row, body in zip(todo, bodies):
+        name, addr, ind, opener = row[0], row[1], row[2], row[3]
+        line_subject, text = mail_channel.split_subject(body)
+        subject = line_subject or subject_for(name, addr, sender, subject_industry(message_path, ind))
+        why = ""
+        if not subject.strip():
+            why = "件名が空です(文面の1行目の「件名:」か、送信元の件名が要ります)"
+        elif placeholders.leftovers(_masked(subject, name), words, allow_heading=False):
+            why = "件名に置き換わらない仮の文字が残っています"
+        elif body_leftovers(text, name, opener, words, headings):
+            why = "文面に置き換わらない仮の文字が残っています"
+        elif not CONTACT.search(text):
+            why = "文面に送信者の連絡先(メールか電話)が入っていません"
+        else:
+            missing = send_rules.legal_missing(dict(sender, 署名=text))  # 署名の欄ではなく、実際に送る本文を見る
+            mismatch = send_rules.signature_mismatch(dict(sender, 署名=text))
+            if missing:
+                why = "送る本文に法定表示が足りません: " + "、".join(m.split("(")[0] for m in missing)
+            elif mismatch:
+                why = "送る本文の連絡先が送信元の設定と食い違っています: " + "、".join(k for k, _v in mismatch)
+            elif optout_destination_missing(text, sender):
+                why = "送る本文の配信停止の案内の近くに、受信拒否の連絡先(送信元のメールアドレスかURL)がありません"
+            else:
+                try:
+                    mail_channel.build_message(settings or {}, sender, addr, subject, text)  # 送る段階で落ちる宛先・件名(特殊な改行文字など)を確認で外す
+                except (mail_channel.MailError, ValueError) as e:
+                    why = "メールを組み立てられません: " + str(e)[:60]
+        if why:
+            skipped.append({"name": name, "url": addr, "text": why})
+            continue
+        keep.append(row)
+        keep_bodies.append(text)
+        subjects.append(subject)
+    digest = hashlib.sha256(json.dumps({"channel": "mail", "rows": [(r[0], r[1], s, b) for r, s, b in zip(keep, subjects, keep_bodies)], "sender": sender, "identity": identity},
+                                       ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest() if keep else None
+    return {"todo": keep, "bodies": keep_bodies, "subjects": subjects, "skipped": skipped, "digest": digest, "identity": identity, "settings_error": settings_error}
+
+
+def run_mail(a, sender, gate):
+    """--channel mail。確認(--preview か付けない)は送らず全文と確認番号を出す。本番(--send)はフォームと同じ承認の鍵が要る。
+    会社ごとに、時刻・同じ会社の間隔・NGをもう一度見て、1通ずつ個別に送る。1社の失敗は飛ばして理由を記録し、SMTPの設定の失敗は全体を止める"""
+    mail_channel = _mail_channel()
+    plan = build_mail_plan(a.csv, a.include_supplemented, gate, a.max, a.message, sender)
+    for s in plan["skipped"]:
+        print(f"送らない会社: {s['name']} <{s['url']}>  {s['text']}")
+    todo, bodies, subjects = plan["todo"], plan["bodies"], plan["subjects"]
+    print(f"メール対象 {len(todo)}社（フォーム無し・公開アドレスあり・お断り表示なし・送信ログに無い）")
+    if not todo:
+        return 0
+    legal = send_rules.legal_missing(sender)
+    if not a.send:
+        if legal:
+            print("注意: 署名に次の表示がありません。このままでは本番で送れません(特定電子メール法): " + "、".join(legal))
+        for (name, addr, ind, _o, _hp), subject, body in zip(todo, subjects, bodies):
+            print(f"\n===== 送る文面 {name} <{addr}>（業種「{ind or '指定なし'}」）=====\n件名: {subject}\n{body}=====")
+        who = plan["identity"]
+        print(f"\n送信者: {sender['会社名']} {sender['氏名']} {sender['メール']}")
+        print("実際の送信元(SMTP): " + (f"{who['from_name']} <{who['from_addr']}> / {who['host']}:{who['port']}({who['security']})" if who else "未設定または不備(" + (plan["settings_error"] or "smtp.json がありません") + ")。本番の前に設定が要ります"))
+        print(f"以上 {len(todo)}社が送信対象です（まだ送っていません）。\n確認番号: {plan['digest']}")
+        return 0
+    import approval
+    if legal:
+        print("署名に次の表示がないため、送りません(特定電子メール法): " + "、".join(legal))
+        return 1
+    late = send_rules.window_refusal()
+    if late:
+        print(late)
+        return 6
+    if a.expect and a.expect != plan["digest"]:
+        print("送る内容を出したあとで、送る会社・文面・送信元のどれかが変わりました。送らずに止めます。もう一度「送る内容を出す」を押します")
+        return 4
+    if not (a.expect and approval.consume_ticket(approval.env_token(), a.expect)):
+        print("本番の送信は、ツールの画面で人が全文を確認して承認したあとにだけ始められます。このコマンドからは送れません")
+        return 5
+    try:
+        settings = mail_channel.load_settings()
+    except mail_channel.MailError as e:
+        print(str(e))
+        return 1
+    if mail_channel.sender_identity(settings, sender) != plan["identity"]:  # 確認のあとで smtp.json の送信元・接続先が変わった
+        print("確認のあとで、メール送信の設定(送信元・接続先)が変わりました。送らずに止めます。もう一度「送る内容を出す」を押します")
+        return 4
+    if input("送ってよければ「送信」と入力してください > ").strip() != "送信":
+        print("中止しました")
+        return 0
+    ok, memo = mail_channel.check_login(settings)  # 1通も書く前に、接続と認証だけ試す(失敗でどの会社も「送った」扱いにしない)
+    if not ok:
+        print(memo)
+        print("メール送信の設定を直してから、もう一度やり直してください(送信ログには何も書いていません)")
+        return 3
+    results = []
+    for i, ((name, addr, ind, opener, hp), subject, body) in enumerate(zip(todo, subjects, bodies), 1):
+        stop = send_rules.window_refusal()
+        if stop:
+            print(f"{stop}。残りの会社には送らず、ここで止めます")
+            break
+        again = send_rules.company_refusal(LOG, name, "", hp)
+        if again:
+            res, memo = "要手動", "同じ会社のため送りません: " + again
+        elif _mail_is_ng({"HP URL": hp, "企業名": name}, addr, gate):
+            res, memo = "要手動", "NGリストに入ったため送りません"
+        else:
+            try:
+                msg = mail_channel.build_message(settings, sender, addr, subject, body)
+            except (mail_channel.MailError, ValueError) as e:
+                res, memo = "要手動", str(e)[:80]
+            else:
+                try:
+                    claimed = claim_mail_attempt([now(), name, MAILTO + addr, "送信試行", subject], addr)  # 送る前に書く: 確認と書き込みは同じ鍵の中。落ちても二重に送らない
+                except LogError as e:
+                    print("送信ログに書けません（Excelで開いていませんか）。二重送信を防ぐため、ここで止めます:", e)
+                    return 2
+                if not claimed:
+                    res, memo = "要手動", "このアドレスには送信の記録があるため送りません"
+                else:
+                    ok, memo = mail_channel.send(settings, msg)
+                    res = "送信済み" if ok else ("不明(要確認)" if memo.startswith("不明") else "要手動")
+                    if not ok and mail_channel.is_setting_failure(memo):
+                        try:
+                            log_row([now(), name, MAILTO + addr, res, memo])
+                        except LogError as e:
+                            print("送信ログに書けません（Excelで開いていませんか）。止めます:", e)
+                            return 2
+                        print(f"[{i}/{len(todo)}] {res}  {name}  {memo}\nメール送信の設定の失敗のため、残りの会社には送らず、ここで止めます")
+                        return 3
+        results.append(res)
+        print(f"[{i}/{len(todo)}] {res}  {name}  {memo}")
+        try:
+            log_row([now(), name, MAILTO + addr, res, memo])
+        except LogError as e:
+            print("送信ログに書けません（Excelで開いていませんか）。二重送信を防ぐため、ここで止めます:", e)
+            return 2
+        if i < len(todo):
+            time.sleep(random.uniform(30, 60))
+    c = Counter(results)
+    print(f"\n結果の集計（全{len(results)}社中）: " + " / ".join(f"{k} {v}社" for k, v in c.items()) + f"\n\n記録: {LOG}")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("csv")
@@ -1239,6 +1472,7 @@ def main():
     ap.add_argument("--expect", help="確認(--preview)が出した確認番号。本番で送る会社・全文・送信元が、これと違えば送らずに止める")
     ap.add_argument("--include-supplemented", action="store_true", help="検索で補ったHPの会社も対象にする(別会社の恐れあり)")
     ap.add_argument("--ng-state-db", help="Explicit isolated NG/state DB used by the UI handoff; omitted keeps the normal text NG/state defaults.")
+    ap.add_argument("--channel", choices=("form", "mail"), default="form", help="mail=フォームの無い会社へメールで1通ずつ送る(smtp.json が要る)。付けなければフォーム")
     ap.add_argument("--manual-company", help="画面の「手で送る」。この会社のフォームを開いて入力だけ自動で行う(送信ボタンは押さない)")
     ap.add_argument("--check-message-name", help="採用済み企業1社の本文検査のみ。NG/履歴/企業適格性は未検証。DB・ブラウザ・送信動作なし")
     a = ap.parse_args()
@@ -1267,6 +1501,13 @@ def main():
     if problems:
         print("送信元に、送る前に直すところがあります: " + " / ".join(p["text"] for p in problems))
         return 1
+    if a.channel == "mail":
+        try:
+            _mail_channel()
+        except ImportError:
+            print("メールでの送信は、この版ではまだ使えません(フォームの無い会社には、いまはメールでは送りません)")
+            return 1
+        return run_mail(a, sender, gate)
     plan = build_plan(a.csv, a.include_supplemented, gate, a.max, a.message, sender, apply_rules=bool(a.send or a.preview))
     for s in plan["skipped"]:
         print(f"送らない会社: {s['name']}  {s['text']}")
@@ -1291,7 +1532,7 @@ def main():
     if a.preview:
         for (name, url, ind, opener, _hp), body in zip(todo, bodies):
             print(f"\n===== 送る文面 {name}（業種「{ind or '指定なし'}」）=====")
-            print("件名: " + message_adoption.effective_sender(name, url, sender).get("件名", "").replace("{企業名}", name))
+            print("件名: " + subject_for(name, url, sender, subject_industry(a.message, ind)))
             print(body + "=====")
         print(f"\n送信者: {sender['会社名']} {sender['氏名']} {sender['メール']}\n以上 {len(todo)}社が送信対象です（まだ送っていません）。")
         print(f"確認番号: {got}")
@@ -1311,7 +1552,7 @@ def main():
             return 5
         for (name, url, ind, opener, _hp), body in zip(todo, bodies):
             print(f"\n===== 送る文面 {name}（業種「{ind or '指定なし'}」）=====")
-            print("件名: " + message_adoption.effective_sender(name, url, sender).get("件名", "").replace("{企業名}", name))
+            print("件名: " + subject_for(name, url, sender, subject_industry(a.message, ind)))
             print(body + "=====")
         print(f"送信者: {sender['会社名']} {sender['氏名']} {sender['メール']}\n{len(todo)}社へ送ります。")
         if input("送ってよければ「送信」と入力してください > ").strip() != "送信":
@@ -1348,7 +1589,7 @@ def main():
                     ctx.route("**/*", block_internal)
                     ctx.route_web_socket("**/*", block_ws)
                     page = ctx.new_page()
-                    res, memo = send_one(page, name, url, sender, body, a.send, hp)
+                    res, memo = send_one(page, name, url, message_adoption.effective_sender(name, url, sender, subject_industry(a.message, ind)), body, a.send, hp)
                 except LogError as e:  # 記録が書けないまま送ると、次の回にもう一度送る。ここで止める
                     print("送信ログに書けません（Excelで開いていませんか）。二重送信を防ぐため、ここで止めます:", e)
                     br.close()

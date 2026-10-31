@@ -870,7 +870,7 @@ class H(BaseHTTPRequestHandler):
             todo, bodies, rejected = autosend.prepare_message_plan(rows[:50], MSG, sender)
         except RuntimeError as e:
             return self.send(400, {"error": str(e)})
-        out = [{"company": t[0], "form": t[1], "subject": message_adoption.effective_sender(t[0], t[1], sender).get("件名", "").replace("{企業名}", t[0]), "message": b}
+        out = [{"company": t[0], "form": t[1], "subject": autosend.subject_for(t[0], t[1], sender, autosend.subject_industry(MSG, t[2])), "message": b}
                for t, b in zip(todo, bodies)]
         return self.send(200, {"companies": out, "skipped": [{"company": n, "why": w} for n, _u, w in rejected],
                                "legal_missing": send_rules.legal_missing(sender), "window": send_rules.window_refusal()})
@@ -1047,7 +1047,7 @@ class H(BaseHTTPRequestHandler):
         probs = message_problems({industry or "標準": template})
         if any(w["match"] == "{資料URL}" for w in left):
             probs.append({"field": "資料URL", "kind": "資料URLが空", "text": "文面に資料のリンクがありますが、送信元の「資料URL」が空です"})
-        return self.send(200, {"subject": autosend.subject_for(name, url, sender), "text": text, "company_label": label, "problems": probs})
+        return self.send(200, {"subject": autosend.subject_for(name, url, sender, autosend.subject_industry(MSG, industry)), "text": text, "company_label": label, "problems": probs})
 
     def do_GET(self):
         try:
