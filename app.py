@@ -1,7 +1,7 @@
 """AIまるなげ営業(フォームリスト作成ツール)をブラウザで使う。実行環境: Windows / Python 3.9+。標準ライブラリ中心。
 起動: py app.py （ブラウザが自動で開く）。自分のPCの中だけで動く（127.0.0.1）。外には公開しない。
 できること: 1 探す（エリア・業種・ポータルURL・NGリスト） 2 結果を見る 3 送る（送る内容を出す→画面の外の確認で承認→本番。文面編集・送信元の保存・送信履歴）
-中身は formlist.py と autosend.py をそのまま呼ぶ。画面はその進み具合を映す。送る画面の状態(s0〜s7・s6a)はサーバーが決めて /api/meta の send_state で返す。
+中身は formlist.py と autosend.py をそのまま呼ぶ。画面はその進み具合を映す。送る画面の状態(s0〜s7)はサーバーが決めて /api/meta の send_state で返す。
 安全: 本番送信は、送る内容(送る会社と全文)を出したあと、画面の外の確認ダイアログで人が「はい」を押したときだけ動く。
      送る会社と全文は autosend.build_plan の1か所で決め、確認番号で本番と照合する。練習(試走)の道は無い。"""
 import csv
@@ -79,7 +79,6 @@ def opener_source(row):
 APPROVED = {"key": None}  # 画面で人が「この全文で送ることを承認する」を押した印。AI(MCP)からの本番送信に要る
 PREVIEW = {"key": None, "names": [], "parts": {}}  # 本番の前に「送る内容を出す」を済ませた印と、その確認に出た会社名・変わったものを言うための材料。本番を始めたら消す
 SEND_INFO = {"total": 0, "started": "", "dismissed": True}  # 直近の本番の社数と始めた時刻(送っている・送り終えたの数を出す)。dismissed=送り終えた表示を閉じた
-FIRST_LOOK = {}  # はじめての人の1社目の確認待ち {company, shot, fields, deadline, answer}。autosend が /api/firstlook/wait で置き、画面が /api/firstlook で答える
 LOCK = threading.Lock()
 _NG_STORE = None
 TOKEN = secrets.token_urlsafe(24)  # 起動のたびに変わる。他サイトの画面からの操作を断るためのもので、同じPC上のプロセスは画面を読めば取れる
@@ -304,9 +303,8 @@ def short_key(digest_value):
 
 
 def count_error():
-    """E-12。社数が範囲外"""
-    left = limits()["left_today"]
-    return {"error": f"1〜{PER_RUN}社の数を入れてください。きょうはあと{left}社です", "field": "max"}
+    """E-12。社数が1以上の整数でない(上限は無い。空欄は全社)"""
+    return {"error": "1以上の社数を入れてください。空欄にすると、対象の全社に送ります", "field": "max"}
 
 
 def fingerprint():
@@ -588,19 +586,15 @@ def first_time():
 
 
 def default_max(first):
-    """最大の社数の既定。前回の値(画面の設定.json)があればそれ。無ければ20(はじめての人も同じ。3社に絞らない)"""
+    """送る社数の既定。前回に指定した数(画面の設定.json)があればそれ。無ければ None(未指定=対象の全社。固定の数は置かない)"""
     v = load_settings().get("last_max")
-    if isinstance(v, int) and 1 <= v <= PER_RUN:
+    if isinstance(v, int) and v >= 1:
         return v, "last"
-    return (20, "first") if first else (20, "default")
-
-
-PER_RUN = 300  # 1回に送れる社数の上限(count(…,1,300) と同じ値)
+    return (None, "first") if first else (None, "default")
 
 
 def limits():
-    left = max(0, send_rules.DAILY_LIMIT - send_rules.pressed_today(_log()))
-    return {"per_run": PER_RUN, "per_day": send_rules.DAILY_LIMIT, "left_today": left, "hours": list(send_rules.HOURS) if send_rules.ENFORCE_WINDOW else [],
+    return {"hours": list(send_rules.HOURS) if send_rules.ENFORCE_WINDOW else [],
             "sec_per_company": [30, 60], "window": send_rules.window_refusal()}
 
 
@@ -698,21 +692,11 @@ def busy_error():
     return {"error": f"いま{what}が動いています。終わってから押します", "started": False}
 
 
-def first_look_view():
-    """画面に見せる1社目の確認待ち(本番送信中で、まだ答えていないときだけ)。shot は /api/shot?file=… のパス、deadline は UNIX 秒"""
-    if not (FIRST_LOOK.get("company") and FIRST_LOOK.get("answer") is None and JOB["running"] and JOB["name"] == "本番送信"):
-        return None
-    fl = {k: FIRST_LOOK.get(k) for k in ("company", "shot", "fields", "deadline", "wait")}  # wait: 答えに付けて返せる待ちの受付番号
-    if fl["shot"]:
-        fl["shot"] = "/api/shot?file=" + quote(str(fl["shot"]))
-    return fl
-
-
 def send_counts(since, running=False):
-    """送信ログのうち since(本番を始めた時刻)以降の行を、送れた・送れたか確かめる・自分で送る・1社目の確認で止めた に数える。
+    """送信ログのうち since(本番を始めた時刻)以降の行を、送れた・送れたか確かめる・自分で送る に数える。
     1社につき数えるのは最後の1行だけ(押す直前に「送信試行」を書き、そのあと「送信済み」を書くので、全部の行を数えると送れた会社が「確かめる」にも入る。
     陽性対照: test_send_counts_count_each_company_once_by_its_last_row)"""
-    out = {"sent": 0, "check": 0, "manual": 0, "stopped": 0}
+    out = {"sent": 0, "check": 0, "manual": 0}
     if not since or not _log().exists():
         return out
     last = {}
@@ -730,20 +714,17 @@ def send_counts(since, running=False):
             out["check"] += 1
         elif res == "要手動":
             out["manual"] += 1
-        elif res == sales_records.FIRST_LOOK_STOPPED:
-            out["stopped"] += 1
     return out
 
 
 def send_state(q, store=None):
-    """送る画面の状態(30_構成 5-2 の s0〜s7・s6a)を1つだけ決める。画面はこれを描くだけで、状態を推し量らない。
+    """送る画面の状態(30_構成 5-2 の s0〜s7)を1つだけ決める。画面はこれを描くだけで、状態を推し量らない。
     返す形: {"send_state", "problems", "counts", "changed", "file"}。重い判定(送る会社と全文を作る)は、確認の印があるときだけ行う"""
     out = {"problems": [], "counts": {}, "changed": "", "file": ""}
     if JOB["running"] and JOB["name"] == "本番送信":
         c = send_counts(SEND_INFO.get("started"), running=True)
         out["counts"] = {"total": SEND_INFO.get("total", 0), "done": sum(c.values()), **c}
-        fl = FIRST_LOOK.get("company") and FIRST_LOOK.get("answer") is None and time.time() < FIRST_LOOK.get("deadline", 0)
-        return dict(out, send_state="s6a" if fl else "s6")
+        return dict(out, send_state="s6")
     if JOB["name"] == "本番送信" and JOB.get("code") is not None and not SEND_INFO.get("dismissed"):
         c = send_counts(SEND_INFO.get("started"))
         out["counts"] = {"total": SEND_INFO.get("total", 0), "done": sum(c.values()), **c}
@@ -766,7 +747,7 @@ def send_state(q, store=None):
     if PREVIEW["key"] is None or JOB["running"]:
         return dict(out, send_state="s3")
     try:
-        mx = count(q.get("max"), PREVIEW["key"][2], 1, PER_RUN)
+        mx = count(q.get("max"), None, 1, None) if "max" in q else PREVIEW["key"][2]  # 空欄=未指定=全社。max が来ていないときは出した送る内容の数
     except ValueError:
         mx = PREVIEW["key"][2]
     supp = q.get("supp") == "1" if "supp" in q else PREVIEW["key"][3]
@@ -779,9 +760,11 @@ def send_state(q, store=None):
 
 
 def count(v, default, lo, hi):
-    """空なら既定値。0 や範囲外を既定値に化けさせず、ValueError にする"""
+    """空なら既定値(None もありうる)。0 や範囲外を既定値に化けさせず、ValueError にする。hi が None なら上限なし"""
     n = default if v in (None, "") else int(float(v))
-    if not lo <= n <= hi:
+    if n is None:
+        return None
+    if n < lo or (hi is not None and n > hi):
         raise ValueError(n)
     return n
 
@@ -904,7 +887,7 @@ class H(BaseHTTPRequestHandler):
         if probs:
             return self.send(400, problem_error(probs))
         try:
-            mx = count(q.get("max"), 20, 1, PER_RUN)
+            mx = count(q.get("max"), None, 1, None)
         except ValueError:
             return self.send(400, count_error())
         supp = q.get("supp") == "1"
@@ -932,7 +915,7 @@ class H(BaseHTTPRequestHandler):
         valid = PREVIEW["key"] is not None and pl["digest"] and PREVIEW["key"] == (str(p), p.stat().st_mtime_ns, mx, supp, fingerprint(), pl["digest"])
         return self.send(200, {"sendable": rows, "skipped": skipped, "commons": list(commons.values()), "marks": list(MARK_WORDS),
                                "key_short": short_key(pl["digest"]) if valid else None, "key": pl["digest"] if valid else None, "window": send_rules.window_refusal(),
-                               "left_today": pl["left_today"], "over_limit": pl["over_limit"], "stop": pl["stop"]})
+                               "over_limit": pl["over_limit"], "stop": pl["stop"]})
 
     def send_api(self, d, mx, ng_store):
         """送る内容を出す(preview)と本番(send)。練習(試走)の道は無い(D-5)。
@@ -953,7 +936,9 @@ class H(BaseHTTPRequestHandler):
         if busy:
             return self.send(409, busy)
         supp = bool(d.get("supp"))
-        args = ["autosend.py", str(p), "--sender", str(SENDER), "--message", str(MSG), "--max", str(mx)]
+        args = ["autosend.py", str(p), "--sender", str(SENDER), "--message", str(MSG)]
+        if mx is not None:  # 未指定なら --max を付けない(対象の全社)
+            args += ["--max", str(mx)]
         if ng_store is not None:
             args += ["--ng-state-db", str(ng_store.db_path)]
         if supp:
@@ -979,8 +964,7 @@ class H(BaseHTTPRequestHandler):
         if preview:
             save_settings(last_max=mx)  # D-9: 前回の最大の社数(読み込み直し・起動し直しでも戻る)
             if key[-1] is None:  # 送れる会社が0。理由は /api/targets の skipped に出る
-                stop = LAST_PLAN.get("stop") if LAST_PLAN.get("left_today") == 0 else ""
-                return self.send(409, {"error": stop or "送れる会社がありません。理由は「送らない会社」の一覧に出ています", "code": "nothing_to_send"})
+                return self.send(409, {"error": "送れる会社がありません。理由は「送らない会社」の一覧に出ています", "code": "nothing_to_send"})
             skipped_n = len(LAST_PLAN.get("skipped") or []) if LAST_PLAN.get("digest") == key[-1] else 0
 
             def ok(k=key, pt=parts, n=skipped_n):  # 確認の出力に、印と同じ確認番号が出たときだけ印を立てる(見せた全文と印を一致させる)
@@ -1001,10 +985,7 @@ class H(BaseHTTPRequestHandler):
         PREVIEW.update(key=None, names=[], parts={})  # 確認は1回の本番ごとに使い切る
         APPROVED["key"] = None
         args += ["--send", "--expect", key[-1]]  # 送る本人が、確認時と同じ会社・全文・送信元かを照合し、違えば送らずに止まる
-        if first_time():  # はじめての人(押した記録0件)だけ、1社目は入力した画面を見せてから押す。付け忘れると待ちが出ない(試験で押さえる)
-            args.append("--first-look")
         token = approval.issue_ticket(key[-1])  # 承認のあとにだけ発行する使い切りの鍵。autosend --send はこれが無いと始まらない
-        FIRST_LOOK.clear()
         SEND_INFO.update(total=total, started=time.strftime("%Y-%m-%d %H:%M"), dismissed=False)
         started = run_job("本番送信", args, "送信\n", extra_env={approval.TICKET_ENV: token, approval.PORT_ENV: str(PORT), approval.UI_TOKEN_ENV: TOKEN})
         if not started:
@@ -1039,7 +1020,7 @@ class H(BaseHTTPRequestHandler):
             if rows:
                 # 「送らない」を選んだ会社・送れない会社は見本に使わない。確認・本番と同じ数え方(plan)で、実際に送る会社の中から選ぶ
                 try:
-                    todo = plan(f, False, PER_RUN, _NG_STORE, explain=True)["todo"]
+                    todo = plan(f, False, None, _NG_STORE, explain=True)["todo"]
                 except Exception:
                     todo = None
                 if todo is None:  # 数えられないときは、送らないリストに載る会社だけは避けて、先頭の会社を使う
@@ -1115,7 +1096,7 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"industries": list(osm_source.INDUSTRY_TAGS), "sender": sender or {}, "files": outputs(), "messages": msgs,
                                    "message_parts": {k: split_message(v) for k, v in msgs.items()}, "message_info": info,
                                    "send_state": st["send_state"], "problems": st["problems"], "counts": st["counts"], "changed": st["changed"],
-                                   "send_file": st["file"], "first_time": first, "last_max": last_max, "max_kind": max_kind, "limits": limits(), "first_look": first_look_view(),
+                                   "send_file": st["file"], "first_time": first, "last_max": last_max, "max_kind": max_kind, "limits": limits(),
                                    "message_summary": {"default": 1, "industries": [n for n, v in info["uses"].items() if v == "業種ごと"]}})
         if u.path == "/api/whoami":
             return self.send(200, {"tool": "formlist", "here": str(HERE), "version": VERSION, "build": BUILD, "port": PORT, "running": JOB["running"] or SJOB["running"], "name": JOB["name"] if JOB["running"] else SJOB["name"]})
@@ -1135,13 +1116,12 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/license":  # 利用許可の状態(通信はしない。手元の記録だけから答える)
             return self.send(200, license_check.status())
         if u.path == "/api/job":
-            fl = first_look_view()
             v, o = job_view()
             if v is JOB and not JOB["running"]:
                 JOB["fresh"] = False
             other = {"name": o["name"], "last": ([l for l in o["lines"] if l.strip()] or [""])[-1][:120]} if o is not None and o["running"] else None
             return self.send(200, {"lines": v["lines"][-300:], "running": v["running"], "name": v["name"], "code": v.get("code"), "files": outputs(), "version": VERSION, "build": BUILD, "here": str(HERE), "started": v.get("started", ""), "port": PORT,
-                                   "first_look": fl, "other": other})
+                                   "other": other})
         if u.path == "/api/shot":
             # 1社目の確認で見せる、押す直前に保存した画面。出力/送信画面 の中の .png だけを返す(ほかの場所は読ませない)
             name = q.get("file") or q.get("name", "")
@@ -1216,13 +1196,13 @@ class H(BaseHTTPRequestHandler):
             d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
             assert isinstance(d, dict)
             lim = count(d.get("limit"), 200, 1, 1000)
-            mx = count(d.get("max"), 20, 1, 300)
+            mx = count(d.get("max"), None, 1, None)
             par = count(d.get("parallel"), 3, 1, 5)
             flim = count(d.get("fetch_limit"), 0, 0, 100000)  # 検索する数の上限。0・空欄は未指定(formlist側の固定の既定値で止まる)
         except Exception:
             if self.path in ("/api/send", "/api/targets"):  # 社数の欄の範囲外(E-12)。ほかの数の欄と分ける
                 try:
-                    count(d.get("max"), 20, 1, PER_RUN)
+                    count(d.get("max"), None, 1, None)
                 except Exception:
                     return self.send(400, count_error())
             return self.send(400, {"error": "入力の形が正しくありません（数は1以上の整数で入れてください）"})
@@ -1544,41 +1524,6 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/api/send/dismiss":  # 送り終えた表示(s7)を閉じて、次の送る準備(s3)へ。送信の記録は消さない
             SEND_INFO["dismissed"] = True
             return self.send(200, {"ok": True})
-        if self.path == "/api/firstlook/wait":
-            # 本番送信を受け持つ autosend が、はじめての人の1社目で押す前に来る(トークンは guard で確かめ済み)。答え {"go": true|false|null}
-            if self.headers.get("Origin"):  # 待ちを置くのは送信を受け持つプロセスだけ(ブラウザの画面からは置かない)
-                return self.send(403, {"error": "この操作は画面からはできません"})
-            if not (JOB["running"] and JOB["name"] == "本番送信"):
-                return self.send(200, {"go": False})  # 送信中でなければ、誰も見ていない。押させない
-            with LOCK:
-                company = str(d.get("company") or "")[:200]
-                shot = str(d.get("shot") or "")
-                wait = str(d.get("wait") or "")[:64]  # autosend が待ちごとに決める受付番号。答えにも同じ番号を付けて返す(前の待ちへの答えで押させない)
-                new = (FIRST_LOOK.get("wait") or "") != wait if wait else (FIRST_LOOK.get("company") != company or FIRST_LOOK.get("shot") != shot)
-                if new:  # 新しい待ち(1回の本番で1社だけ)。前の待ちの答えは持ち越さない
-                    fields = [{"label": str(x.get("label", ""))[:40], "value": str(x.get("value", ""))[:2000]} for x in (d.get("fields") or []) if isinstance(x, dict)][:20]
-                    deadline = d.get("deadline") if isinstance(d.get("deadline"), (int, float)) else time.time() + 300
-                    FIRST_LOOK.clear()
-                    FIRST_LOOK.update(company=company, shot=Path(shot).name, fields=fields, deadline=min(deadline, time.time() + 300), answer=None, wait=wait)
-                if time.time() >= FIRST_LOOK["deadline"]:
-                    FIRST_LOOK["answer"] = False
-                return self.send(200, dict({"go": FIRST_LOOK["answer"]}, **({"wait": FIRST_LOOK.get("wait")} if wait else {})))
-        if self.path == "/api/firstlook":
-            # 画面で人が「このまま送る」「送らずに止める」を押した。ブラウザの画面からだけ受ける(承認と同じ検査: Origin に加え、画面を開いたときの cookie)
-            if not self.from_browser_screen():
-                return self.send(403, {"error": "1社目の確認は、ツールの画面(ブラウザ)で押してください"})
-            if not isinstance(d.get("go"), bool):
-                return self.send(400, {"error": "「このまま送る」か「送らずに止める」を選んでください"})
-            with LOCK:
-                if not FIRST_LOOK.get("company") or FIRST_LOOK.get("answer") is not None or not (JOB["running"] and JOB["name"] == "本番送信"):
-                    return self.send(409, {"error": "1社目の確認は、もう終わっています(時間切れか、すでに選んだため)"})
-                if d.get("wait") is not None and str(d.get("wait")) != (FIRST_LOOK.get("wait") or ""):  # 画面が見ていた待ちと、いまの待ちが違う(別の会社の画面への答え)
-                    return self.send(409, {"error": "画面に出ていた会社と、いま確認を待っている会社が違います。画面を読み込み直してから選んでください"})
-                if time.time() >= FIRST_LOOK["deadline"]:
-                    FIRST_LOOK["answer"] = False
-                    return self.send(409, {"error": "1社目のフォームを5分のあいだ確かめなかったので、送らずに止めました。送るときは、もう一度「送る内容を出す」から"})  # E-19
-                FIRST_LOOK["answer"] = d["go"]
-            return self.send(200, {"ok": True, "go": d["go"]})
         if self.path == "/api/render_sample":
             return self.render_sample(d)
         if self.path == "/api/send":

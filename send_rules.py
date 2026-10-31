@@ -2,31 +2,24 @@
 営業の手順書「法務とリスク」の送信ルールを、警告ではなく送信を止める形にしたもの。
   ・法定表示: 署名に、住所・電話・配信停止の案内(「不要」とご返信ください 等)が無ければ送らない
   ・時間帯: 平日の 9時〜18時 以外は送らない(受け取った側の印象を守る)
-  ・1日の上限: その日に押した社数を、回をまたいで数える(既定300社。運用者が「1日数百件」と決めた値)
+  ・送る社数: 固定の上限は置かない(2026-10-31 運用者の指示「数の制限外して」で、1日300社の上限と1回300社の上限を外した)。送る数は、画面で運用者が指定した数だけで決まる。未指定なら対象の全社
   ・同じ会社: 送ってから14日は、同じ会社(会社名・フォームのドメイン)へ送らない。14日を過ぎても、2回送った会社にはもう送らない
 数値の出どころ: 14日と2回は 09 の送信ルール2「同じ企業へは1回だけ。返信が無ければ14日後に別の窓口へ1回まで」。
-          9時〜18時は 09 の送信ルール6「平日の日中」をこの時間と読んだもの。1日の上限は 09 に無く、営業方針の値。2026-10-21 に運用者が「1日数百件にアプローチしたい」と決め、20社から300社へ上げた(送信の間隔30〜60秒のまま、9〜18時で最大およそ650社まで送れる)。
+          9時〜18時は 09 の送信ルール6「平日の日中」をこの時間と読んだもの。
 守備範囲: 祝日は見ていない(平日の扱いになる)。会社名の表記違い(株式会社の有無以外)と、別ドメインの同じ会社は同じ会社と分からない。
           数えるのは このパソコンの送信ログと送信状態のDBだけ(別のパソコンで送った分は数えない)。
-          同時に動く複数の送信は、押す直前に reserve_daily でDB上の枠を1社ずつ確保するので、上限を超えない。
 """
 import csv
 import datetime as dt
 import re
-import secrets
-import sqlite3
-import time
 import unicodedata
-from pathlib import Path
 from urllib.parse import urlparse
 
 import ng_list
 import placeholders
-import state
 
 ENFORCE_WINDOW = False  # 2026-10-30 運用者の指示「送信時間が9－18時とあるけれどもこの制約は外してください、使い勝手が悪いです」で外した。時間帯の検査そのもの(window_refusal)は、入れ直したテストのために残す
 HOURS = (9, 18)
-DAILY_LIMIT = 300
 REPEAT_DAYS = 14
 MAX_PER_COMPANY = 2
 PRESSED = ("送信試行", "送信済み", "不明(要確認)", "入力エラー(要確認)", "手で送信済み")  # 押した(か、押したかもしれない)記録
@@ -200,54 +193,6 @@ def _pressed_pairs(log, now=None):
 def pressed_today(log, now=None):
     """きょう押した社数(同じ会社・フォームの重複は1社)"""
     return len(_pressed_pairs(log, now))
-
-
-def _quota_conn(db):
-    Path(db).parent.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(str(db), timeout=30, isolation_level=None)
-    c.execute("CREATE TABLE IF NOT EXISTS daily_slots (token TEXT PRIMARY KEY, day TEXT, company TEXT, url TEXT, pressed INTEGER, created REAL)")
-    return c
-
-
-def reserve_daily(db, log, name, url):
-    """押す直前に、1日の上限の枠を1社ぶん確保する。確保できたら印(文字列)、上限なら None。
-    同時に動く複数の送信が、それぞれ「きょうの数<上限」を見てから押して上限を超えるのを、DBの BEGIN IMMEDIATE で1本ずつにして防ぐ。
-    数えるのは 送信ログのきょう押した会社 と DBの押した枠・確保中の枠 の和(同じ会社・フォームは1社。ログとDBの両方にあっても二重に数えない)。
-    押さずに止まったまま settle_daily が呼ばれなかった確保(強制終了など)は、state.RECOVER_AFTER 秒で数えなくなる"""
-    today = dt.date.today().isoformat()
-    c = _quota_conn(db)
-    try:
-        c.execute("BEGIN IMMEDIATE")
-        held = c.execute("SELECT company, url FROM daily_slots WHERE day=? AND (pressed=1 OR created>?)",
-                         (today, time.time() - state.RECOVER_AFTER)).fetchall()
-        used = {tuple(r) for r in held} | _pressed_pairs(log) | {(name, url)}
-        if len(used) > DAILY_LIMIT:
-            c.execute("ROLLBACK")
-            return None
-        token = secrets.token_hex(8)
-        c.execute("INSERT INTO daily_slots VALUES (?, ?, ?, ?, 0, ?)", (token, today, name, url, time.time()))
-        c.execute("COMMIT")
-        return token
-    except sqlite3.Error:
-        try:
-            c.execute("ROLLBACK")
-        except sqlite3.Error:
-            pass
-        raise
-    finally:
-        c.close()
-
-
-def settle_daily(db, token, pressed):
-    """確保した枠の始末。押した(押したかもしれない)なら数え続け、押さずに終わったなら戻す"""
-    c = _quota_conn(db)
-    try:
-        if pressed:
-            c.execute("UPDATE daily_slots SET pressed=1 WHERE token=?", (token,))
-        else:
-            c.execute("DELETE FROM daily_slots WHERE token=?", (token,))
-    finally:
-        c.close()
 
 
 def company_key(name):

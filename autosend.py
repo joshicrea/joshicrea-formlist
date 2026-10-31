@@ -13,7 +13,7 @@ sender.json: {"会社名":"","氏名":"","フリガナ":"","メール":"","電�
 
 安全装置: 営業お断り表示の会社は送らない / NGリスト(formlist.pyの--ng)で除外済みの会社は元のCSVに出ない /
 送信済みは送信ログ.csvに残り、2回送らない / captcha・必須の未知項目・選択式の必須があれば送らず「要手動」/
-1回の上限 --max(既定20) / 送信の間隔は30〜60秒。
+送る社数 --max(付けなければ対象の全社。固定の上限は無い) / 送信の間隔は30〜60秒。
 対照(導入時に実測): 試走で入力欄が埋まり送信ボタンを押さないこと / captchaのあるフォームで「要手動」になること。
 原理的に取りこぼす型: 項目名が画像のフォーム・複数ステップの独自UI・JSで描画が遅いフォームは「要手動」か「不明」になる。
 「送信済み」は完了画面の文言を確認できたときだけ。確認できなければ「不明(要確認)」で、送れたかは先方次第。"""
@@ -22,7 +22,6 @@ import csv
 import datetime as dt
 import hashlib
 import json
-import os
 import random
 import re
 import sys
@@ -53,7 +52,6 @@ if not _PURE_MESSAGE_CHECK:
     import ng_list
     import formlist
     from ng_state_store import NgStateStore
-    import sales_records
 
 HERE = Path(__file__).resolve().parent
 LOG = HERE / "出力" / "送信ログ.csv"
@@ -206,15 +204,15 @@ def _skip_item(why):
     return {"reason_code": "other", "text": "自動では送らない会社です: " + why[:60], "fix": "none"}
 
 
-def build_plan(csv_path, include_supplemented, gate, max_count, message_path, sender, apply_rules=True, explain=False, apply_daily=True):
+def build_plan(csv_path, include_supplemented, gate, max_count, message_path, sender, apply_rules=True, explain=False):
     """送る会社と各社の全文を決める、ただ1つの関数。確認(画面の「送る内容を出す」・--preview)と本番(--send)は、必ずこれを通す。
-    順序: 送る候補(targets: 送らない会社・送信済み・重複を外す) → 同じ会社への間隔(company_refusal) → きょうの残り(1日の上限) →
-          max_count で切る → 文面を作る(prepare_message_plan) → 件名と本文の検査(placeholders.leftovers・連絡先) → 確認番号。
-    apply_rules=False は試走だけ(間隔ときょうの残りを掛けない。以前の main と同じ)。explain=True のときだけ、送信済み・重複で外した会社も skipped に入れる(画面の表示用。確認番号は変わらない)。
+    順序: 送る候補(targets: 送らない会社・送信済み・重複を外す) → 同じ会社への間隔(company_refusal) →
+          max_count で切る(None なら切らない。対象の全社) → 文面を作る(prepare_message_plan) → 件名と本文の検査(placeholders.leftovers・連絡先) → 確認番号。
+    apply_rules=False は試走だけ(間隔を掛けない。以前の main と同じ)。explain=True のときだけ、送信済み・重複で外した会社も skipped に入れる(画面の表示用。確認番号は変わらない)。
     返す形: {"todo": [(会社名, フォームURL, 業種, 書き出し, HP)], "bodies": [全文], "subjects": [件名], "labels": [どの文面か],
              (labels は explain=True のときだけ埋まる)
              "skipped": [{"name", "url", "reason_code", "text", "fix": "sender"|"message"|"none"}], "digest": 確認番号(送る会社が0なら None),
-             "left_today": きょうの残り(apply_rules=False なら None), "over_limit": きょうの残りと max_count で外れた社数, "stop": 1社も送れない理由(無ければ "")}
+             "over_limit": max_count で外れた社数(max_count が None なら 0), "stop": 1社も送れない理由(無ければ "")}
     reason_code: "sent"(送信済み・重複) "company"(同じ会社の間隔) "opener"(書き出しが空) "adoption"(採用記録との不一致) "subject"(件名の仮の文字) "message"(文面の仮の文字) "sender_url"(資料URLが空) "contact"(本文に連絡先が無い)
     陽性対照(test_send_flow_offline): 14日以内に送った会社・2回送った会社・送信済み・見本の語の残った文面・件名の記号 → skipped に理由つきで出て todo に無い。
     誤爆の対照: 見出し1行の【企業・団体向け提案書】だけの文面は todo に入る。
@@ -222,7 +220,7 @@ def build_plan(csv_path, include_supplemented, gate, max_count, message_path, se
     件名・全文の仮の文字の検査は、相手の会社名と書き出しの部分を見ない(subject_leftovers・body_leftovers。【公式】の題で文面のせいにしない)。
     explain=True の skipped には、お断り・HPの照合が弱い・検索で補ったHP・フォームのアドレスの形で外した会社も理由つきで入る(フォームなしの行と送らない会社(NG)は入れない)。
     同じ会社(会社名の株式会社の有無・フォームかHPのドメインが同じ)がリストに2行以上あれば、2行目以降を "company" で外す(本番の1社ごとの見直しと同じ数え方)。
-    apply_daily=False は、きょうの残りで切らない(確認番号の不一致の理由を調べるときだけ使う)"""
+    max_count は運用者が画面で指定した数。None は未指定で、対象の全社が入る(固定の上限は置かない)"""
     skipped = []
     if explain:
         for n, u, why in target_skip_reasons(csv_path, include_supplemented, gate=gate):
@@ -230,7 +228,6 @@ def build_plan(csv_path, include_supplemented, gate, max_count, message_path, se
             if item:
                 skipped.append(dict(item, name=n, url=u))
     todo = targets(csv_path, include_supplemented, gate=gate) if gate is not None else targets(csv_path, include_supplemented)
-    left = None
     over = 0
     if apply_rules:  # 同じ会社へ送りすぎない(09 送信ルール2)。確認と本番で同じ絞り方にする(確認番号を合わせるため)
         kept, seen_names, seen_doms = [], set(), set()
@@ -247,15 +244,9 @@ def build_plan(csv_path, include_supplemented, gate, max_count, message_path, se
                 seen_names |= {key} - {""}
                 seen_doms |= doms
         todo = kept
-        if apply_daily:
-            left = send_rules.DAILY_LIMIT - send_rules.pressed_today(LOG)
-            if left <= 0:
-                return {"todo": [], "bodies": [], "subjects": [], "labels": [], "skipped": skipped, "digest": None, "left_today": 0, "over_limit": len(todo),
-                        "stop": f"きょうはもう{send_rules.DAILY_LIMIT}社に送りました(1日{send_rules.DAILY_LIMIT}社まで)。あした以降に送ります"}
-            over = max(0, len(todo) - left)
-            todo = todo[:left]
-    over += max(0, len(todo) - max_count)
-    todo = todo[:max_count]
+    if max_count is not None:
+        over += max(0, len(todo) - max_count)
+        todo = todo[:max_count]
     todo, bodies, rejected = prepare_message_plan(todo, message_path, sender)
     for name, url, reason in rejected:
         code = "opener" if "書き出し" in reason else "adoption"
@@ -289,22 +280,7 @@ def build_plan(csv_path, include_supplemented, gate, max_count, message_path, se
         skipped.append(dict(item, name=name, url=url))
     stop = "" if keep_todo else ("送れる会社がありません" if not skipped else "送れる会社がありません(理由は送らない会社の一覧)")
     return {"todo": keep_todo, "bodies": keep_bodies, "subjects": subjects, "labels": labels, "skipped": skipped,
-            "digest": plan_digest(keep_todo, keep_bodies, sender) if keep_todo else None, "left_today": left, "over_limit": over, "stop": stop}
-
-
-def daily_cut_explains(csv_path, include_supplemented, gate, max_count, message_path, sender, expect, left_now):
-    """確認番号の不一致が「きょうの残りが減った」だけで説明できるか。止める文を原因に合わせて分けるためだけに使う(送るかどうかは変えない)。
-    きょうの残りで切らない送る内容を作り、先頭から k 社で切った確認番号に expect と同じものがあれば True。
-    陽性対照: 確認のあとに別の回で1社送り、残りが3→2社になった → True。誤爆の対照: 文面を変えた → False(どの k でも番号が合わない)。
-    原理的に取りこぼす型: 残りが減ったうえに中身も変わったとき(False=中身が変わった、の文になる)"""
-    if left_now is None:
-        return False
-    alt = build_plan(csv_path, include_supplemented, gate, max_count, message_path, sender, apply_daily=False)
-    todo, bodies = alt["todo"], alt["bodies"]
-    for k in range(1, len(todo) + 1):  # 送る内容の検査で外れた会社があるので、残りの数と k は一致しない。先頭からの全部の長さを試す
-        if plan_digest(todo[:k], bodies[:k], sender) == expect:
-            return True
-    return False
+            "digest": plan_digest(keep_todo, keep_bodies, sender) if keep_todo else None, "over_limit": over, "stop": stop}
 
 
 class LogError(Exception):
@@ -1105,75 +1081,14 @@ def send_one(page, name, url, sender, message, do_send, hp=""):
     btn = find_submit(page)
     if btn is None:
         return "要手動", "送信ボタンが見つからない"
-    if FIRST_LOOK["pending"]:  # はじめての人の1社目: 入力と画面の保存のあと、押す前に人に見せる。この下の見直し(NG・送信済み・上限)は待ったあとに行う
-        FIRST_LOOK["pending"] = False
-        if not first_look_wait(name, shot, first_look_fields(sender, message)):
-            return sales_records.FIRST_LOOK_STOPPED, memo + "（1社目の入力した画面を見て止めたか、5分のあいだ選ばれなかったため、送信ボタンは押していない）"
-    late = send_rules.window_refusal()  # 1社目の確認を待つあいだ(最大5分)や、ページを開くあいだに送れる時間を過ぎていたら押さない
+    late = send_rules.window_refusal()  # ページを開くあいだに送れる時間を過ぎていたら押さない
     if late:
         return "要手動", late + "(送れる時間を過ぎたため、送信ボタンは押していない。次の平日の時間内に送れます)"
     if _gate_is_ng(gate, [url, page.url, hp]):  # 長い送信の途中で追加されたNGも、押す直前に見る(会社のHPのドメインも)
         return _gate_ng_result()
     if set(state.keys_of([url, page.url])) & (sent_urls(results_only=True) | state.blocked_keys()):  # 画面版・コマンド版のどちらで押したものも、送信ログの結果行で止める
         return "スキップ", "このフォームは送信ログに結果(送信済み・不明・入力エラー)があるため送らない"
-    db = gate.db_path if gate is not None else state.DB  # 1日の上限の枠は、送信状態と同じDBで数える(同時に動く別の実行と共有する)
-    slot = send_rules.reserve_daily(db, LOG, name, url)
-    if slot is None:
-        return DAILY_FULL, f"1日の上限({send_rules.DAILY_LIMIT}社)に達したため送らない(同時に動いている別の実行の分を含む)"
-    try:
-        return _press(page, name, url, message, hp, gate, btn, memo, shot)
-    finally:
-        send_rules.settle_daily(db, slot, STATE["clicked"])  # 押さずに終わった枠は戻し、押した(押したかもしれない)枠は数え続ける
-
-
-DAILY_FULL = "上限(送らない)"
-FIRST_LOOK_SECONDS = 300  # 1社目の確認を待つ長さ。長く待つとフォームの有効期限が切れるので5分で止める
-FIRST_LOOK = {"pending": False}  # main が --first-look(はじめての人の本番)のとき True。押す直前まで来た最初の1社だけで待ち、待ったら False
-
-
-def first_look_fields(sender, message):
-    """1社目の確認で見せる値。フォームに入れるために渡した値(画面から読み戻した値ではない)と、本文の先頭3行"""
-    rows = [{"label": k, "value": str(sender.get(k))} for k in ("会社名", "氏名", "フリガナ", "メール", "電話", "住所", "件名") if sender.get(k)]
-    return rows + [{"label": "本文(先頭3行)", "value": "\n".join((message or "").strip().split("\n")[:3])}]
-
-
-def first_look_wait(name, shot, fields, timeout=None, interval=2.0):
-    """はじめての人の1社目で、入力した画面を人に見せ、「このまま送る」が選ばれたときだけ True。
-    起動元の画面(app.py)に POST /api/firstlook/wait {company, shot(画像のファイル名), fields, deadline} を interval 秒ごとに送り、
-    応答 {"go": true} で True、{"go": false} で False、{"go": null} は待ち続ける。期限(既定 FIRST_LOOK_SECONDS)を過ぎたら False。
-    画面から起動していない(ポートの環境変数が無い)ときは、誰も答えられないので False(押さない)。
-    陽性対照(test_send_flow_offline): 答えない画面・「止める」と答える画面・画面なし → False で、送信ボタンは押されない。誤爆の対照: 「送る」と答える画面 → True。
-    原理的に取りこぼす型: 画面を操作できるAIや人が、中身を読まずに「このまま送る」を押すこと(承認ダイアログと同じ限界)
-    待ちの受付番号: 呼ばれるたびに新しい番号(wait)を作って送り、{"go": true} は応答の wait が同じときだけ受け付ける(前の待ち・別の会社への答えで押さない)。
-    期限を過ぎてから届いた {"go": true} は受け付けない(問い合わせの応答が遅れて期限をまたいだ場合)。
-    陽性対照: wait の無い/違う {"go": true} → 待ち続けて期限で False。期限1秒・応答の遅れ2.5秒の {"go": true} → False"""
-    import approval
-    import secrets
-    import urllib.request
-    port = os.environ.get(approval.PORT_ENV, "")
-    if not port.isdigit():
-        return False
-    deadline = time.time() + (FIRST_LOOK_SECONDS if timeout is None else timeout)
-    wait_id = secrets.token_hex(8)
-    payload = json.dumps({"company": name, "shot": Path(shot).name, "fields": fields, "deadline": int(deadline), "wait": wait_id}, ensure_ascii=False).encode("utf-8")
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    while time.time() < deadline:
-        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/firstlook/wait", data=payload, method="POST",
-                                     headers={"Content-Type": "application/json", "Host": f"127.0.0.1:{port}", "X-Token": os.environ.get(approval.UI_TOKEN_ENV, "")})
-        try:
-            with opener.open(req, timeout=max(0.5, min(10, deadline - time.time()))) as r:
-                ans = json.loads(r.read().decode("utf-8"))
-            go = ans.get("go")
-            if go is True and ans.get("wait") != wait_id:  # 今の待ちへの答えでない「送る」は数えない
-                go = None
-        except Exception:  # 画面が一時的に答えないときは、期限まで問い合わせ続ける(押さない側に倒れる)
-            go = None
-        if go is True:
-            return time.time() <= deadline  # 期限を過ぎてから届いた「送る」では押さない
-        if go is False:
-            return False
-        time.sleep(interval)
-    return False
+    return _press(page, name, url, message, hp, gate, btn, memo, shot)
 
 
 def _press(page, name, url, message, hp, gate, btn, memo, shot):
@@ -1320,15 +1235,13 @@ def main():
     ap.add_argument("--message", required=True)
     ap.add_argument("--send", action="store_true", help="本番送信。付けなければ試走")
     ap.add_argument("--preview", action="store_true", help="送る対象と各社の文面の全文を出して終わる(送らない・ブラウザも開かない)")
-    ap.add_argument("--max", type=positive_int, default=20)
+    ap.add_argument("--max", type=positive_int, default=None, help="送る社数。付けなければ対象の全社(固定の上限は無い)")
     ap.add_argument("--expect", help="確認(--preview)が出した確認番号。本番で送る会社・全文・送信元が、これと違えば送らずに止める")
     ap.add_argument("--include-supplemented", action="store_true", help="検索で補ったHPの会社も対象にする(別会社の恐れあり)")
     ap.add_argument("--ng-state-db", help="Explicit isolated NG/state DB used by the UI handoff; omitted keeps the normal text NG/state defaults.")
     ap.add_argument("--manual-company", help="画面の「手で送る」。この会社のフォームを開いて入力だけ自動で行う(送信ボタンは押さない)")
     ap.add_argument("--check-message-name", help="採用済み企業1社の本文検査のみ。NG/履歴/企業適格性は未検証。DB・ブラウザ・送信動作なし")
-    ap.add_argument("--first-look", action="store_true", help="はじめての人の本番。押す直前まで来た1社目だけ、入力した画面を画面(app.py)で見せ、「このまま送る」が選ばれるまで押さない(5分で止める)")
     a = ap.parse_args()
-    FIRST_LOOK["pending"] = False
     if a.send:  # 画面を通らない直接実行でも、利用許可の確認を通す(本番送信だけ。試走・確認は止めない)
         import license_check
         ok, why = license_check.gate()
@@ -1354,24 +1267,16 @@ def main():
     if problems:
         print("送信元に、送る前に直すところがあります: " + " / ".join(p["text"] for p in problems))
         return 1
-    FIRST_LOOK["pending"] = bool(a.first_look and a.send)
     plan = build_plan(a.csv, a.include_supplemented, gate, a.max, a.message, sender, apply_rules=bool(a.send or a.preview))
     for s in plan["skipped"]:
         print(f"送らない会社: {s['name']}  {s['text']}")
-    if plan["left_today"] == 0 and plan["stop"]:
-        print(plan["stop"])
-        return 6
     todo, bodies = plan["todo"], plan["bodies"]
     print(f"対象 {len(todo)}社（フォームあり・お断り表示なし・送信ログに無い{'・検索で補ったHPを含む' if a.include_supplemented else '・検索で補ったHPは除く'}）")
     if not todo:
         return 0
     got = plan["digest"]
     if a.send and a.expect and got != a.expect:  # 確認のあとで、送る会社・文面・送信元が変わった。確認していない相手に送らない
-        if daily_cut_explains(a.csv, a.include_supplemented, gate, a.max, a.message, sender, a.expect, plan["left_today"]):
-            print(f"送る内容を出したあとで、きょう送れる残りが減りました(別の送信が先に進んだため。いまの残りは{plan['left_today']}社)。"
-                  "送る会社・文面・送信元は変わっていません。送らずに止めます。もう一度「送る内容を出す」を押します")
-        else:
-            print("送る内容を出したあとで、送る会社・文面・送信元のどれかが変わりました。送らずに止めます。もう一度「送る内容を出す」を押します")
+        print("送る内容を出したあとで、送る会社・文面・送信元のどれかが変わりました。送らずに止めます。もう一度「送る内容を出す」を押します")
         return 4
     if a.send:
         try:
@@ -1417,10 +1322,8 @@ def main():
         ctx = page = None
         results = []
         for i, (name, url, ind, opener, hp) in enumerate(todo, 1):
-            if a.send:  # 1社ごとに、時刻・1日の上限・同じ会社の間隔をもう一度見る(待ち時間や並行実行の間に変わるため)
+            if a.send:  # 1社ごとに、時刻・同じ会社の間隔をもう一度見る(待ち時間や並行実行の間に変わるため)
                 stop = send_rules.window_refusal()
-                if not stop and send_rules.pressed_today(LOG) >= send_rules.DAILY_LIMIT:
-                    stop = f"1日の上限({send_rules.DAILY_LIMIT}社)に達しました"
                 if stop:
                     print(f"{stop}。残りの会社には送らず、ここで止めます")
                     break
@@ -1464,12 +1367,6 @@ def main():
                 print("送信ログに書けません（Excelで開いていませんか）。二重送信を防ぐため、ここで止めます:", e)
                 br.close()
                 return 2
-            if res == DAILY_FULL:
-                print("1日の上限に達したため、残りの会社には送らず、ここで止めます")
-                break
-            if res == sales_records.FIRST_LOOK_STOPPED:
-                print("1社目の確認で止めたため、残りの会社には送らず、ここで止めます")
-                break
             if res.startswith("お断り"):
                 if ng_list.add(hp or url, "営業お断り表示(フォーム画面)「" + memo[:30] + "」", name):
                     print("  営業お断りの会社として NGリストに追加しました")

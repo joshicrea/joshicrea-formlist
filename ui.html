@@ -102,7 +102,6 @@ th{color:var(--mut);font-size:14px;position:sticky;top:0;background:var(--bg);z-
 table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{background:var(--bg)}
 .readck{font-weight:700;font-size:17px;margin:20px 0 6px;padding:12px 14px;border:2px solid var(--ac-line);border-radius:10px;background:var(--ac-soft)}.readck input{width:24px;height:24px}
 .prog2{height:10px;background:var(--bg);border-radius:6px;overflow:hidden;margin:10px 0}.prog2>div{height:100%;background:var(--ac)}
-.flshot{max-width:100%;border:1px solid var(--line);border-radius:8px;margin-top:8px}
 .tag.gray{background:var(--bg);color:var(--mut)}.nw{display:inline-block;max-width:100%;overflow-wrap:anywhere}
 @media(min-width:641px){#c .now.stick{position:sticky;top:0;z-index:4;box-shadow:0 2px 8px rgba(16,24,40,.12)}}
 @media(max-width:640px){.sumline .k{min-width:0}.al{display:block}.edit{padding:12px}table.op textarea{min-height:96px}}
@@ -155,7 +154,7 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
    <div class="sumline" id="condSum" hidden></div>
    <div id="condEdit">
     <div class="row"><div><label for="sfile">送るリスト</label><select id="sfile"></select></div>
-     <div><label for="smax">1回に送る社数</label><input id="smax" type="text" inputmode="numeric" autocomplete="off" style="max-width:12em"><p class="hint" id="smaxNote"></p><p class="ferr" id="smaxErr" hidden></p></div></div>
+     <div><label for="smax">1回に送る社数</label><input id="smax" type="text" inputmode="numeric" autocomplete="off" placeholder="空欄なら全社" style="max-width:12em"><p class="hint" id="smaxNote"></p><p class="ferr" id="smaxErr" hidden></p></div></div>
     <p class="hint" id="limitsLine"></p>
    </div>
   </div>
@@ -294,8 +293,8 @@ function resNote(t){$('#sumnote').textContent=t;$('#sumnote').style.color='var(-
 async function portalList(){const r=await J('/api/portals');if(!r||r.error)return;const box=$('#portalBox');if(!box)return;box.innerHTML=r.length?('<div class="why" style="margin:6px 0 2px">登録済みポータル（使うものにチェックすると、上のURL欄と合わせて集めます）</div>'+r.map(p=>`<label style="display:inline-flex;gap:6px;align-items:center;margin:2px 10px 2px 0;font-weight:400"><input type="checkbox" class="portalChk" value="${esc(p.url)}">${esc(p.name||p.url)}<button class="btn sub sm portalDel" data-u="${esc(p.url)}" type="button">削除</button></label>`).join('')):'';document.querySelectorAll('.portalDel').forEach(b=>b.onclick=async()=>{await post('/api/portals',{delete:1,url:b.dataset.u});portalList()});const add=$('#portalAdd');if(add)add.onclick=async()=>{const r2=await post('/api/portals',{name:$('#portalName').value,url:$('#portalUrl').value});if(r2.error)return alert(r2.error);$('#portalName').value='';$('#portalUrl').value='';portalList()}}
 async function ngList(){const r=await J('/api/ngscreen');if(r.error)return;$('#nglist').innerHTML=r.length?r.map((l,i)=>`<div style="margin:6px 0;color:var(--ink)">${esc(l.split('#')[0].trim().replace(/^@/,''))} <span class="why">${esc(l.split('「送らない」')[1]||'')}</span> <button class="btn sub sm ngu" data-i="${i}" type="button">戻す</button></div>`).join(''):'<div class="why">まだありません</div>';document.querySelectorAll('.ngu').forEach(b=>b.onclick=async()=>{const res=await post('/api/ng/undo',{line:r[+b.dataset.i]});if(res.error)return resNote(res.error);loadRes()})}
 $('#files').onchange=loadRes;$('#onlyOk').onchange=loadRes;$('#dl').onclick=async()=>{const f=$('#files').value;if(!f)return;const r=await fetch('/download?file='+encodeURIComponent(f),{headers:{'X-Token':TOKEN}});const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download=f;a.click()};
-// ---- 送る: 状態はサーバーが返す send_state(s0〜s7・s6a)で決め、画面はそれを描くだけ ----
-const S={flash:'',err:'',editSender:false,editMsg:false,msgInd:'default',parts:null,greet:true,opener:true,T:null,tLoading:false,read:false,dirty:'',condOpen:false,wait:'',leave7:false,smaxInit:false,shotUrl:'',shotFor:''};
+// ---- 送る: 状態はサーバーが返す send_state(s0〜s7)で決め、画面はそれを描くだけ ----
+const S={flash:'',err:'',editSender:false,editMsg:false,msgInd:'default',parts:null,greet:true,opener:true,T:null,tLoading:false,read:false,dirty:'',condOpen:false,wait:'',leave7:false,smaxInit:false};
 const isSF=f=>FIELDS.includes(f);
 const probs=()=>Array.isArray(META.problems)?META.problems:[];
 const senderProbs=()=>probs().filter(p=>p.field===''||isSF(p.field));
@@ -310,18 +309,20 @@ function errHtml(r){let h=esc(r&&r.error||'うまくいきませんでした');c
  return h}
 function fieldLinks(list){const u=[...new Set(list.map(p=>p.field).filter(Boolean))];return u.map(f=>`<button class="lnk" data-go="${esc(f)}" type="button">${esc(f)}</button>`).join('・')}
 function lim(){return META.limits||null}
-function smaxCheck(){const L=lim(),raw=String($('#smax').value||'').trim().replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)),n=/^\d+$/.test(raw)?parseInt(raw,10):NaN,top=L?L.per_run:NaN;
- if(!(n>=1)||(L&&n>top))return {ok:false,msg:L?`1〜${top}社の数を入れてください。きょうはあと${L.left_today}社です。`:'1以上の数を入れてください。'};
- return {ok:true,n,cap:L&&n>L.left_today?L.left_today:n}}
+function smaxCheck(){const raw=String($('#smax').value||'').trim().replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0));
+ if(raw==='')return {ok:true,n:null};
+ const n=/^\d+$/.test(raw)?parseInt(raw,10):NaN;
+ if(!(n>=1))return {ok:false,msg:'1以上の社数を入れてください。空欄にすると、対象の全社に送ります。'};
+ return {ok:true,n}}
 function limitsText(n){const L=lim();if(!L)return '';const sec=L.sec_per_company||[],h=L.hours||[];const m=(x)=>Math.max(1,Math.ceil(n*x/60));
- return `1回に送れるのは${L.per_run}社まで。きょうはあと${L.left_today}社（1日${L.per_day}社まで）。`+(h.length==2?`送れる時間は平日${h[0]}時〜${h[1]}時。`:'')+(sec.length==2&&n>0?`1社に${sec[0]}〜${sec[1]}秒かかるので、${n}社で約${m(sec[0])}〜${m(sec[1])}分。`:'')}
-function initSmax(){if(S.smaxInit||!META.send_state)return;$('#smax').value=META.last_max||20;if(lim())$('#smax').max=lim().per_run;S.smaxInit=true}
-function renderCond(st){const v=smaxCheck(),L=lim(),n=v.ok?v.n:0;
- $('#smaxNote').textContent=META.first_time?'はじめての送信です。入力がうまくいかなかったフォームは、送信ボタンを押さずに、自分で送る会社に回します。':(v.ok&&n==META.last_max?`前回と同じ${n}社`:'');
- $('#smaxErr').hidden=v.ok&&!(L&&n>L.left_today);$('#smaxErr').textContent=!v.ok?v.msg:(L&&n>L.left_today?(L.left_today>0?`きょうはあと${L.left_today}社なので、${L.left_today}社まで送ります。`:'きょうはもう1日に送れる数に達しました。あした以降に送ります。'):'');
+ return (h.length==2?`送れる時間は平日${h[0]}時〜${h[1]}時。`:'')+(sec.length==2&&n>0?`1社に${sec[0]}〜${sec[1]}秒かかるので、${n}社で約${m(sec[0])}〜${m(sec[1])}分。`:'')}
+function initSmax(){if(S.smaxInit||!META.send_state)return;$('#smax').value=META.last_max||'';S.smaxInit=true}
+function renderCond(st){const v=smaxCheck(),n=v.ok?v.n:0;
+ $('#smaxNote').textContent=META.first_time?'はじめての送信です。入力がうまくいかなかったフォームは、送信ボタンを押さずに、自分で送る会社に回します。':(v.ok&&n&&n==META.last_max?`前回と同じ${n}社`:(v.ok&&!n?'空欄なので、対象の全社に送ります。':''));
+ $('#smaxErr').hidden=v.ok;$('#smaxErr').textContent=v.ok?'':v.msg;
  $('#limitsLine').textContent=limitsText(n||0);
  const full=st=='s3'||S.condOpen;show('#condEdit',full);show('#condSum',!full);
- $('#condSum').innerHTML=`<span class="k">送る条件</span><span class="v">${esc(String($('#sfile').value||'リストがありません').replace(/^フォームリスト_/,'').replace(/\.csv$/,''))} ／ 1回に${esc($('#smax').value)}社</span><button class="lnk" id="condOpenBtn" type="button">変える</button>`;
+ $('#condSum').innerHTML=`<span class="k">送る条件</span><span class="v">${esc(String($('#sfile').value||'リストがありません').replace(/^フォームリスト_/,'').replace(/\.csv$/,''))} ／ 1回に${String($('#smax').value||'').trim()===''?'全':esc($('#smax').value)}社</span><button class="lnk" id="condOpenBtn" type="button">変える</button>`;
  const cb=$('#condOpenBtn');if(cb)cb.onclick=()=>{S.condOpen=true;renderSend()}}
 function sig1(){return String((META.sender||{})['署名']||'').split('\n').map(x=>x.trim()).filter(Boolean)[0]||''}
 function renderSumLines(st){const s=META.sender||{};
@@ -355,7 +356,7 @@ function renderSend(){if(!$('#now_c'))return;if(!META.send_state){band(NW+'読�
   return}
  if(st=='s3'){show('#c_cond',!S.editMsg&&!S.editSender);show('#c_sum',true);show('#condMore',true);show('#aiOpen',true);renderCond(st);showEditors();renderSumLines(st);
   if(prep){band(NW+'送る内容を作っています。少しかかります。まだ送りません。');return}
-  const v=smaxCheck(),LL=lim(),over=v.ok&&LL&&v.n>LL.left_today?(LL.left_today>0?`きょうはあと${LL.left_today}社です。${LL.left_today}社だけ送ります。 `:'きょうは、もう1日に送れる数に達しました。あした以降に送ります。 '):'';band(NX+(fl?fl+' ':'')+over+'「送る内容を出す」を押します。まだ送りません。',B('mainBtn',v.ok?`送る内容を出す（${v.cap}社まで）`:'送る内容を出す'));
+  const v=smaxCheck();band(NX+(fl?fl+' ':'')+'「送る内容を出す」を押します。まだ送りません。',B('mainBtn',v.ok?(v.n==null?'送る内容を出す（全社）':`送る内容を出す（${v.n}社まで）`):'送る内容を出す'));
   const mb=$('#mainBtn');if(!v.ok)mb.classList.add('wait');mb.onclick=()=>doPreview(false);return}
  if(st=='s4'||st=='s5'){show('#c_cond',true);show('#c_sum',true);show('#msgLine',false);show('#senderLine',!S.editSender);renderCond(st);showEditors();renderSumLines(st);
   if(!S.T){band(NW+'送る内容を読み込んでいます。');loadPlan();return}
@@ -364,7 +365,7 @@ function renderSend(){if(!$('#now_c'))return;if(!META.send_state){band(NW+'読�
   const head=(fl?fl+' ':'')+(m?`${n}社に送れます。${m}社は送りません（理由は下）。`:`${n}社に送れます。`);
   const how=T.window?`<span class="hint">${esc(T.window)}</span>`:`<span class="hint">下の文を読み、良ければ読みましたにチェックを入れます。</span>`;
   band(NX+head+how+`<label class="check readck"><input type="checkbox" id="readok"${S.read?' checked':''}><span>届く文と、会社ごとに違うところを読みました</span></label>`,B('mainBtn',`この${n}社に送る`));const mb=$('#mainBtn');if(!S.read||T.window)mb.classList.add('wait');mb.onclick=doSend;const rk=$('#readok');if(rk)rk.onchange=()=>{S.read=rk.checked;if(S.read&&S.err)S.err='';renderSend()};return}
- if(st=='s6'||st=='s6a'||st=='s7'){show('#c_run',true);renderRun(st,sending);return}
+ if(st=='s6'||st=='s7'){show('#c_run',true);renderRun(st,sending);return}
  band(NX+'画面を読み込み直します。');}
 function showEditors(){show('#senderEdit',S.editSender);if(S.editSender)markSender();show('#msgEdit',S.editMsg)}
 function showCommon(st){if(st=='s4'||st=='s5'){show('#c_plan',!!S.T);show('#c_cond',true);show('#c_sum',true);show('#msgLine',false)}if(st=='s3'){show('#c_cond',true);show('#c_sum',true)}}
@@ -459,7 +460,7 @@ function renderPlan(){const T=S.T||{},sd=T.sendable||[],sk=T.skipped||[],cm=T.co
   h+='<div class="tw"><table class="rt op"><tr><th style="width:20%">会社</th><th style="width:15%">使う文面</th><th>書き出し（直せます）</th><th style="width:12%">全文</th><th style="width:12%">フォーム</th></tr>'+sd.map((x,i)=>`<tr><td><b>${esc(x.name)}</b><div class="why">${esc(x.industry||'業種なし')}</div></td><td>${esc(x.template_label||'')}</td><td><textarea class="opin" data-i="${i}" data-n="${esc(x.name)}" aria-label="${esc(x.name)}の書き出し">${esc(x.opener||'')}</textarea><div class="why">${esc(OPSRC[x.opener_source]||'')}</div></td><td><button class="lnk fullbtn" data-i="${i}" type="button">全文を開く</button></td><td>${lk(x.form,'フォームを開く')}</td></tr><tr class="fullrow" id="full${i}" hidden><td colspan="5"><div class="msgbody">${esc('件名: '+(x.subject||'')+'\n\n'+(x.text||''))}</div></td></tr>`).join('')+'</table></div>';
   h+='<div class="actions"><button class="btn sub" id="saveOp" type="button">書き出しを保存</button> <span class="hint" id="opNote"></span></div>'}
  if(sk.length){h+=`<h3 class="eh">送らない会社 ${sk.length}社 <span class="opt">送った会社は自動で外します</span></h3><div class="tw"><table class="rt"><tr><th style="width:30%">会社</th><th>送らない理由</th></tr>`+sk.map(x=>`<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.text||'')}${x.fix=='sender'?' <button class="lnk" data-go="" type="button">送信元を直す</button>':x.fix=='message'?` <button class="lnk" data-gomsg="${esc(x.industry||'')}" type="button">文面を直す</button>`:''}</td></tr>`).join('')+'</table></div>'}
- if(sd.length){h+=`<p class="hint">送る前に確認が出ます。`+(META.first_time?'はじめては、1社目の画面を見てから送ります。':'')+'</p>'}
+ if(sd.length){h+=`<p class="hint">送る前に確認が出ます。</p>`}
  $('#c_plan').innerHTML=h;
  document.querySelectorAll('.fullbtn').forEach(b=>b.onclick=()=>{const r=$('#full'+b.dataset.i);r.hidden=!r.hidden;b.textContent=r.hidden?'全文を開く':'全文を閉じる'});
  on('saveOp',saveOp)}
@@ -487,24 +488,14 @@ async function doSend(){const T=S.T||{};S.err='';S.flash='';
  if(r.error||!r.started){await post('/api/approve/cancel',{});S.err=r.error?errHtml(r):'いまほかの処理が動いています。終わってから押します。';renderSend();return}
  S.T=null;S.read=false;wasRun=true;poll()}
 $('#approve').onclick=async()=>{if(!S.read){$('#aiNote').textContent='先に、上の、読みました、にチェックを入れます。';return}$('#aiNote').textContent='画面の外に確認が出ています。';const a=await askApprove();$('#aiNote').innerHTML=a.err?errHtml(a.err):a.ok?'承認しました。AI に、送って、と伝えます。承認は1回の送信で使い切ります。':'承認しませんでした（確認で「いいえ」を押したため）。'};
-function cnt(){const c=META.counts||{};return {total:+c.total||0,done:+c.done||0,sent:+c.sent||0,check:+c.check||0,manual:+c.manual||0,stopped:+c.stopped||0,has:!!META.counts}}
+function cnt(){const c=META.counts||{};return {total:+c.total||0,done:+c.done||0,sent:+c.sent||0,check:+c.check||0,manual:+c.manual||0,has:!!META.counts}}
 function renderRun(st,sending){const c=cnt(),L=lim()||{},sec=L.sec_per_company||[];const box=$('#c_run');
  if(st=='s6'){const per=sec.length==2?`・1社${sec[0]}〜${sec[1]}秒`:'';
-  if(c.stopped>0){band(NW+'1社目で止めました。ほかの会社には送りません。終わるまで少し待ちます。',B('mainBtn','送信の記録を見る'));on('mainBtn',()=>goto('d'));box.innerHTML='';return}
   band(NW+(c.has&&c.total?`${Math.min(c.done+1,c.total)}社目を送っています（全${c.total}社${per}）。このまま待ちます。`:'送っています。このまま待ちます。'),B('mainBtn','送信の記録を見る'));on('mainBtn',()=>goto('d'));
   box.innerHTML=c.has&&c.total?`<div class="prog2"><div style="width:${Math.round(100*c.done/c.total)}%"></div></div><p>${c.done}／${c.total}社 終わりました。送れた ${c.sent}社 ／ 送れたか確かめる ${c.check}社 ／ 自分で送る ${c.manual}社</p><p class="hint">この画面を閉じても、送るのは続きます。</p>`:'<p class="hint">この画面を閉じても、送るのは続きます。</p>';return}
- if(st=='s6a'){const f=JOB.first_look||META.first_look||{};
-  band(NX+`1社目（${esc(f.company||'')}）のフォームに、このように入れました。送信ボタンはまだ押していません。良ければ「このまま送る」を押します。`,B('mainBtn','このまま送る')+' '+B('stopBtn','送らずに止める','sub'));on('mainBtn',()=>firstLook(true));on('stopBtn',()=>firstLook(false));
-  const rows=(f.fields||[]).map(x=>`<tr><td style="width:30%">${esc(x.label)}</td><td style="white-space:pre-wrap">${esc(x.value)}</td></tr>`).join('');
-  if(!box.querySelector('#flshot')||S.shotFor!=f.shot){box.innerHTML=`<h3 class="eh">入れた値</h3><div class="tw"><table class="rt">${rows}</table></div><h3 class="eh">入れたあとの画面</h3><p class="hint" id="flleft"></p><img id="flshot" class="flshot" alt="1社目のフォームに入れたあとの画面">`;loadShot(f.shot)}
-  const dl=deadlineMs(f.deadline),left=$('#flleft');if(left){const s=Math.max(0,Math.round((dl-Date.now())/1000));left.textContent=dl?`何も選ばないと、あと${Math.floor(s/60)}分${s%60}秒で、送らずに止めます。`:'しばらく選ばれないときは、送らずに止めます。'}return}
  band(NX+`送り終えました。送れた会社 ${c.sent}社（相手の画面で、送れたことを確かめた会社）。送れたか確かめる会社 ${c.check}社。自分で送る会社 ${c.manual}社。`,B('mainBtn','送信の記録を見る'));on('mainBtn',()=>goto('d'));
- box.innerHTML=`<div class="sum"><div><span class="lb">${tag('送れた','ok')}</span><span class="nm"><b>${c.sent}</b>社</span></div><div><span class="lb">${tag('送れたか確かめる','warn')}</span><span class="nm"><b>${c.check}</b>社</span></div><div><span class="lb">${tag('自分で送る','warn')}</span><span class="nm"><b>${c.manual}</b>社</span></div></div>`+(c.stopped?`<p class="hint">1社目の確認で止めた会社が ${c.stopped}社あります。送っていません。</p>`:'')+'<div class="actions">'+(c.manual?'<button class="lnk" id="toManual" type="button">自分で送る会社の一覧を見る</button>　':'')+'<button class="lnk" id="next7" type="button">次の送る準備へ</button></div>';
+ box.innerHTML=`<div class="sum"><div><span class="lb">${tag('送れた','ok')}</span><span class="nm"><b>${c.sent}</b>社</span></div><div><span class="lb">${tag('送れたか確かめる','warn')}</span><span class="nm"><b>${c.check}</b>社</span></div><div><span class="lb">${tag('自分で送る','warn')}</span><span class="nm"><b>${c.manual}</b>社</span></div></div>`+'<div class="actions">'+(c.manual?'<button class="lnk" id="toManual" type="button">自分で送る会社の一覧を見る</button>　':'')+'<button class="lnk" id="next7" type="button">次の送る準備へ</button></div>';
  on('toManual',()=>{HF='manual';goto('d')});on('next7',()=>{S.leave7=true;S.smaxInit=false;initSmax();renderSend();window.scrollTo(0,0)})}
-function deadlineMs(d){if(!d)return 0;if(typeof d=='number')return d<1e12?d*1000:d;const t=Date.parse(d);return isNaN(t)?0:t}
-async function loadShot(p){S.shotFor=p;if(!p)return;const url=String(p).startsWith('/')?p:'/api/shot?file='+encodeURIComponent(p);
- try{const r=await fetch(url,{headers:{'X-Token':TOKEN}});if(!r.ok)throw 0;const u=URL.createObjectURL(await r.blob());const im=$('#flshot');if(im)im.src=u}catch(e){const im=$('#flshot');if(im)im.replaceWith(Object.assign(document.createElement('p'),{className:'hint',textContent:'画面の画像を読み込めませんでした。上の入れた値で確かめます。'}))}}
-async function firstLook(go){S.err='';const r=await post('/api/firstlook',{go});if(r.error){S.err=errHtml(r);renderSend();return}S.flash=go?'':'1社目で止めました。送っていません。';await refreshMeta(true)}
 // ---- 送信の記録 ----
 const RES={'送信済み':['送れた','ok'],'不明(要確認)':['送れたか確かめる','warn'],'入力エラー(要確認)':['送れたか確かめる（入力エラーの表示あり）','warn'],'送信試行':['送れたか確かめる（結果が分からない）','warn'],'要手動':['自分で送る','warn'],'お断り表示(送らない)':['お断りの表示があり、送らない','ng'],'試走OK':['送っていない記録','gray'],'1社目の確認で止めた':['1社目の確認で止めた（送っていない）','gray']};
 let HF='';
@@ -586,6 +577,5 @@ async function init(){META=await J('/api/meta');if(META.error){$('#now_c').textC
  $('#inds').innerHTML=(META.industries||[]).map(i=>`<label class="chip"><input type="checkbox" value="${esc(i)}"><span>${esc(i)}</span></label>`).join('');
  $('#inds').onchange=()=>{const n=document.querySelectorAll('#inds input:checked').length;$('#indcnt').textContent=n?`${n}つ選んでいます`:'';refreshPlan()};
  renderSenderForm();opts($('#files'),META.files||[]);opts($('#sfile'),META.files||[]);renderMsgOptions();est();banners()}
-setInterval(()=>{if($('#c').classList.contains('on')&&sState()=='s6a')renderSend()},1000);
 init();poll();checkUpdate();checkLicense();setInterval(checkLicense,600000);loadFunnel();
 </script></body></html>

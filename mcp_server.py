@@ -43,7 +43,7 @@ mcp = FastMCP("formlist", instructions="""AIまるなげ営業（営業部）。
 会社探し→ホームページの照合→文面→送る内容を出す(送る会社と届く全文)→本人の承認（画面の外の確認ダイアログ）→送信、の順を守る。練習(試走)は無い。
 本人が全文を見て「送って」と明示するまで、formlist_send の本番（send=true）を呼ばない。承認を代わりに押さない。""")
 _LOADED = hashlib.sha256((HERE / "mcp_server.py").read_bytes()).hexdigest()  # 起動したときの版。ディスクの版と違えば、古いMCPが動いている
-Count = Annotated[int, Field(ge=1, le=300)]  # 0 を渡すとサーバー側で既定の20社に化けるので、最初から断る
+Count = Annotated[int, Field(ge=1)]  # 送る社数。上限は置かない。0 や負数は最初から断る。未指定(null)は対象の全社
 
 
 def _pythonw():
@@ -578,24 +578,26 @@ def formlist_openings_set(file: str, openings: dict[str, str]) -> dict:
 
 
 @mcp.tool()
-def formlist_preview(file: str, max_companies: Count = 3, supp: bool = False) -> dict:
+def formlist_preview(file: str, max_companies: Count | None = None, supp: bool = False) -> dict:
     """送る内容を出す(画面の「送る内容を出す」と同じ)。送る会社と、各社に届く件名と全文、送らない会社と理由を返す(送らない)。本番を通すための印を立てる操作でもある。
     本番は、送る会社と各社の全文がこれと同じときだけ通る。送らないリスト・送信済み・文面・送信元・書き出しが変われば、やり直しになる。
     書き出しが空の会社には、型どおりの下書きがリストに書き込まれてから全文が作られる。
-    返った全文は、そのままユーザーに見せる。人が読んだかどうかは、この呼び出しでは確かめられない。送信元や文面に直すところがあれば、欄の名前(field)つきの error で止まる。"""
+    返った全文は、そのままユーザーに見せる。人が読んだかどうかは、この呼び出しでは確かめられない。送信元や文面に直すところがあれば、欄の名前(field)つきの error で止まる。
+    max_companies は送る社数。ユーザーが数を言ったときだけ入れる。入れなければ(null)対象の全社が入る。固定の上限は無い。"""
+    mx = "" if max_companies is None else max_companies  # 画面の問い合わせ(GET)では、空欄=未指定=全社
     code, d = api("POST", "/api/send", {"file": file, "max": max_companies, "supp": supp, "send": False, "preview": True})
     if code != 200 or not d.get("started"):
         out = {"started": False, "error": d.get("error") or "ほかの処理が動いています"}
         if d.get("field"):
             out["field"] = d["field"]
         if d.get("code") == "nothing_to_send":  # 送れる会社が0。理由を会社ごとに返す
-            _, t = api("GET", f"/api/targets?file={urllib.request.quote(file)}&max={max_companies}&supp={1 if supp else 0}")
+            _, t = api("GET", f"/api/targets?file={urllib.request.quote(file)}&max={mx}&supp={1 if supp else 0}")
             out["skipped"] = t.get("skipped", []) if isinstance(t, dict) else []
         return out
     j = _wait(120)
     if j.get("running") or j.get("code") != 0:
         return {"ok": False, **_brief(j, 40)}
-    code, t = api("GET", f"/api/targets?file={urllib.request.quote(file)}&max={max_companies}&supp={1 if supp else 0}")
+    code, t = api("GET", f"/api/targets?file={urllib.request.quote(file)}&max={mx}&supp={1 if supp else 0}")
     if code != 200:
         return {"ok": False, "error": t.get("error")}
     _, m = api("GET", "/api/meta")
@@ -614,11 +616,10 @@ def formlist_preview(file: str, max_companies: Count = 3, supp: bool = False) ->
 
 
 @mcp.tool()
-def formlist_send(file: str, max_companies: Count, supp: bool, confirm: str) -> dict:
+def formlist_send(file: str, max_companies: Count | None, supp: bool, confirm: str) -> dict:
     """本番送信。顧客に実際に届く。formlist_preview の全文をユーザーに見せ、ユーザーが「送って」と明示した後にだけ呼ぶ。
-    file・max_companies・supp は直前の formlist_preview と同じ値にする。confirm には「送信」と入れる。
+    file・max_companies(未指定なら null)・supp は直前の formlist_preview と同じ値にする。confirm には「送信」と入れる。
     人の承認が要る: ユーザーがツールの画面で送る内容を読み、送るボタンのあとに画面の外に出る確認で「はい」を押すまで、送れない(AIは承認を押せない。承認は1回の送信で使い切る)。
-    はじめての人(送った記録が0件)は、1社目のフォームに入れた画面がツールの画面に出て、本人が「このまま送る」を押すまで送信ボタンを押さない(5分で止まる)。
     送信中は文面と送信元を保存できない。"""
     code, d = api("POST", "/api/send", {"file": file, "max": max_companies, "supp": supp, "send": True, "confirm": confirm})
     if code != 200 or not d.get("started"):
