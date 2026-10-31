@@ -365,6 +365,16 @@ def _target_is_ng(row, gate):
     return ng_list.is_ng_row(row) or ng_list.is_ng(form)
 
 
+def _supplemented_reason(row):
+    """取得元に「補完」が付いた行の、送らない理由。検索で見つけたHPと、地図のHPを照合で外した行(formlist が「補完扱い」を足す)を分ける。どちらも確認なしでは送らない"""
+    src = row.get("取得元", "")
+    if "補完" not in src:
+        return ""
+    if "Bing検索でHPを補完" not in src and ("地図のHPが照合不一致" in src or "地図のHPは照合できず" in src):
+        return "HPの照合が合わないため未承認(地図のHP)"
+    return "検索補完HPのため未承認"
+
+
 def _hp_verify_skip_reason(row):
     ev = (row.get("HPの照合") or "").strip()
     if not ev:
@@ -385,8 +395,9 @@ def _target_skip_reason(row, include_supplemented=False, gate=None, done=None):
         return "営業お断り表示あり"
     if _target_is_ng(row, gate):
         return "NGリスト対象"
-    if "補完" in row.get("取得元", "") and not include_supplemented:
-        return "検索補完HPのため未承認"
+    why = _supplemented_reason(row)
+    if why and not include_supplemented:
+        return why
     hp_reason = _hp_verify_skip_reason(row)
     if hp_reason:
         return hp_reason
@@ -457,8 +468,9 @@ def mail_skip_reason(row, include_supplemented=False, gate=None, done=None):
         return "営業不可候補: " + row["sales_permission"][:60]
     if _mail_is_ng(row, mail, gate):
         return "NGリスト対象"
-    if "補完" in row.get("取得元", "") and not include_supplemented:
-        return "検索補完HPのため未承認"
+    why = _supplemented_reason(row)
+    if why and not include_supplemented:
+        return why
     hp_reason = _hp_verify_skip_reason(row)
     if hp_reason:
         return hp_reason

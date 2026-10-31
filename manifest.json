@@ -1,10 +1,10 @@
 {
- "version": "d12ba171875f",
+ "version": "93f0954145b4",
  "files": {
   "app.py": "12ffda1595302b1e76eb02120d5a1530b6cb187d0e9a9f0254ad321dfef4bf1d",
   "ui.html": "a8a6b292b7168aae22e58ba1e02176ae9be87183771f6bccc61c8a68f1815db9",
   "approval.py": "0b4a4908efedd041f50655ccc209f8fc0f433bd3c8c51788928fb0bcd0b07f2a",
-  "autosend.py": "3f070a58d80f5070d24e593cf77009083029cae419bbed22baf82a6679e02a22",
+  "autosend.py": "11ae2587a899d152a33d25ae2928b6f43484bf3b1027dfcb1cbc30d4e99b2695",
   "filelock.py": "47c41ed1e3d231198a278e13fe30ca3146eca5bb6f163f8242b7b63529221eea",
   "form_kind.py": "a3a3da8645d200cda3422b507e3f526c02fe7784fd3935c47bd404d2e4ac0861",
   "formlist.py": "29bcf76af184f485bf8c5bd5702e07e12d4543b235fb478cb914a354293ba867",
@@ -14,7 +14,7 @@
   "license_check.py": "afcff6354069316fe7ab9975e1d7e6d93e3ad96b427375042da2eaee981493bc",
   "limited_http_budget.py": "229b0b36fcec3af27c287f405b79ece1ca4a912b35b936467e5ede6d0e87e0f3",
   "map_browser_source.py": "d5237ebc58ea8c05d004f2c0656fa358d25554ebbee8076c84c0f9dc604baeb5",
-  "mcp_server.py": "eb7125acf81791a92b16a83d1e6f2c25cbfb1cac16b54e669cd585a04e666ac8",
+  "mcp_server.py": "4da295803b04e1ae4b1a3a0ee4ccf4b9bdd704659db371f9d456ab66e4eb5708",
   "mcp_register.py": "5de5a19bc3cfaae46ce8296bd48571182a2f72710751e07bd244090be8a4fddc",
   "message_adoption.py": "7619e2e76c5721267e28dcefc9d6e04161e13ec7ee70f5054dec1dbd64670509",
   "netguard.py": "980fd728eb766e268fbe16b82d5fc3df38ceddb68c4526102d17d631e1e27798",
@@ -38,6 +38,6 @@
   "state.py": "000b7b459e730a1eeb287a9dc0ed2729e6568baca41b41b92979ed83a01811e8",
   "subareas.py": "1f4514bcb75b355572bca65a315ef2b776250c200d17662d4b1c51351ee896ad",
   "導入と使い方.md": "95d43c5c5ad9988a1d0202489105f613d26d1842ad5455c185777831611a3387",
-  "営業部_手引き.md": "b0e0685a45ae4db47fb2a344c1063ba5a728b6153720b6fbd30c7c6e4ee2f19d"
+  "営業部_手引き.md": "393cd691756558f149fffbb6a0d5fc54a088c849def8cc3f5ab27c9393aaba20"
  }
 }

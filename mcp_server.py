@@ -665,6 +665,16 @@ def formlist_manual_kit(file: str) -> dict:
 
 
 @mcp.tool()
+def formlist_manual_open(file: str, company: str) -> dict:
+    """自分で送る会社1社のフォームを別の画面で開き、入れられる欄だけ自動で入れる(画面の「手で送る」と同じ)。送信ボタンは押さない。
+    画像認証などは利用者が手で解き、中身を確かめて、利用者が自分で送る。利用者が画面を閉じるまで待つ。
+    利用者に「この会社のフォームを開きます。送信ボタンは押しません」と伝えてから呼ぶ。ほかの処理が動いているときは started が false で返る。
+    送ったと利用者が言ったら formlist_manual_sent で記録する。送信元・署名に足りない項目があれば、開く前にエラーで返る。"""
+    code, d = api("POST", "/api/manual", {"file": file, "name": company})
+    return d
+
+
+@mcp.tool()
 def formlist_manual_sent(company: str, form: str, how: str = "") -> dict:
     """利用者が手でフォームから送ったことを記録する。利用者が「送った」と言った会社だけに使う。"""
     code, d = api("POST", "/api/manual_sent", {"company": company, "form": form, "how": how})
