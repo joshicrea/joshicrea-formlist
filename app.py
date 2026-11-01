@@ -52,16 +52,22 @@ JOB = {"lines": [], "running": False, "name": ""}
 SJOB = {"lines": [], "running": False, "name": ""}  # 「探す」専用の枠。送る系(確認・本番送信・手入力)と同時に動かせる(2026-10-30 運用者の指示「ほかの処理が動いていても同時に動くように」)
 OPENER_COL = "書き出しの作り方"  # リストの列。画面はこの値だけを見て「どう作った書き出しか」を言う(作り方と説明を一致させる)
 BASIS_COL, BASIS_URL_COL, BASIS_WHY_COL = "書き出しの根拠", "根拠URL", "根拠が拾えなかった理由"  # リストの列。根拠の文・取得元・拾えなかった理由(人が後から確かめられるように残す)
-OPENER_SOURCES = {"philosophy": "ホームページの方針・思いから作った下書き",
+OPENER_SOURCES = {"philosophy": "ホームページの特徴と文面の提案から作った下書き",
                   "title": "ホームページの題から作った下書き", "general": "会社名と業種から作った下書き",  # 旧版が作った行の表示用。いまは新しく作らない
                   "ai": "AI(Claude)が書き直した下書き", "person": "あなたが直した書き出し"}
 _SOURCE_OF = {v: k for k, v in OPENER_SOURCES.items()}
 
 
-def opener_draft_for(overview="", industry="", basis=""):
+def opener_draft_for(overview="", industry="", basis="", template=None):
     """(下書き, 作り方)。ホームページの本文から拾った方針・思いの文(basis)の引用だけで作る(philosophy.opener_from_basis)。
     拾えなかった会社は ("", "")。題だけ・会社名と業種だけの下書きは作らない(2026-11-02 運用者の指示「ぜんぜんだめ」)。overview・industry は旧版との呼び出し互換のため受けるだけ"""
-    d = philosophy.opener_from_basis(basis)
+    if template is None:  # この会社に実際に送る文面(業種で選ばれる文面)の提案を、第2文に使う
+        import autosend
+        try:
+            template = autosend.pick_message_source(str(MSG), industry)[1] if MSG.exists() else ""
+        except OSError:
+            template = ""
+    d = philosophy.opener_from_basis(basis, template)
     return (d, "philosophy") if d else ("", "")
 
 
@@ -70,7 +76,7 @@ def opener_why(row):
     if (row.get("書き出し") or "").strip():
         return ""
     if (row.get(BASIS_COL) or "").strip():
-        return "方針・思いの文は拾えましたが、書き出しに入れられる長さ・形の引用にできませんでした(拾った文は「書き出しの根拠」の列にあります。手で書くか、AIに書き直してもらえます)"
+        return "ホームページの文は拾えましたが、特徴を言い切る文にできない、または特徴に合う提案を文面から選べませんでした(拾った文は「書き出しの根拠」の列にあります。手で書くか、AIに書き直してもらえます)"
     return (row.get(BASIS_WHY_COL) or "").strip() or "この会社のホームページから方針・思いを拾う前のリストです(もう一度「探す」で作り直すと拾います)"
 
 

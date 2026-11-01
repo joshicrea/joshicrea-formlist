@@ -159,40 +159,93 @@ def collect(soup, final, site):
     return {"basis": "", "url": "", "why": why}
 
 
-def quote_of(sentence):
-    """根拠の文から、書き出しに入れる引用(12〜52字)を決める。長い文は読点で区切った、方針・思いの語を含む部分だけ。作れなければ空"""
-    s = sentence.strip().rstrip("。！？!?").strip()
-    s = re.sub(r"^[\s　・■◆●◎▶▷→※]+", "", s)
-    s = re.sub(r"^(?:[0-9０-９]{1,2}\s*[.．)）、]\s*|[①-⑩]\s*)", "", s)  # 見出しの番号「1. 」
-    s = re.sub(r"(?<=[^\x00-\x7f]) +(?=[^\x00-\x7f])", "", s)  # 日本語どうしの間の空白(ページの改行跡)
-    if QUOTE_MIN <= len(s) <= QUOTE_MAX:
-        return s
-    clauses = [c.strip() for c in re.split(r"[、，,]", s) if c.strip()]
-    best = ""
-    for n in range(len(clauses), 0, -1):  # 長い連続から試し、QUOTE_MAX に収まる最長の連続を探す
-        for i in range(0, len(clauses) - n + 1):
-            seg = "、".join(clauses[i:i + n])
-            if QUOTE_MIN <= len(seg) <= QUOTE_MAX and THOUGHT.search(seg) and specific_nouns(seg) and END_OK.search(seg):
-                if len(seg) > len(best):
-                    best = seg
-        if best:
-            return best
+
+# ---- v2(2026-11-02): 書き出しは2文。第1文=相手の特徴を事実として言い切る、第2文=送る文面の提案に接続して提案で締める ----
+# 禁止: 拝見・共感・お世辞の語、根拠文の引用貼り付け(『』「」)、どの会社にも使える接続文
+BANNED = re.compile(r"拝見|共感|惹か|惹か|素敵|魅力的|素晴らしい|感銘|感動|敬服|感服|ご立派|ぜひご覧|ご覧ください")
+QUOTE_MARKS = re.compile(r"[『』「」]")
+
+# 特徴の言い切り文を作る規則: (根拠文中の手がかり, 手がかりの前の語句 head を使う文の型)。head は手がかり直前の読点までの語句
+FACT_RULES = [
+    (re.compile(r"にこだわ"), "{h}にこだわっておられます。"),
+    (re.compile(r"を大切に"), "{h}を大切にされています。"),
+    (re.compile(r"に寄り添"), "{h}に寄り添うことを大切にされています。"),
+    (re.compile(r"を目指"), "{h}を目指しておられます。"),
+    (re.compile(r"を使命|を目標"), "{h}を使命にされています。"),
+    (re.compile(r"に貢献"), "{h}への貢献を大切にされています。"),
+    (re.compile(r"丁寧に仕上げ"), "丁寧に仕上げることを大切にされています。"),
+    (re.compile(r"を心がけ|を心掛け"), "{h}を心がけておられます。"),
+    (re.compile(r"をお届け|をご提供|を提供"), "{h}をお届けすることに力を入れておられます。"),
+]
+_LEAD = re.compile(r"^(?:そして|また|さらに|なにより|何よりも|私たちは|わたしたちは|当店は|当社は|当サロンは)")
+
+# 特徴の種類 → 第2文の「接続」。上から順に最初に当たったものを使う。どれにも当たらない会社は作らない(汎用の接続を禁止するため)
+CONNECT = [
+    ("family", re.compile(r"家族|ご友人|親子|お子"), "ご家族やご友人と過ごすその機会に、", ("ワークショップ", "体験", "イベント")),
+    ("relax", re.compile(r"癒し|くつろ|リラックス|ゆっくり|安心|落ち着|心地"), "その過ごしていただく時間に、", ("制作体験", "体験", "ワークショップ")),
+    ("care", re.compile(r"ケア|トリートメント|施術|カラー|パーマ|薬剤|仕上がり|技術|髪|頭皮|ダメージ"), "その施術やケアの時間に合わせて、", ("制作体験", "体験", "ワークショップ")),
+    ("polite", re.compile(r"丁寧|クオリティ|品質|確か|短い時間"), "ご来店を機に、", ("記念品", "ギフト", "特典", "制作体験", "体験")),
+    ("town", re.compile(r"地域|街|寄り添|近隣"), "地域のお客様との接点づくりとして、", ("ワークショップ", "イベント", "体験")),
+    ("people", re.compile(r"社会|貢献|スタッフ|成長|価値観|理想"), "お客様やスタッフとの関わりを深める場として、", ("ワークショップ", "体験", "イベント")),
+]
+# 提案の具体語(その文面に実際にある語だけを使う)
+PROPOSAL_TERMS = ("制作体験", "ワークショップ", "体験", "イベント", "ギフト", "記念品", "特典")
+
+
+def _head_before(clause, cue):
+    m = cue.search(clause)
+    if not m:
+        return ""
+    h = clause[:m.start()]
+    h = re.split(r"では|は", h)[-1] if re.search(r"では|は", h) and len(re.split(r"では|は", h)[-1]) >= 2 else h
+    h = re.split(r"[ 　]|よう", h)[-1] if re.search(r"[ 　]|よう", h) and len(re.split(r"[ 　]|よう", h)[-1]) >= 3 else h
+    h = _LEAD.sub("", h.strip())
+    h = QUOTE_MARKS.sub("", h).strip(" 　,、")
+    return h
+
+
+def fact_sentence(basis):
+    """根拠文から、相手の特徴を事実として言い切る第1文を作る(引用を貼らない・感想を入れない)。作れなければ ""。
+    手がかり(にこだわ・を大切に・に寄り添・を目指 等)の直前の語句を使うので、根拠に無い特徴は足さない"""
+    for sent in [x for x in (basis or "").split(" / ") if x.strip()]:
+        s = re.sub(r"(?<=[^\x00-\x7f]) +(?=[^\x00-\x7f])", "", sent.strip().rstrip("。！？!?").strip())
+        for clause in [c for c in re.split(r"[、，,。]", s) if c.strip()]:
+            clause = re.sub(r"^(?:[0-9０-９]{1,2}\s*[.．)）、]\s*|[①-⑩]\s*)", "", clause.strip())
+            for cue, frame in FACT_RULES:
+                h = _head_before(clause, cue)
+                if 2 <= len(h) <= 30 and specific_nouns(h) and not THANKS_ONLY.search(h):
+                    return frame.format(h=h)
     return ""
 
 
-def opener_from_basis(basis):
-    """根拠文(' / ' 区切りで最大2文)から書き出しを作る。作れなければ ""。引用は根拠の文そのまま。
-    型: 理念型 / こだわり型 / 特徴型。機械条件: 40〜90字・会社固有の語を1つ以上含む"""
-    for sent in [x for x in (basis or "").split(" / ") if x.strip()]:
-        q = quote_of(sent)
-        if not q or not specific_nouns(q):
-            continue
-        if KIND_RIDEN.search(q):
-            out = f"ホームページで『{q}』という想いを拝見し、共感いたしました。"
-        elif KIND_KODAWARI.search(q):
-            out = f"『{q}』という姿勢を拝見し、ご連絡いたしました。"
-        else:
-            out = f"『{q}』という取り組みを拝見しました。"
-        if 40 <= len(out) <= 90:
-            return out
+THANKS_ONLY = re.compile(r"^(?:お客様|お客さま|皆様)(?:の|に|を)?$")
+
+
+def proposal_phrase(template, kind_terms):
+    """送る文面(template)に実際にある提案の具体語から、相手の特徴に合うものを1つ選び、提案の句にする。無ければ (None, "")"""
+    text = template or ""
+    for term in kind_terms + PROPOSAL_TERMS:
+        m = re.search(r"(?:[一-龥ぁ-んァ-ヶー]{1,4}の)?" + re.escape(term) + ("会?" if term == "体験" else ""), text)
+        if m:
+            base = "本物のお花を使った" if ("本物のお花" in text or "本物の花" in text) else ""
+            return term, f"{base}{m.group(0)}"
+    return None, ""
+
+
+def opener_from_basis(basis, template=""):
+    """根拠文(' / ' 区切り)と、その会社に送る文面(template)から、2文の書き出しを作る。作れなければ ""。
+    第1文: 相手の特徴の言い切り(fact_sentence)。第2文: 特徴の種類に合う接続 + 文面にある提案の具体語 + 「を取り入れる企画をご提案できます。」"""
+    first = fact_sentence(basis)
+    if not first:
+        return ""
+    for ctx in (first, basis or ""):  # まず第1文の特徴から接続を決め、当たらなければ根拠文全体から
+        for _kind, rx, connect, terms in CONNECT:
+            if rx.search(ctx):
+                term, phrase = proposal_phrase(template, terms)
+                if not term:
+                    return ""
+                out = f"{first}{connect}{phrase}を取り入れる企画をご提案できます。"
+                if BANNED.search(out) or QUOTE_MARKS.search(out):
+                    return ""
+                return out
     return ""

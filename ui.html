@@ -534,7 +534,7 @@ $('#moveMsg').onclick=async()=>{const k=S.msgInd;const o=((META.message_info||{}
 $('#delMsg').onclick=async()=>{const k=S.msgInd;if(!confirm(k+' の業種ごとの文面をやめて、基本の文面を使うようにします。前の文面は残してあります。よろしいですか'))return;const r=await post('/api/message/delete',{name:k});if(r.error){$('#msgSaved').innerHTML=errHtml(r);return}await refreshMeta(true);renderMsgOptions();showMsg();$('#msgSaved').textContent=r.note||''};
 $('#mkSample').onclick=async()=>{const r=await post('/api/sample',{material:$('#mat').value});if(r.error){$('#matNote').innerHTML=errHtml(r);return}if($('#mtext').value.trim()&&!confirm('いまの本文を、たたき台で置き換えます（保存するまでは元に戻せます）。よろしいですか'))return;
  const p=splitMsg(r.text);$('#mtext').value=p.ok?p.body:toMarks(r.text);$('#matNote').textContent='たたき台を入れました。拾えたもの: 題 '+(r.title||'なし')+'・箇条書き'+(r.points||[]).length+'個・URL'+(r.url?'あり':'なし')+'。読んで直してから、この文面を保存を押します。'};
-const OPSRC={philosophy:'ホームページの方針・思いから作った下書き',title:'ホームページの題から作った下書き',general:'会社名と業種から作った下書き',ai:'AI（Claude）が書き直した下書き',person:'あなたが直した書き出し'};
+const OPSRC={philosophy:'ホームページの特徴と文面の提案から作った下書き',title:'ホームページの題から作った下書き',general:'会社名と業種から作った下書き',ai:'AI（Claude）が書き直した下書き',person:'あなたが直した書き出し'};
 async function loadPlan(){if(S.tLoading)return;S.tLoading=true;
  const r=await J('/api/targets?file='+encodeURIComponent($('#sfile').value)+'&max='+encodeURIComponent($('#smax').value)+'&supp='+($('#supp').checked?1:0));S.tLoading=false;
  if(r.error){S.err=errHtml(r);S.T={sendable:[],skipped:[],commons:[]};}else S.T=r;renderPlan();renderSend()}
