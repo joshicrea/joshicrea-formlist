@@ -1,5 +1,5 @@
 {
- "version": "a50cb03eed8f",
+ "version": "5eb46a547506",
  "files": {
   "app.py": "96e44e9ac39af61711ca9d31d4a4b0f017b3cd1ad04ebbe695007172b51089cf",
   "ui.html": "4e750d3090cff3f556a63875ff935ba84fac8f6579a907f94966172225019f73",
@@ -14,6 +14,7 @@
   "hp_verify.py": "bb9c29303e9821a686610dee648390c624e30d215ad094a406eb37b75aca2b4f",
   "license_check.py": "afcff6354069316fe7ab9975e1d7e6d93e3ad96b427375042da2eaee981493bc",
   "limited_http_budget.py": "229b0b36fcec3af27c287f405b79ece1ca4a912b35b936467e5ede6d0e87e0f3",
+  "mail_channel.py": "2c933418cc2162c0903a00d8d29916749f49bcd92a95d4423f65e88d859950a3",
   "map_browser_source.py": "d5237ebc58ea8c05d004f2c0656fa358d25554ebbee8076c84c0f9dc604baeb5",
   "mcp_server.py": "039479d76558baf6ff17deb994a56d9685bd458c845c8e9a15d95ace682c2579",
   "mcp_register.py": "5de5a19bc3cfaae46ce8296bd48571182a2f72710751e07bd244090be8a4fddc",
@@ -38,7 +39,7 @@
   "size_guess.py": "697e3132844adce97d69dcc19bb226cf6ac53914a76dd7279f4f34cbb669a1c0",
   "state.py": "000b7b459e730a1eeb287a9dc0ed2729e6568baca41b41b92979ed83a01811e8",
   "subareas.py": "1f4514bcb75b355572bca65a315ef2b776250c200d17662d4b1c51351ee896ad",
-  "導入と使い方.md": "9cdc0d35650001a6b81faf0d9ca1705bbc5cfcd0e2e32214bc96df5b421a9ef1",
+  "導入と使い方.md": "dbb8d2ca6eac776b391f2398e7e55d955c48373edef0ea40b3eab078e97d9bc5",
   "営業部_手引き.md": "c0abe89d42dd8efca6a505f598b8df6616dd413ca2f7f1a6978ae1ed7b704908"
  }
 }
