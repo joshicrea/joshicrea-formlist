@@ -227,7 +227,7 @@ def proposal_phrases(template, kind_terms):
     base = "本物のお花を使った" if ("本物のお花" in text or "本物の花" in text) else ""
     out, seen, spans = [], set(), []
     for term in tuple(kind_terms) + PROPOSAL_TERMS:
-        m = re.search(r"(?:[一-龥ぁ-んァ-ヶー]{1,4}の)?" + re.escape(term) + ("会?" if term == "体験" else ""), text)
+        m = re.search(r"(?:(?!企業向けの)[一-龥ぁ-んァ-ヶー]{1,4}の)?" + re.escape(term) + ("会?" if term == "体験" else ""), text)  # 「企業向けの」は相手の会社を指す語で、書き出しでは不自然なので前置きに取らない
         if not m or (base + m.group(0)) in seen:
             continue
         pos = text.find(term, m.start())  # 語そのものの位置。別の語の一部(制作体験の「体験」)なら、同じ提案の言い換えなので候補にしない
