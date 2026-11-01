@@ -1528,6 +1528,10 @@ class H(BaseHTTPRequestHandler):
             probs = send_rules.sender_problems(read_sender())
             if probs:
                 return self.send(400, problem_error(probs))
+            import autosend
+            _row, _bodies, problem = autosend.manual_precheck(str(p), str(SENDER), str(MSG), name)  # 始める前に、書き出し空欄・フォームURLなしを確かめる(ジョブを走らせて終了コードだけ見せない)
+            if problem:
+                return self.send(400, {"error": f"「{name}」の「自分で送る」は始められません。理由: {problem[0]}。直し方: {problem[1]}", "field": LIST_FIELD, "fix": "list"})
             return self.send(200, {"started": run_job("手動入力", ["autosend.py", str(p), "--sender", str(SENDER), "--message", str(MSG), "--manual-company", name])})
         if self.path == "/api/send/dismiss":  # 送り終えた表示(s7)を閉じて、次の送る準備(s3)へ。送信の記録は消さない
             SEND_INFO["dismissed"] = True

@@ -932,26 +932,37 @@ def prefill_manual(url, sender, message):
     return memo, skipped
 
 
-def manual_prefill_company(csv_path, sender_path, message_path, company_name):
-    """画面の「手で送る」。1社のフォームを開いて入力できる項目を埋め、送信ボタンは押さずに、画面を閉じるまで待つ。"""
+def manual_precheck(csv_path, sender_path, message_path, company_name):
+    """「自分で送る」を始める前の確認(通信しない)。戻り値: (row, bodies, 問題)。問題は (理由, 直し方) か None。
+    画面の入口(/api/manual)と manual_prefill_company が同じ確認を使う(始める前に理由と直し方を返すため)"""
     sender = json.loads(Path(sender_path).read_text(encoding="utf-8-sig"))
     with open(csv_path, encoding="utf-8-sig", newline="") as f:
         rows = [r for r in csv.DictReader(f) if r.get("企業名") == company_name]
     if len(rows) != 1:
-        print("指定した会社が1行に決まらないため、手動入力を始めません")
-        return 5
+        return None, None, ("指定した会社が1行に決まらないため、手動入力を始めません", "「2 結果を見る」で会社を選び直してください")
     r = rows[0]
     row = (r["企業名"], r.get("問い合わせフォームURL 無ければメール", ""), r.get("業種", ""), r.get("書き出し", ""), r.get("HP URL", ""))
     if not re.match(r"https?://", row[1]):
-        print("この会社はフォームのURLがありません(メールのみ)。手動入力の対象外です")
+        return row, None, ("この会社はフォームのURLがありません(メールのみ)。手動入力の対象外です", "この会社はメールで送る方で扱います。「メールで送る」を使ってください")
+    todo, bodies, rejected = prepare_message_plan([row], message_path, sender)
+    if rejected or len(todo) != 1:
+        whys = "、".join(f"{n}: {why}" for n, _u, why in rejected)
+        fix = ("「2 結果を見る」でこの会社の書き出しを入れてから、もう一度押してください(書き出しの下書きを使うこともできます)"
+               if any("書き出しが空欄" in why for _n, _u, why in rejected) else "「文面」の画面で、この会社に使う文面を確かめてください")
+        return row, None, ("本文を作れないため停止: " + (whys or "この会社の文面を決められません"), fix)
+    return row, bodies, None
+
+
+def manual_prefill_company(csv_path, sender_path, message_path, company_name):
+    """画面の「手で送る」。1社のフォームを開いて入力できる項目を埋め、送信ボタンは押さずに、画面を閉じるまで待つ。"""
+    sender = json.loads(Path(sender_path).read_text(encoding="utf-8-sig"))
+    row, bodies, problem = manual_precheck(csv_path, sender_path, message_path, company_name)
+    if problem:
+        print(problem[0])
         return 5
     ok_url, why_url = netguard.check_url(row[1])
     if not ok_url:
         print("宛先が公開サイトではないため開きません: " + why_url)
-        return 5
-    todo, bodies, rejected = prepare_message_plan([row], message_path, sender)
-    if rejected or len(todo) != 1:
-        print("本文を作れないため停止:", rejected)
         return 5
     eff = dict(sender, 件名=subject_for(row[0], row[1], sender, subject_industry(message_path, row[2])))
     print(f"手動入力: {row[0]} のフォームを開きます。入力できる項目だけ自動で埋めます。送信ボタンは押しません。")
