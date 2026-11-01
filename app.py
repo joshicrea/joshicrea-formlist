@@ -33,6 +33,7 @@ import proposal_links
 import sales_records
 import send_rules
 import osm_source
+import philosophy
 import ports
 import state
 import updater
@@ -49,27 +50,28 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 PY = sys.executable[:-len("pythonw.exe")] + "python.exe" if sys.executable.lower().endswith("pythonw.exe") else sys.executable
 JOB = {"lines": [], "running": False, "name": ""}
 SJOB = {"lines": [], "running": False, "name": ""}  # 「探す」専用の枠。送る系(確認・本番送信・手入力)と同時に動かせる(2026-10-30 運用者の指示「ほかの処理が動いていても同時に動くように」)
-def opener_draft(overview):
-    """書き出しの下書き。ホームページのタイトルに書いてあることだけを引く(見ていないことは書かない)。タイトルが無ければ空"""
-    t = re.split(r"\s*/\s*", (overview or "").strip(), maxsplit=1)[0]
-    t = re.split(r"\s*[|｜]\s*", t, maxsplit=1)[0].strip()[:30]
-    return f"ホームページの「{t}」を拝見しました。" if len(t) >= 4 else ""
-
-
 OPENER_COL = "書き出しの作り方"  # リストの列。画面はこの値だけを見て「どう作った書き出しか」を言う(作り方と説明を一致させる)
-OPENER_SOURCES = {"title": "ホームページの題から作った下書き", "general": "会社名と業種から作った下書き",
+BASIS_COL, BASIS_URL_COL, BASIS_WHY_COL = "書き出しの根拠", "根拠URL", "根拠が拾えなかった理由"  # リストの列。根拠の文・取得元・拾えなかった理由(人が後から確かめられるように残す)
+OPENER_SOURCES = {"philosophy": "ホームページの方針・思いから作った下書き",
+                  "title": "ホームページの題から作った下書き", "general": "会社名と業種から作った下書き",  # 旧版が作った行の表示用。いまは新しく作らない
                   "ai": "AI(Claude)が書き直した下書き", "person": "あなたが直した書き出し"}
 _SOURCE_OF = {v: k for k, v in OPENER_SOURCES.items()}
 
 
-def opener_draft_for(overview, industry=""):
-    """(下書き, 作り方)。題があれば opener_draft と同じ型(title)。題が無ければ業種だけから作る一般の型(general)。
-    どちらもホームページに無いことは書かない(一般の型は「ホームページを拝見」と言わない)。業種も無ければ、相手について何も言わない1文"""
-    t = opener_draft(overview)
-    if t:
-        return t, "title"
-    ind = (industry or "").strip()
-    return (f"{ind}の分野で事業をされている皆さまに、ご案内をお送りしています。" if ind else "突然のご連絡、失礼いたします。"), "general"
+def opener_draft_for(overview="", industry="", basis=""):
+    """(下書き, 作り方)。ホームページの本文から拾った方針・思いの文(basis)の引用だけで作る(philosophy.opener_from_basis)。
+    拾えなかった会社は ("", "")。題だけ・会社名と業種だけの下書きは作らない(2026-11-02 運用者の指示「ぜんぜんだめ」)。overview・industry は旧版との呼び出し互換のため受けるだけ"""
+    d = philosophy.opener_from_basis(basis)
+    return (d, "philosophy") if d else ("", "")
+
+
+def opener_why(row):
+    """書き出しが空の会社について、なぜ空かを人に言う1文。書き出しがあれば空"""
+    if (row.get("書き出し") or "").strip():
+        return ""
+    if (row.get(BASIS_COL) or "").strip():
+        return "方針・思いの文は拾えましたが、書き出しに入れられる長さ・形の引用にできませんでした(拾った文は「書き出しの根拠」の列にあります。手で書くか、AIに書き直してもらえます)"
+    return (row.get(BASIS_WHY_COL) or "").strip() or "この会社のホームページから方針・思いを拾う前のリストです(もう一度「探す」で作り直すと拾います)"
 
 
 def opener_source(row):
@@ -657,8 +659,10 @@ def fill_drafts(p, supp, store=None):
         n = 0
         for r in rows:
             if (r.get("企業名", ""), r.get("問い合わせフォームURL 無ければメール", "")) in want and not (r.get("書き出し") or "").strip() and needs(r.get("業種", "")):
-                r["書き出し"], src = opener_draft_for(r.get("HP概要", ""), r.get("業種", ""))
-                r[OPENER_COL] = OPENER_SOURCES[src]
+                d, src = opener_draft_for(basis=r.get(BASIS_COL, ""))
+                if not d:
+                    continue  # 根拠が拾えなかった会社は、題や業種で埋めずに空のまま(理由は画面が言う)
+                r["書き出し"], r[OPENER_COL] = d, OPENER_SOURCES[src]
                 n += 1
         if n:
             _write_rows(p, rows)
@@ -667,7 +671,7 @@ def fill_drafts(p, supp, store=None):
 
 def _write_rows(p, rows):
     fields = list(rows[0].keys()) if rows else []
-    for c in ("書き出し", OPENER_COL):
+    for c in ("書き出し", OPENER_COL, BASIS_COL, BASIS_URL_COL, BASIS_WHY_COL):
         if c not in fields:
             fields.append(c)
     buf = io.StringIO(newline="")
@@ -899,7 +903,7 @@ class H(BaseHTTPRequestHandler):
             rows, commons = [], {}
             for (n, u, ind, op, hp), body, subject, label in zip(pl["todo"], pl["bodies"], pl["subjects"], pl["labels"]):
                 rows.append({"name": n, "form": u, "industry": ind, "hp": hp, "template_label": label, "opener": op,
-                             "opener_source": opener_source(src.get((n, u), {})), "subject": subject,
+                             "opener_source": opener_source(src.get((n, u), {})), "opener_why": opener_why(src.get((n, u), {})), "subject": subject,
                              "warn": _send_warn(body), "notice": _send_notice(body), "text": body})
                 _, template, local_sender = autosend.message_adoption.resolve_row((n, u, ind, op, hp), str(MSG), sender, autosend.pick_message)
                 c = commons.setdefault((label, template), {"template_label": label, "subject": marked_subject(local_sender),
@@ -1032,12 +1036,12 @@ class H(BaseHTTPRequestHandler):
                     r = next((x for x in rows if (x["企業名"], x.get("問い合わせフォームURL 無ければメール", "")) in sendable), None)
                 if r is not None:
                     name, url = r["企業名"], r.get("問い合わせフォームURL 無ければメール", "")
-                    opener = (r.get("書き出し") or "").strip() or opener_draft_for(r.get("HP概要", ""), r.get("業種", ""))[0]
+                    opener = (r.get("書き出し") or "").strip() or opener_draft_for(basis=r.get(BASIS_COL, ""))[0]
                     label = f"実際に送る会社の1社目({name})で作りました"
                 else:
                     label = "見本の会社(株式会社サンプル)。送る会社が無いので、この名前で作りました"
         if not opener:
-            opener = opener_draft_for("", industry)[0]
+            opener = "《この会社の書き出しはまだありません。ホームページから方針・思いが拾えた会社には、その引用が入ります》"  # 見本だけの印。送る文には入らない(空のままでは送らない)
         try:
             text = autosend.render(template, name, opener, sender)
         except Exception:
@@ -1157,12 +1161,13 @@ class H(BaseHTTPRequestHandler):
             want = {(t[0], t[1]) for t in (autosend.targets(str(f), q.get("supp") == "1", gate=ng_store) if ng_store is not None else autosend.targets(str(f), q.get("supp") == "1"))}
             companies = [{"name": r.get("企業名", ""), "industry": r.get("業種", ""), "hp": r.get("HP URL", ""), "form": r.get("問い合わせフォームURL 無ければメール", ""),
                           "overview": r.get("HP概要", ""), "opener": (r.get("書き出し") or "").strip(), "opener_source": opener_source(r),
-                          "draft": opener_draft_for(r.get("HP概要", ""), r.get("業種", ""))[0]}
+                          "basis": r.get(BASIS_COL, ""), "basis_url": r.get(BASIS_URL_COL, ""), "why": opener_why(r),
+                          "draft": opener_draft_for(basis=r.get(BASIS_COL, ""))[0]}
                          for r in rows if (r.get("企業名", ""), r.get("問い合わせフォームURL 無ければメール", "")) in want]
             if parse_qs(u.query).get("only_form", [""])[0] == "1":  # 画面用: 送る対象になりうる(フォーム検出・お断りなし)会社だけ
                 rows = [r for r in rows if r.get("フォーム判定") == "フォームあり" and r.get("営業お断りの表示") != "あり"]
             return self.send(200, {"total": total, "companies": companies,
-                                   "missing": [{"name": r.get("企業名", ""), "industry": r.get("業種", ""), "hp": r.get("HP URL", ""), "draft": opener_draft(r.get("HP概要", ""))} for r in rows if not (r.get("書き出し") or "").strip()][:200]})
+                                   "missing": [{"name": r.get("企業名", ""), "industry": r.get("業種", ""), "hp": r.get("HP URL", ""), "draft": opener_draft_for(basis=r.get(BASIS_COL, ""))[0], "why": opener_why(r)} for r in rows if not (r.get("書き出し") or "").strip()][:200]})
         if u.path == "/api/targets":
             return self.targets(q, ng_store)
         if u.path == "/api/log":

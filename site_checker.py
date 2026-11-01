@@ -28,6 +28,8 @@ from bs4 import BeautifulSoup
 import form_kind
 import hp_verify
 import netguard
+import philosophy
+from limited_http_budget import HttpBudgetExceeded
 
 UA = "AiMarunageEigyoTool/1.0 (checks public contact pages only; no submission)"
 TIMEOUT = 15
@@ -451,12 +453,14 @@ def set_external_form_result(res, form_url):
 def check(url, max_pages=MAX_CONTACT_PAGES, row=None, budget=None, line_id=None):
     """Returns dict: verdict, form_url, email, refuse, refuse_text, note, overview, ev, ev_why。
     row(名前・電話・住所を持つ辞書)を渡すと、このHPがその会社のものかを hp_verify で照合して ev・ev_why に入れる"""
-    res = {"verdict": "見つからず", "form_url": "", "email": "", "refuse": False, "refuse_text": "", "note": "", "overview": "", "ev": "", "ev_why": "", "line_url": "", "form_kind": "", "form_kind_why": ""}
+    res = {"verdict": "見つからず", "form_url": "", "email": "", "refuse": False, "refuse_text": "", "note": "", "overview": "", "ev": "", "ev_why": "", "line_url": "", "form_kind": "", "form_kind_why": "",
+           "basis": "", "basis_url": "", "basis_why": ""}
     if not url.startswith("http"):
         url = "http://" + url
     if is_not_company_site(url):
         res["needs_official_search"] = True
-        res.update(verdict="見つからず", note="登録URLがSNS・予約サイト・掲載サイトのページ（会社のホームページではない）")
+        res.update(verdict="見つからず", note="登録URLがSNS・予約サイト・掲載サイトのページ（会社のホームページではない）",
+                   basis_why="登録のURLが予約・掲載・SNSのページで、会社のホームページではないため、方針・思いを読んでいない")
         return res
     site = Site(url, budget=budget, line_id=line_id)
     final, html = site.get(url)
@@ -466,11 +470,19 @@ def check(url, max_pages=MAX_CONTACT_PAGES, row=None, budget=None, line_id=None)
     if final is None:
         res["verdict"] = "robots禁止" if html == "robots" else "取得失敗"
         res["note"] = {"HTTP 403": "サイトが自動取得を拒否", "HTTP 404": "登録URLが古い(ページなし)"}.get(html, html)
+        res["basis_why"] = "ホームページを読めなかったため、方針・思いを拾えていない(" + res["note"] + ")"
         if row is not None:
             res["verify_detail"] = {"level": "取得不可", "why": res["note"], "category": "fetch_failed"}
         return res
     soup = BeautifulSoup(html, "html.parser")
     res["overview"] = overview_of(soup)
+    try:  # 会社の方針・思いを本文から拾う(書き出しの根拠)。取得予算の超過は止める合図なのでそのまま上へ
+        got = philosophy.collect(soup, final, site)
+        res["basis"], res["basis_url"], res["basis_why"] = got["basis"], got["url"], got["why"]
+    except HttpBudgetExceeded:
+        raise
+    except Exception as e:  # 根拠が拾えないだけで、フォーム判定は止めない
+        res["basis_why"] = f"ホームページの本文から方針・思いを拾う処理が失敗した({type(e).__name__})"
     res["line_url"] = find_line_url(html)
     texts = [soup.get_text("\n", strip=True)]
     candidates = contact_links(soup, final)

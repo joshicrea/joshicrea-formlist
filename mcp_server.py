@@ -560,7 +560,8 @@ def formlist_message_sample(material: str) -> dict:
 @mcp.tool()
 def formlist_openings_get(file: str, supp: bool = False) -> dict:
     """送る会社の全部(会社名・業種・ホームページ・ホームページ概要 overview・いまの書き出し opener・作り方 opener_source・型どおりの下書き draft)。
-    opener_source は title(ホームページの題から作った下書き)/general(会社名と業種から作った下書き)/ai(AIが書き直した)/person(利用者が直した)/""(不明)。
+    opener_source は philosophy(ホームページの方針・思いから作った下書き)/ai(AIが書き直した)/person(利用者が直した)/""(不明。旧版の title・general もあり得る)。
+    basis は書き出しの根拠にしたホームページの文、basis_url はその取得元、why は書き出しが空の理由。AIが書き直すときは basis の文から離れない。
     AIが書き直すときは、各社のホームページ(と overview)に書いてあることだけで1〜2文を書く。ホームページに無い事実・数字・実績を書かない。
     利用者が直した書き出し(person)は、頼まれない限り書き直さない。顧客に届く文なので、全文をユーザーに見せて承認を得てから formlist_openings_set で保存する。"""
     code, d = api("GET", f"/api/openings?file={urllib.request.quote(file)}&supp={1 if supp else 0}")

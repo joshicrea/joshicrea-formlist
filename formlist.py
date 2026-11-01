@@ -55,6 +55,8 @@ AUDIT_COLS = ['比較電話', '比較住所', '比較値取得元', '比較値�
 EXTRA_COLS += ['source_detail', 'duplicate_removed', 'source_group',
                'contact_confidence', 'sales_permission', 'resume_state',
                'official_research_state', 'official_candidate_url', 'registered_url'] + AUDIT_COLS
+BASIS_COLS = ['書き出しの根拠', '根拠URL', '根拠が拾えなかった理由']  # 書き出しの根拠(ホームページの方針・思いの文・取得元・拾えなかった理由)。列の並びは to_row と同じ
+EXTRA_COLS += BASIS_COLS
 MAIL_TYPE.update({n: d["mail"] for n, d in industries.INDUSTRIES.items()})  # 新しい業種名(広い分類)。以前の業種名の行も、上の表で引ける
 INDUSTRIES = list(osm_source.INDUSTRY_TAGS)
 
@@ -688,6 +690,7 @@ def to_row(i, r):
               r.get("official_research_state", ""), r.get("official_candidate_url", ""), r.get("registered_url", ""),
               r.get("comparison_phone", ""), r.get("comparison_address", ""), r.get("comparison_source", ""),
               r.get("comparison_source_url", ""), r.get("comparison_fetched_at", "")]
+    extra += [r.get("basis", ""), r.get("basis_url", ""), r.get("basis_why", "")]
     return ledger + extra
 
 
