@@ -1,4 +1,4 @@
-"""会社の方針・思いを、ホームページの本文から拾い、書き出しの根拠にする(2026-11-02 運用者の指示「会社の方針思いを拾って文章つくるように」)。
+"""会社の方針・思いを、ホームページの本文から拾い、書き出しの根拠にする。書き出しは2文(第1文=相手の特徴の言い切り、第2文=送る文面の提案への接続)(2026-11-02 運用者の指示「会社の方針思いを拾って文章つくるように」)。
 拾うのはトップページの見出し・段落と、理念・コンセプト・こだわり等のリンク先(同じホストの最大2ページ)。
 書き出しは根拠の文の引用だけで作る(言い換えて意味を変えない・書いていないことを足さない)。拾えない会社は空のまま、理由を言う。
 実行環境: Windows / Linux / macOS (純粋な文字列処理。取得は site_checker.Site を呼ぶ側が渡す)"""
@@ -142,7 +142,7 @@ def collect(soup, final, site):
     top = page_sentences(BeautifulSoup(str(soup), "html.parser"))
     pages = [(final, top, False)]
     for u in link_candidates(soup, final):
-        f, h = site.get(u)
+        f, h = site.get(u, url_allowed=lambda x, _host=urlparse(final).netloc: urlparse(x).netloc == _host)
         if f is None:
             continue
         pages.append((f, page_sentences(BeautifulSoup(h, "html.parser")), True))
@@ -171,7 +171,8 @@ FACT_RULES = [
     (re.compile(r"を大切に"), "{h}を大切にされています。"),
     (re.compile(r"に寄り添"), "{h}に寄り添うことを大切にされています。"),
     (re.compile(r"を目指"), "{h}を目指しておられます。"),
-    (re.compile(r"を使命|を目標"), "{h}を使命にされています。"),
+    (re.compile(r"を使命"), "{h}を使命にされています。"),
+    (re.compile(r"を目標"), "{h}を目標にされています。"),
     (re.compile(r"に貢献"), "{h}への貢献を大切にされています。"),
     (re.compile(r"丁寧に仕上げ"), "丁寧に仕上げることを大切にされています。"),
     (re.compile(r"を心がけ|を心掛け"), "{h}を心がけておられます。"),
@@ -212,12 +213,16 @@ def fact_sentence(basis):
         for clause in [c for c in re.split(r"[、，,。]", s) if c.strip()]:
             clause = re.sub(r"^(?:[0-9０-９]{1,2}\s*[.．)）、]\s*|[①-⑩]\s*)", "", clause.strip())
             for cue, frame in FACT_RULES:
+                m = cue.search(clause)
+                if m and NEGATED.search(clause[m.end():m.end() + 10]):
+                    continue  # 「こだわっていません」を「こだわっておられます」にしない
                 h = _head_before(clause, cue)
                 if 2 <= len(h) <= 30 and specific_nouns(h) and not THANKS_ONLY.search(h):
                     return frame.format(h=h)
     return ""
 
 
+NEGATED = re.compile(r"ません|ていない|いない|ない|なかっ|なく|ず|たら|れば")  # 手がかりの直後の否定・条件。肯定の言い切りに変えない
 THANKS_ONLY = re.compile(r"^(?:お客様|お客さま|皆様)(?:の|に|を)?$")
 
 
@@ -227,7 +232,7 @@ def proposal_phrases(template, kind_terms):
     base = "本物のお花を使った" if ("本物のお花" in text or "本物の花" in text) else ""
     out, seen, spans = [], set(), []
     for term in tuple(kind_terms) + PROPOSAL_TERMS:
-        m = re.search(r"(?:(?!企業向けの)[一-龥ぁ-んァ-ヶー]{1,4}の)?" + re.escape(term) + ("会?" if term == "体験" else ""), text)  # 「企業向けの」は相手の会社を指す語で、書き出しでは不自然なので前置きに取らない
+        m = re.search(r"(?:(?<![一-龥ぁ-んァ-ヶー])(?!企業向けの)[一-龥ぁ-んァ-ヶー]{1,4}の)?" + re.escape(term) + ("会?" if term == "体験" else ""), text)  # 「企業向けの」は相手の会社を指す語で、書き出しでは不自然なので前置きに取らない
         if not m or (base + m.group(0)) in seen:
             continue
         pos = text.find(term, m.start())  # 語そのものの位置。別の語の一部(制作体験の「体験」)なら、同じ提案の言い換えなので候補にしない
