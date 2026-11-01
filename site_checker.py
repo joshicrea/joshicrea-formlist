@@ -372,6 +372,9 @@ def _mail(soup, text):
     return next((m for m in cands if not BAD_MAIL.search(m)), "")
 
 
+PLACEHOLDER_MAIL = re.compile(r"^(sample|example|test|your[-_]?name|name|mail|email|info@example|xxx+|abc|user)@", re.I)  # 入力例の仮のアドレス(問い合わせフォームの見本欄に書かれている)
+
+
 def overview_of(soup):
     """トップページのタイトルと説明文(meta description)。文面の書き出しの根拠にする。本文は読まない"""
     title = soup.title.get_text(" ", strip=True) if soup.title else ""
@@ -389,7 +392,7 @@ def find_line_url(html):
     return m.group(0).rstrip(".,;") if m else ""
 
 
-CHECK_RULES = "r6"  # フォーム判定・照合・URL欄の規則を変えたら必ず上げる。古い規則で出た判定を保存結果から再利用しない(行の指紋に含める)
+CHECK_RULES = "r7"  # フォーム判定・照合・URL欄の規則を変えたら必ず上げる。古い規則で出た判定を保存結果から再利用しない(行の指紋に含める)
 
 
 RECRUIT_TITLE = re.compile(r"求人|採用|募集|リクルート|recruit|career", re.I)  # 迷う題名は要目視へ(安全側)
@@ -555,6 +558,8 @@ def check(url, max_pages=MAX_CONTACT_PAGES, row=None, budget=None, line_id=None)
             ev, why = detail["level"], detail["why"]
         res["ev"], res["ev_why"] = ev, why
         res["verify_detail"] = detail
+    if not res["email"]:
+        res["mail_extra"] = mail_found or next((m for t in texts for m in EMAIL.findall(t) if not BAD_MAIL.search(m) and not PLACEHOLDER_MAIL.search(m)), "")
     fu = urlparse(res["form_url"])
     if res["form_url"] and res["verdict"] != "フォームあり" and fu.path in ("", "/") and not fu.query:
         # 問い合わせページのつもりで開いたURLがトップページ(リンク切れ・トップへの転送)。欄にトップページを入れると取得できたように見えるので空にする

@@ -67,6 +67,7 @@ th{color:var(--mut);font-size:14px;position:sticky;top:0;background:var(--bg);z-
 .mut{color:var(--mut);font-size:14px}.why{font-size:14px;color:var(--mut);margin-top:4px}
 .sum{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:14px 0 0;align-items:start}
 .sum>div{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px 14px}.sum .lb{display:block;font-size:14px;color:var(--mut);line-height:1.5}.sum .nm{display:block;font-size:15px;line-height:1.3;margin-top:4px}.sum .nm b{font-size:28px;font-weight:700;margin-right:2px}
+.sum>button.sumc{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px 14px;text-align:left;cursor:pointer;font:inherit;color:inherit}.sum>button.sumc.on{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}.sum>button.sumc .lb{display:block;font-size:14px;color:var(--mut);line-height:1.5}.sum>button.sumc .nm{display:block}.sum>button.sumc .nm b{font-size:26px;margin-right:2px}
 .sum.sm>div{padding:8px 12px}.sum.sm .nm b{font-size:20px}
 .legend{margin:12px 0 0;padding:10px 14px;background:var(--bg);border-radius:10px;font-size:14px;color:var(--mut)}.legend div{margin:8px 0;display:grid;grid-template-columns:auto 1fr;gap:4px 10px;align-items:start}.legend .tag{margin:0;justify-self:start}
 .st{font-size:16px;margin:0 0 4px}.prog{margin-top:14px;padding:12px 16px;background:var(--bg);border-radius:10px}
@@ -141,7 +142,7 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
 </section>
 <section id="b"><div class="now" id="now_b"></div><div class="card">
   <div class="toolbar"><div class="grow"><label for="files">見るリスト</label><select id="files"></select></div><label class="check inl"><input type="checkbox" id="onlyOk" checked><span>フォームがある会社だけ表示</span></label><div style="margin-bottom:6px"><button class="btn sub sm" id="dl" type="button">CSVをダウンロード</button></div></div>
-  <div id="rtabs" role="tablist" aria-label="結果の見方" style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0"></div><div id="mailbar" hidden style="margin:6px 0 10px"><button class="btn sub sm" id="mailAll" type="button">全部選ぶ</button> <button class="btn sub sm" id="mailNone" type="button">選びなおす</button> <button class="btn" id="mailGo" type="button">選んだ会社に送る内容を確かめる</button><p class="why" id="mailNote" style="margin:6px 0 0"></p></div><div id="manualst" role="status" aria-live="polite" hidden style="margin:8px 0;padding:10px 12px;border:1px solid var(--ac);border-radius:6px;font-size:15px;line-height:1.6;white-space:pre-line"></div><div class="sum" id="sum"></div><p class="mut" id="sumnote" style="margin:6px 0 0"></p>
+  <div id="mailbar" hidden style="margin:6px 0 10px"><button class="btn sub sm" id="mailAll" type="button">全部選ぶ</button> <button class="btn sub sm" id="mailNone" type="button">選びなおす</button> <button class="btn" id="mailGo" type="button">選んだ会社に送る内容を確かめる</button><p class="why" id="mailNote" style="margin:6px 0 0"></p></div><div id="manualst" role="status" aria-live="polite" hidden style="margin:8px 0;padding:10px 12px;border:1px solid var(--ac);border-radius:6px;font-size:15px;line-height:1.6;white-space:pre-line"></div><div class="sum" id="sum"></div><p class="mut" id="sumnote" style="margin:6px 0 0"></p>
   <details class="dt"><summary>くわしい内訳</summary><div class="sum sm" id="sum2"></div></details>
   <details class="dt" id="funnelBox" hidden><summary>前回の探索の内訳</summary><div id="funnelCard"></div></details>
   <div class="legend" id="legend" hidden></div>
@@ -224,12 +225,12 @@ function verdict(r){const cc=r['contact_confidence']||'',sp=r['sales_permission'
  if(sp&&sp!='未確認')return {k:'ng',t:'営業お断りの可能性',why:sp+'。人が確かめるまで送りません'};
  if(cc=='公式HP再探索待ち')return {k:'warn',t:'公式のページを探す前',why:'SNSや予約サイトのページだけ見つかりました。送る会社には入れません'};
  if(cc=='自動確認:フォーム')return {k:'ok',t:'フォームあり',why:NOTE_FORM};
- if(cc=='自動確認:メール')return {k:'warn',t:'メールだけ',why:'メールアドレスは見つかりました。このツールはフォームに送ります'};
+ if(cc=='自動確認:メール')return {k:'warn',t:'メールだけ',why:'フォームは見つからず、メールアドレスだけ見つかりました'};
  if(cc=='候補:要目視')return {k:'warn',t:'手で確かめる',why:'問い合わせ先らしいページはありますが、自動では確かめられませんでした'};
  if(cc=='未発見')return {k:'ng',t:'見つからず',why:'問い合わせ先を見つけられませんでした'};
  if(v=='フォームあり')return sup?{k:'warn',t:'開いて確かめる',why:'ホームページを検索で見つけた会社です。'+(r['HPの照合']?'照合の結果は '+r['HPの照合']+'。':'')+'別の会社のページでないか、開いて確かめます'}:{k:'ok',t:'フォームあり',why:NOTE_FORM};
  if(v=='要目視')return {k:'warn',t:'手で確かめる',why:'このツールでは送りません。ホームページにフォームがあれば、自分で文面を貼って送ります'};
- if(v=='メールのみ')return {k:'ng',t:'対象外',why:'メールアドレスだけ見つかりました（このツールはフォームに送ります）'};
+ if(v=='メールのみ')return {k:'warn',t:'メールだけ',why:'フォームは見つからず、メールアドレスだけ見つかりました'};
  if(v=='見つからず')return {k:'ng',t:'対象外',why:'問い合わせ先を見つけられませんでした'};
  if(v=='robots禁止')return {k:'ng',t:'対象外',why:'ホームページ側が、自動で読むことを断っています'};
  if(v=='取得失敗')return {k:'ng',t:'対象外',why:'ホームページを読み込めませんでした（時間を置くと読めることがあります）'};
@@ -237,6 +238,7 @@ function verdict(r){const cc=r['contact_confidence']||'',sp=r['sales_permission'
 let RTAB='all';const MAILSEL=new Set();
 function tabOf(v){if(v.t=='フォームあり')return 'form';if(v.t=='メールだけ')return 'mail';if(v.k=='ng')return 'ng';return 'check'}
 const RTABS=[['all','すべて'],['form','フォームあり'],['check','手で確かめる'],['mail','メールだけ'],['ng','送れない']];
+function resCounts(rows){const c={all:rows.length,form:0,check:0,mail:0,ng:0};rows.forEach(r=>{c[tabOf(verdict(r))]++});return c}
 function summ(rows){const c={ok:0,warn:0,ng:0,auto:0,cand:0,missing:0,official:0};rows.forEach(r=>{const k=verdict(r).k;if(k in c)c[k]++;const cc=r['contact_confidence']||'';if(cc=='自動確認:フォーム'||cc=='自動確認:メール')c.auto++;if(r['contact_candidate']=='True'||r['contact_candidate']===true||['自動確認:フォーム','自動確認:メール','候補:要目視'].includes(cc))c.cand++;if(cc=='未発見')c.missing++;if(cc=='公式HP再探索待ち')c.official++});return c}
 function est(){const n=Math.max(1,parseInt($('#limit').value)||0);const a=Math.max(1,Math.round((n*3+30)/60)),b=Math.max(1,Math.round((n*15+60)/60));$('#est').textContent=`最大${n}社まで調べます。目安は約${a}〜${b}分です（実測の一例: ホテル・旅館10社で約40秒。会社数や通信で変わります）`}
 $('#limit').oninput=est;
@@ -264,13 +266,12 @@ async function loadFunnel(){
 async function loadRes(){const f=$('#files').value;if(!f){$('#res').innerHTML='<tr><td>まだリストがありません</td></tr>';RESROWS=[];$('#sum').innerHTML='';$('#sum2').innerHTML='';banners();return}
  const all=await J('/api/results?file='+encodeURIComponent(f));if(all.error)return;RESROWS=all;const s=summ(all);
  const card=(lb,n,u)=>`<div><span class="lb">${lb}</span><span class="nm"><b>${n}</b>${u}</span></div>`;
- $('#sum').innerHTML=card('全体',all.length,'社')+card(tag('フォームあり','ok'),s.ok,'社')+card(tag('開いて確かめる','warn'),s.warn,'社')+card(tag('送れない','ng'),s.ng,'社');
- $('#sumnote').textContent=$('#onlyOk').checked&&s.ng?'フォームが無い会社は、いまは表示していません。':'';
+ const rc=resCounts(all),scard=(k,lb,n)=>`<button type="button" class="sumc${RTAB==k?' on':''}" data-k="${k}" aria-pressed="${RTAB==k}"><span class="lb">${lb}</span><span class="nm"><b>${n}</b>社</span></button>`;
+ $('#sum').innerHTML=scard('all','全体',rc.all)+scard('form',tag('フォームあり','ok'),rc.form)+scard('mail',tag('メールだけ','warn'),rc.mail)+scard('check',tag('手で確かめる','warn'),rc.check)+scard('ng',tag('送れない','ng'),rc.ng);
+ document.querySelectorAll('.sumc').forEach(b=>b.onclick=()=>{RTAB=b.dataset.k;loadRes()});
+ $('#sumnote').textContent=$('#onlyOk').checked&&RTAB!='ng'&&rc.ng?'フォームもメールも無い会社('+rc.ng+'社)は、いまは表示していません。「送れない」を押すと見られます。':'';
  $('#sum2').innerHTML=card('自動で確かめた',s.auto,'件')+card('候補を含む',s.cand,'件')+card('見つからず',s.missing,'件')+card('公式のページを探す前',s.official,'件');
- const rank={ok:0,warn:1,ng:2,'':3};let rows=all.map(r=>({r,v:verdict(r)}));if($('#onlyOk').checked)rows=rows.filter(x=>x.v.k=='ok'||x.v.k=='warn');rows.sort((a,b)=>rank[a.v.k]-rank[b.v.k]);
- const tc={all:rows.length,form:0,check:0,mail:0,ng:0};rows.forEach(x=>{tc[tabOf(x.v)]++});
- $('#rtabs').innerHTML=RTABS.map(([k,n])=>`<button class="btn sub sm rtab" data-k="${k}" type="button" role="tab" aria-selected="${RTAB==k}"${RTAB==k?' style="border-color:var(--ink);font-weight:700"':''}>${n}（${tc[k]}）</button>`).join('');
- document.querySelectorAll('.rtab').forEach(b=>b.onclick=()=>{RTAB=b.dataset.k;loadRes()});
+ const rank={ok:0,warn:1,ng:2,'':3};let rows=all.map(r=>({r,v:verdict(r)}));if($('#onlyOk').checked&&RTAB!='ng')rows=rows.filter(x=>x.v.k=='ok'||x.v.k=='warn');rows.sort((a,b)=>rank[a.v.k]-rank[b.v.k]);
  if(RTAB!='all')rows=rows.filter(x=>tabOf(x.v)==RTAB);
  $('#mailbar').hidden=RTAB!='mail';
  const wc={};rows.forEach(({v})=>{if(v.why)wc[v.why]=(wc[v.why]||0)+1});const shared=new Map();rows.forEach(({v})=>{if(v.why&&wc[v.why]>1&&!shared.has(v.why))shared.set(v.why,v)});

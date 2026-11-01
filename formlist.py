@@ -682,7 +682,7 @@ def to_row(i, r):
     status = "対象外 営業お断り" if r["refuse"] else "未着手"
     ledger = [i, r["name"], r["industry"], r["area"], size_text(r), "", r["url"], contact, "", "", "", "", "", "", "", "", "", "", "",
               MAIL_TYPE.get(r["industry"], ""), "", status]
-    extra = [r["verdict"], "あり" if r["refuse"] else "", r["refuse_text"], r["email"], r["note"], r["source"], r["osm_ref"], r["checked_at"], r.get("overview", ""), "", r.get("ev_text", ""), r.get("line_url", "")]
+    extra = [r["verdict"], "あり" if r["refuse"] else "", r["refuse_text"], r["email"] or r.get("mail_extra", ""), r["note"], r["source"], r["osm_ref"], r["checked_at"], r.get("overview", ""), "", r.get("ev_text", ""), r.get("line_url", "")]
     extra += [r.get("source_detail", ""), r.get("duplicate_removed", ""), r.get("source_key", ""),
               r.get("contact_confidence", ""), r.get("sales_permission", ""), r.get("resume_state", ""),
               r.get("official_research_state", ""), r.get("official_candidate_url", ""), r.get("registered_url", ""),
