@@ -221,31 +221,44 @@ def fact_sentence(basis):
 THANKS_ONLY = re.compile(r"^(?:お客様|お客さま|皆様)(?:の|に|を)?$")
 
 
-def proposal_phrase(template, kind_terms):
-    """送る文面(template)に実際にある提案の具体語から、相手の特徴に合うものを1つ選び、提案の句にする。無ければ (None, "")"""
+def proposal_phrases(template, kind_terms):
+    """送る文面(template)に実際にある提案の具体語を、相手の特徴に合う順に並べた [(語, 提案の句)]。同じ句は1つ。無ければ []"""
     text = template or ""
-    for term in kind_terms + PROPOSAL_TERMS:
+    base = "本物のお花を使った" if ("本物のお花" in text or "本物の花" in text) else ""
+    out, seen, spans = [], set(), []
+    for term in tuple(kind_terms) + PROPOSAL_TERMS:
         m = re.search(r"(?:[一-龥ぁ-んァ-ヶー]{1,4}の)?" + re.escape(term) + ("会?" if term == "体験" else ""), text)
-        if m:
-            base = "本物のお花を使った" if ("本物のお花" in text or "本物の花" in text) else ""
-            return term, f"{base}{m.group(0)}"
-    return None, ""
+        if not m or (base + m.group(0)) in seen:
+            continue
+        pos = text.find(term, m.start())  # 語そのものの位置。別の語の一部(制作体験の「体験」)なら、同じ提案の言い換えなので候補にしない
+        if any(a <= pos < b for a, b in spans):
+            continue
+        spans.append((m.start(), m.end()))
+        seen.add(base + m.group(0))
+        out.append((term, base + m.group(0)))
+    return out
 
 
-def opener_from_basis(basis, template=""):
-    """根拠文(' / ' 区切り)と、その会社に送る文面(template)から、2文の書き出しを作る。作れなければ ""。
-    第1文: 相手の特徴の言い切り(fact_sentence)。第2文: 特徴の種類に合う接続 + 文面にある提案の具体語 + 「を取り入れる企画をご提案できます。」"""
+def opener_variants(basis, template=""):
+    """根拠文と、その会社に送る文面から作れる2文の書き出しを、候補の順に出す(第2文の提案語を変えた候補が続く)。作れなければ何も出さない。
+    第1文: 相手の特徴の言い切り(fact_sentence)。第2文: 特徴の種類に合う接続 + 文面にある提案の具体語 + 「を取り入れる企画をご提案できます。」
+    同じ書き出しが他の会社に既にあるとき、呼び出し側が次の候補を使う(2文とも同一の行を作らないため)"""
     first = fact_sentence(basis)
     if not first:
-        return ""
+        return
     for ctx in (first, basis or ""):  # まず第1文の特徴から接続を決め、当たらなければ根拠文全体から
         for _kind, rx, connect, terms in CONNECT:
             if rx.search(ctx):
-                term, phrase = proposal_phrase(template, terms)
-                if not term:
-                    return ""
-                out = f"{first}{connect}{phrase}を取り入れる企画をご提案できます。"
-                if BANNED.search(out) or QUOTE_MARKS.search(out):
-                    return ""
-                return out
+                for _term, phrase in proposal_phrases(template, terms):
+                    out = f"{first}{connect}{phrase}を取り入れる企画をご提案できます。"
+                    if not (BANNED.search(out) or QUOTE_MARKS.search(out)):
+                        yield out
+                return
+
+
+def opener_from_basis(basis, template="", taken=()):
+    """opener_variants の最初の候補。taken(他の会社の書き出し)にあるものは飛ばす。使える候補が無ければ空文字"""
+    for out in opener_variants(basis, template):
+        if out not in taken:
+            return out
     return ""

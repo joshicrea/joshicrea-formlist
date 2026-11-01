@@ -58,7 +58,7 @@ OPENER_SOURCES = {"philosophy": "ホームページの特徴と文面の提案�
 _SOURCE_OF = {v: k for k, v in OPENER_SOURCES.items()}
 
 
-def opener_draft_for(overview="", industry="", basis="", template=None):
+def opener_draft_for(overview="", industry="", basis="", template=None, taken=()):
     """(下書き, 作り方)。ホームページの本文から拾った方針・思いの文(basis)の引用だけで作る(philosophy.opener_from_basis)。
     拾えなかった会社は ("", "")。題だけ・会社名と業種だけの下書きは作らない(2026-11-02 運用者の指示「ぜんぜんだめ」)。overview・industry は旧版との呼び出し互換のため受けるだけ"""
     if template is None:  # この会社に実際に送る文面(業種で選ばれる文面)の提案を、第2文に使う
@@ -67,7 +67,7 @@ def opener_draft_for(overview="", industry="", basis="", template=None):
             template = autosend.pick_message_source(str(MSG), industry)[1] if MSG.exists() else ""
         except OSError:
             template = ""
-    d = philosophy.opener_from_basis(basis, template)
+    d = philosophy.opener_from_basis(basis, template, taken)  # taken=他の会社の書き出し。2文とも同じ行を作らない
     return (d, "philosophy") if d else ("", "")
 
 
@@ -665,7 +665,7 @@ def fill_drafts(p, supp, store=None):
         n = 0
         for r in rows:
             if (r.get("企業名", ""), r.get("問い合わせフォームURL 無ければメール", "")) in want and not (r.get("書き出し") or "").strip() and needs(r.get("業種", "")):
-                d, src = opener_draft_for(basis=r.get(BASIS_COL, ""))
+                d, src = opener_draft_for(industry=r.get("業種", ""), basis=r.get(BASIS_COL, ""), taken={(x.get("書き出し") or "").strip() for x in rows})
                 if not d:
                     continue  # 根拠が拾えなかった会社は、題や業種で埋めずに空のまま(理由は画面が言う)
                 r["書き出し"], r[OPENER_COL] = d, OPENER_SOURCES[src]
@@ -1042,7 +1042,7 @@ class H(BaseHTTPRequestHandler):
                     r = next((x for x in rows if (x["企業名"], x.get("問い合わせフォームURL 無ければメール", "")) in sendable), None)
                 if r is not None:
                     name, url = r["企業名"], r.get("問い合わせフォームURL 無ければメール", "")
-                    opener = (r.get("書き出し") or "").strip() or opener_draft_for(basis=r.get(BASIS_COL, ""))[0]
+                    opener = (r.get("書き出し") or "").strip() or opener_draft_for(industry=r.get("業種", ""), basis=r.get(BASIS_COL, ""))[0]
                     label = f"実際に送る会社の1社目({name})で作りました"
                 else:
                     label = "見本の会社(株式会社サンプル)。送る会社が無いので、この名前で作りました"
@@ -1168,12 +1168,12 @@ class H(BaseHTTPRequestHandler):
             companies = [{"name": r.get("企業名", ""), "industry": r.get("業種", ""), "hp": r.get("HP URL", ""), "form": r.get("問い合わせフォームURL 無ければメール", ""),
                           "overview": r.get("HP概要", ""), "opener": (r.get("書き出し") or "").strip(), "opener_source": opener_source(r),
                           "basis": r.get(BASIS_COL, ""), "basis_url": r.get(BASIS_URL_COL, ""), "why": opener_why(r),
-                          "draft": opener_draft_for(basis=r.get(BASIS_COL, ""))[0]}
+                          "draft": opener_draft_for(industry=r.get("業種", ""), basis=r.get(BASIS_COL, ""))[0]}
                          for r in rows if (r.get("企業名", ""), r.get("問い合わせフォームURL 無ければメール", "")) in want]
             if parse_qs(u.query).get("only_form", [""])[0] == "1":  # 画面用: 送る対象になりうる(フォーム検出・お断りなし)会社だけ
                 rows = [r for r in rows if r.get("フォーム判定") == "フォームあり" and r.get("営業お断りの表示") != "あり"]
             return self.send(200, {"total": total, "companies": companies,
-                                   "missing": [{"name": r.get("企業名", ""), "industry": r.get("業種", ""), "hp": r.get("HP URL", ""), "draft": opener_draft_for(basis=r.get(BASIS_COL, ""))[0], "why": opener_why(r)} for r in rows if not (r.get("書き出し") or "").strip()][:200]})
+                                   "missing": [{"name": r.get("企業名", ""), "industry": r.get("業種", ""), "hp": r.get("HP URL", ""), "draft": opener_draft_for(industry=r.get("業種", ""), basis=r.get(BASIS_COL, ""))[0], "why": opener_why(r)} for r in rows if not (r.get("書き出し") or "").strip()][:200]})
         if u.path == "/api/targets":
             return self.targets(q, ng_store)
         if u.path == "/api/log":
