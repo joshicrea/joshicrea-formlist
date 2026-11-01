@@ -26,6 +26,7 @@ import time
 import filelock
 import ng_list
 import approval
+import channel_choice
 import message_adoption
 import license_check
 import proposal_links
@@ -197,7 +198,8 @@ def preview_names(lines):
     return out
 
 
-def set_preview(key, parts=None):
+def set_preview(key, parts=None, channel="form"):
+    PREVIEW["channel"] = channel
     PREVIEW["key"] = key
     PREVIEW["names"] = preview_names(JOB["lines"])
     PREVIEW["parts"] = dict(parts or {})
@@ -1134,7 +1136,9 @@ class H(BaseHTTPRequestHandler):
             p = safe_out(q.get("file", ""))
             ng = None if ng_store is not None else ng_list.load()
             rows = [r for r in read_csv(p) if not (r.get("営業お断りの表示") == "あり" or (ng_row_hidden(r, ng_store) if ng is None else ng_list.is_ng_row(r, ng)))] if p else []
-            return self.send(200, rows)
+            return self.send(200, mail_annotate(rows))
+        if u.path in MAIL_GET:
+            return mail_get(self, u, ng_store)
         if u.path == "/api/ngscreen":
             return self.send(200, ng_screen(ng_store))
         if u.path == "/api/portals":
@@ -1210,7 +1214,7 @@ class H(BaseHTTPRequestHandler):
             if JOB["name"] == "確認":  # E-18
                 return self.send(409, {"error": "送る内容を出している間は変えられません。数秒で終わります"})
             return self.send(409, {"error": "いま送っている最中は、送信元・文面・送らない会社・書き出しを変えられません。送り終わってから変えます"})
-        if self.path in ("/api/search", "/api/send", "/api/approve", "/api/manual"):  # 実行系(探す・送る)。利用許可が無いときは止める。できたリストの閲覧・書き出しは止めない
+        if self.path in ("/api/search", "/api/send", "/api/approve", "/api/manual", "/api/mail/preview", "/api/mail/send"):  # 実行系(探す・送る)。利用許可が無いときは止める。できたリストの閲覧・書き出しは止めない
             allowed, why = license_check.gate(VERSION)
             if not allowed:
                 return self.send(403, {"error": why, "license": "denied"})
@@ -1415,10 +1419,14 @@ class H(BaseHTTPRequestHandler):
             # 承認は画面のボタンではなく、OSの確認ダイアログ(HTTPでは押せない)で人に聞く。人が必ず読む1回に、判断に要る情報を集める(D-4)
             sender = read_sender() or {}
             shown = "\n".join("・" + n for n in names[:10]) + (f"\n ほか {len(names) - 10} 社" if len(names) > 10 else "")
-            body = ("次の %d 社の問い合わせフォームに、画面に表示した文面を送ります。\n%s\n\n送信元: %s %s\n送信元のメール: %s\n"
+            what_ = "メールアドレス" if PREVIEW.get("channel") == "mail" else "問い合わせフォーム"
+            body = ("次の %d 社の%sに、画面に表示した文面を送ります。\n%s\n\n送信元: %s %s\n送信元のメール: %s\n"
                     "送らない会社: %d 社(理由は画面に出ています)\n入力がうまくいかなかったフォームは送信ボタンを押さず、「自分で送る会社」に回します(数は送り終えたあとに出ます)\n"
                     "確認番号: %s\n\n画面で届く文を読んでいない場合は「いいえ」を押してください。\n「はい」で承認します。承認は1回の送信で使い切ります。"
-                    % (len(names), shown, sender.get("会社名", ""), sender.get("氏名", ""), sender.get("メール", ""), skipped_n, short_key(key_now[-1])))
+                    % (len(names), what_, shown, sender.get("会社名", ""), sender.get("氏名", ""), sender.get("メール", ""), skipped_n, short_key(key_now[-1])))
+            if PREVIEW.get("channel") == "mail":
+                body = re.sub(r"送信元のメール: [^\n]*\n", lambda _m: "実際の送信元(SMTP): " + str(PREVIEW.get("from") or "") + "\n", body)
+                body = re.sub(r"入力がうまくいかなかったフォームは[^\n]*\n", "", body)
             if not approval.ask_human("AIまるなげ営業 本番送信の承認", body):
                 APPROVED["key"] = None
                 return self.send(200, {"ok": False, "declined": True, "message": "送りませんでした(確認で「いいえ」を押したため)"})  # E-16
@@ -1528,7 +1536,253 @@ class H(BaseHTTPRequestHandler):
             return self.render_sample(d)
         if self.path == "/api/send":
             return self.send_api(d, mx, ng_store)
+        if self.path in MAIL_POST:
+            return mail_post(self, d, mx, ng_store)
         self.send(404, {"error": "なし"})
+
+
+# ---- メール送信の道(送り方の選択・設定画面・1社ずつ/選んだ会社の確認と送信)。メール送信の部品(mail_channel)が無い版では、どれも使えない ----
+MAIL_GET = ("/api/mail/status", "/api/mail/plan")
+MAIL_POST = ("/api/choice", "/api/choice/rule", "/api/mail/settings", "/api/mail/test", "/api/mail/preview", "/api/mail/send")
+
+
+def _mail_channel():
+    """メール送信の部品。公開版には入れていないので importlib で読む(無いときは _mail_available() が先に止める)"""
+    import autosend
+    return autosend._mail_channel()
+
+
+def _mail_available():
+    import autosend
+    return autosend._mail_available()
+
+
+def _mail_raw_settings():
+    """smtp.json を、足りなくても壊れていても読む(画面に「何が足りないか」を出すため)。無ければ {}"""
+    mail_channel = _mail_channel()
+    try:
+        d = json.loads(mail_channel.SMTP_FILE.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def mail_status():
+    """メール送信の部品があるか・設定が揃っているか・二重送信を避ける規則が有効か。パスワードの値は返さない(入っているかだけ)"""
+    out = {"available": _mail_available(), "rule": channel_choice.rule_enabled()}
+    if not out["available"]:
+        return out
+    mail_channel = _mail_channel()
+    raw = _mail_raw_settings()
+    shown = {"host": str(raw.get("host") or ""), "port": raw.get("port") or 465, "security": str(raw.get("security") or "ssl"),
+             "user": str(raw.get("user") or ""), "from_addr": str(raw.get("from_addr") or ""), "from_name": str(raw.get("from_name") or ""),
+             "has_password": bool(str(raw.get("password") or "").strip())}
+    try:
+        mail_channel.load_settings()
+        return dict(out, configured=True, missing=[], problem="", **shown)
+    except mail_channel.MailError as e:
+        names = {"host": "サーバー", "user": "ユーザー名", "password": "パスワード"}
+        missing = [names[k] for k in ("host", "user", "password") if not str(raw.get(k) or "").strip()]
+        return dict(out, configured=False, missing=missing, problem=str(e), **shown)
+
+
+def mail_annotate(rows):
+    """結果の各行に、メールで送れるアドレス(_mail)・会社の鍵(_key)・選んだ送り方(_choice)を足す。メール送信の部品が無い版では何も足さない"""
+    import autosend
+    if not autosend._mail_available():
+        return rows
+    out = []
+    for r in rows:
+        r = dict(r)
+        r["_mail"] = autosend._mail_of(r) if autosend._mail_addr_ok(r) else ""
+        r["_key"] = autosend._choice_key(r)
+        r["_choice"] = channel_choice.get(r["_key"])
+        out.append(r)
+    return out
+
+
+def _mail_only(values):
+    """画面が送ってきた会社名の並び。空の項目は捨てる。無ければ None(対象の全社)"""
+    return [str(x).strip() for x in (values or []) if str(x).strip()] or None
+
+
+def _mail_plan(p, supp, mx, ng_store, only, ignore_choice=False):
+    import autosend
+    return autosend.build_mail_plan(str(p), supp, ng_store, mx, str(MSG), read_sender() or {}, only=set(only) if only else None, ignore_choice=ignore_choice)
+
+
+def mail_get(handler, u, ng_store):
+    if u.path == "/api/mail/status":
+        return handler.send(200, mail_status())
+    if not _mail_available():
+        return handler.send(404, {"error": "この版にはメール送信の部品が入っていません"})
+    q = parse_qs(u.query)
+    one = lambda k, d="": (q.get(k) or [d])[0]  # noqa: E731
+    p, err = list_or_error(one("file"))
+    if err:
+        return handler.send(*err)
+    try:
+        mx = count(one("max") or None, None, 1, None)
+    except ValueError:
+        return handler.send(400, count_error())
+    supp = one("supp") == "1"
+    only = _mail_only(q.get("only"))
+    try:
+        probs = gate_problems(read_sender(), templates_for(p))
+        if probs:
+            return handler.send(400, problem_error(probs))
+        draft = one("draft") == "1"  # 件名と本文を見るだけ(送り方を選ぶ前でも、会社を指定すれば作れる)
+        pl = _mail_plan(p, supp, mx, ng_store, only, ignore_choice=draft)
+    except PermissionError:
+        return handler.send(409, excel_error(p))
+    except Exception:
+        return handler.send(400, support_error("mail_plan"))
+    key = (str(p), p.stat().st_mtime_ns, mx, supp, fingerprint(), pl["digest"])
+    valid = (not draft) and PREVIEW["key"] is not None and pl["digest"] and PREVIEW["key"] == key
+    items = [{"name": r[0], "addr": r[1], "industry": r[2], "subject": s, "text": b} for r, s, b in zip(pl["todo"], pl["subjects"], pl["bodies"])]
+    who = pl["identity"]
+    return handler.send(200, {"sendable": items, "skipped": pl["skipped"], "settings_error": pl["settings_error"],
+                              "identity": {k: who[k] for k in ("from_addr", "from_name", "host", "port", "security")} if who else None,
+                              "key_short": short_key(pl["digest"]) if valid else None, "key": pl["digest"] if valid else None,
+                              "window": send_rules.window_refusal()})
+
+
+def _mail_save_settings(d):
+    mail_channel = _mail_channel()
+    old = _mail_raw_settings()
+    new = {"host": str(d.get("host") or "").strip()[:200], "port": d.get("port") or 465, "security": str(d.get("security") or "ssl").strip(),
+           "user": str(d.get("user") or "").strip()[:200], "password": str(d.get("password") or "") or str(old.get("password") or ""),
+           "from_addr": str(d.get("from_addr") or "").strip()[:200], "from_name": str(d.get("from_name") or "").strip()[:200]}
+    tmp = mail_channel.SMTP_FILE.with_name(mail_channel.SMTP_FILE.name + ".tmp")
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # 作る時点から持ち主だけの権限(Windows では効かないことがある。ベストエフォート)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(json.dumps(new, ensure_ascii=False, indent=1))
+    try:
+        mail_channel.load_settings(tmp)  # 形の検査(足りない欄は欄の名前つきで MailError)
+    except mail_channel.MailError:
+        tmp.unlink(missing_ok=True)
+        raise
+    os.replace(tmp, mail_channel.SMTP_FILE)
+
+
+def mail_post(handler, d, mx, ng_store):
+    path = handler.path
+    if path in ("/api/choice", "/api/choice/rule"):
+        if not _mail_available():
+            return handler.send(404, {"error": "この版にはメール送信の部品が入っていません"})
+        if JOB["running"] and JOB["name"] == "本番送信":
+            return handler.send(409, {"error": "いま送っている最中は、送り方の選択を変えられません。送り終わってから変えます"})
+        if path == "/api/choice/rule":
+            if not isinstance(d.get("enabled"), bool):
+                return handler.send(400, {"error": "有効か無効か(enabled: true/false)を入れてください"})
+            channel_choice.set_rule(d["enabled"])
+            return handler.send(200, {"ok": True, "rule": channel_choice.rule_enabled()})
+        name, hp = str(d.get("name") or "").strip(), str(d.get("hp") or "").strip()
+        if not name:
+            return handler.send(400, {"error": "会社名を入れてください"})
+        try:
+            channel_choice.set_choice(channel_choice.company_key(name, hp), str(d.get("channel") or ""), name)
+        except ValueError:
+            return handler.send(400, {"error": "送り方は「フォーム」か「メール」のどちらかです"})
+        return handler.send(200, {"ok": True})
+    if not _mail_available():
+        return handler.send(404, {"error": "この版にはメール送信の部品が入っていません"})
+    import autosend
+    mail_channel = _mail_channel()
+    if path == "/api/mail/settings":
+        if JOB["running"] and JOB["name"] == "本番送信":
+            return handler.send(409, {"error": "いま送っている最中は、メール送信の設定を変えられません。送り終わってから変えます"})
+        try:
+            _mail_save_settings(d)
+        except mail_channel.MailError as e:
+            return handler.send(400, {"error": str(e), "field": "mail_settings"})
+        return handler.send(200, dict(mail_status(), ok=True))
+    if path == "/api/mail/test":
+        try:
+            settings = mail_channel.load_settings()
+        except mail_channel.MailError as e:
+            return handler.send(400, {"error": str(e), "field": "mail_settings"})
+        ok, memo = mail_channel.check_login(settings)
+        return handler.send(200, {"ok": ok, "message": "接続と認証ができました(メールは送っていません)" if ok else memo})
+    # 以降は確認(preview)と本番(send)。フォームの send_api と同じ止め方・同じ承認の印(PREVIEW/APPROVED)を使う
+    real = path == "/api/mail/send"
+    p, err = list_or_error(d.get("file", ""))
+    if err:
+        return handler.send(*err)
+    only = _mail_only(d.get("only"))
+    if d.get("only") is not None and only is None:
+        return handler.send(400, {"error": "送る会社を選んでください"})
+    try:
+        probs = gate_problems(read_sender(), templates_for(p))
+    except PermissionError:
+        return handler.send(409, excel_error(p))
+    if probs:
+        return handler.send(400, problem_error(probs))
+    st = mail_status()
+    if not st.get("configured"):
+        return handler.send(400, {"error": "メール送信の設定が揃っていません(足りないところ: " + "・".join(st.get("missing") or ["形"]) + ")。「メール送信の設定」で入れてから送ります",
+                                  "field": "mail_settings", "fix": "mail_settings", "missing": st.get("missing") or []})
+    busy = busy_error()
+    if busy:
+        return handler.send(409, busy)
+    supp = bool(d.get("supp"))
+    args = ["autosend.py", str(p), "--channel", "mail", "--sender", str(SENDER), "--message", str(MSG)]
+    if mx is not None:
+        args += ["--max", str(mx)]
+    if ng_store is not None:
+        args += ["--ng-state-db", str(ng_store.db_path)]
+    if supp:
+        args.append("--include-supplemented")
+    for n in only or []:
+        args += ["--only-company", n]
+    sync_ng_txt(ng_store)
+    if real and (ng_store is None or NG_MIGRATION["error"] or (_NG_SYNC and ng_store.migration_status() != "canonical")):
+        return handler.send(409, {"error": "送らない会社の一覧を読み込めなかったので、本番は送れません。ツールを終了して起動し直します"})
+    try:
+        pl = _mail_plan(p, supp, mx, ng_store, only)
+        key = (str(p), p.stat().st_mtime_ns, mx, supp, fingerprint(), pl["digest"])
+        parts = key_parts(p, mx, supp)
+    except PermissionError:
+        return handler.send(409, excel_error(p))
+    except Exception:
+        return handler.send(400, support_error("mail_send"))
+    if not real:
+        if key[-1] is None:
+            why = "・".join(dict.fromkeys(s["text"] for s in pl["skipped"][:3])) or "メールで送る会社が選ばれていません(フォームとメールの両方がある会社は、送り方を選ぶと送れます)"
+            return handler.send(409, {"error": "メールで送れる会社がありません。" + why, "code": "nothing_to_send"})
+        skipped_n = len(pl["skipped"])
+
+        who_ = pl["identity"] or {}
+        from_text = f"{who_.get('from_name') or ''} <{who_.get('from_addr')}> ({who_.get('host')}:{who_.get('port')})"
+
+        def ok(k=key, pt=parts, n=skipped_n, ft=from_text):
+            if f"確認番号: {k[-1]}" in JOB["lines"]:
+                set_preview(k, pt, "mail")
+                PREVIEW["skipped"] = n
+                PREVIEW["from"] = ft
+        started = run_job("確認", args + ["--preview"], on_ok=ok)
+        return handler.send(200, {"started": True} if started else busy_error() or {"started": False})
+    if d.get("confirm") != "送信":
+        return handler.send(400, {"error": "「届く文を読みました」にチェックを入れてから送ります"})
+    if PREVIEW["key"] is None:
+        return handler.send(400, {"error": "まだ「送る内容を出す」を押していません。先に押して、届く文を読みます"})
+    if PREVIEW["key"] != key:
+        return handler.send(400, {"error": changed_text(parts)})
+    if APPROVED["key"] != key:
+        return handler.send(400, {"error": "人の承認がありません。画面で届く文を読み、送るボタンを押して、画面の外に出る確認で「はい」を押します"})
+    total = len(PREVIEW.get("names") or [])
+    PREVIEW.update(key=None, names=[], parts={})
+    APPROVED["key"] = None
+    args += ["--send", "--expect", key[-1]]
+    token = approval.issue_ticket(key[-1])
+    SEND_INFO.update(total=total, started=time.strftime("%Y-%m-%d %H:%M"), dismissed=False)
+    started = run_job("本番送信", args, "送信\n", extra_env={approval.TICKET_ENV: token, approval.PORT_ENV: str(PORT), approval.UI_TOKEN_ENV: TOKEN})
+    if not started:
+        approval.revoke_ticket()
+        SEND_INFO["dismissed"] = True
+        return handler.send(409, busy_error() or {"error": "いまほかの処理が動いています。終わってから押します", "started": False})
+    return handler.send(200, {"started": True})
 
 
 PAGE = (HERE / "ui.html").read_text(encoding="utf-8")  # 画面。デザインの変更はこのファイルだけで済む

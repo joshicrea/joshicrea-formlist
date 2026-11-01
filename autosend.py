@@ -32,6 +32,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
+import channel_choice
 import message_adoption
 import placeholders
 import proposal_links
@@ -418,6 +419,14 @@ def _target_skip_reason(row, include_supplemented=False, gate=None, done=None):
         return "フォームURLがhttp(s)ではない"
     if done is not None and key in done:
         return "送信済みまたは同一回の重複フォームURL"
+    if _mail_available() and _mail_addr_ok(row):  # フォームとメールの両方がある会社
+        ck = _choice_key(row)
+        if "form" not in channel_choice.allowed_channels(True, True, ck):
+            return "フォームとメールの両方があります。メールで送る方を選んでいます" if channel_choice.get(ck) == "mail" else "フォームとメールの両方があります。どちらで送るかを選ぶと送れます"
+    if _mail_available() and channel_choice.rule_enabled() and done is not None:  # メールで送った記録(アドレス・会社名・メールのドメイン=この会社のHP)があれば、フォームへは送らない
+        hp = _hp_root(row)
+        if ("mail:" + ng_list.norm_email(_mail_of(row)) in done and _mail_of(row)) or "mailname:" + (row.get("企業名") or "").strip() in done or (hp and "maildom:" + hp in done):
+            return "この会社には、メールで送った記録があります(同じ会社へ二重に送らない規則)"
     return ""
 
 
@@ -434,6 +443,25 @@ def _mail_of(row):
             return ""
     m = unicodedata.normalize("NFKC", m).strip()
     return m[len("mailto:"):].strip() if m.lower().startswith("mailto:") else m
+
+
+def _mail_available():
+    """メール送信の部品がこの版にあるか(公開版には、実送信の前提が揃うまで入れていない)。無いときは、フォームの会社にメールの選択を求めない"""
+    import importlib.util
+    return importlib.util.find_spec("mail_channel") is not None
+
+
+def _mail_addr_ok(row):
+    """メールで送れる形のアドレスがHPに載っているか(形・採用や個人情報の窓口ではない・フリーメール以外はHPと同じドメイン)"""
+    mail = _mail_of(row)
+    if not mail or not site_checker.EMAIL.fullmatch(mail) or site_checker.BAD_MAIL.search(mail):
+        return False
+    hp_root = _hp_root(row)
+    return not (hp_root and not _FREE_MAIL.search(mail) and hp_root != _mail_root(mail))
+
+
+def _choice_key(row):
+    return channel_choice.company_key(row.get("企業名", ""), row.get("HP URL", ""))
 
 
 def row_channel(row):
@@ -462,12 +490,21 @@ def _mail_is_ng(row, mail, gate):
     return ng_list.is_ng_row(row) or ng_list.is_ng_email(mail) or ng_list.is_ng("https://" + mail.rsplit("@", 1)[-1] + "/")
 
 
-def mail_skip_reason(row, include_supplemented=False, gate=None, done=None):
+def mail_skip_reason(row, include_supplemented=False, gate=None, done=None, ignore_choice=False):
     """メール対象にならない理由。空なら対象。条件は、HPの照合が電話一致か住所一致・営業お断りの表示なし・NGリスト外(HPとアドレスの両方)・
     採用や個人情報の窓口ではない・HPに公開された自社のアドレス(フリーメール以外はHPと同じドメイン)・同じ会社に重複して送らない。
     done には、送ったアドレス(正規化)と、送った/送る会社の目印 "site:<HPの登録ドメイン>" を入れる"""
     if row_channel(row) != "メール":
-        return "メールのみではない"
+        verdict = (row.get(formlist.EXTRA_COLS[0]) or "").strip()
+        if row_channel(row) == "フォーム" and _mail_addr_ok(row):  # フォームとメールの両方がある会社は、メールを選んだときだけ
+            ck = _choice_key(row)
+            if not ignore_choice and "mail" not in channel_choice.allowed_channels(True, True, ck):
+                return "フォームとメールの両方があります。フォームで送る方を選んでいます" if channel_choice.get(ck) == "form" else "フォームとメールの両方があります。どちらで送るかを選ぶと送れます"
+        elif verdict == "要目視" and _mail_addr_ok(row):  # フォームは一般の問い合わせ用ではない会社は、メールへ移したときだけ
+            if not ignore_choice and channel_choice.get(_choice_key(row)) != "mail":
+                return "フォームは一般の問い合わせ用ではありません。「メールで送る」へ移すと送れます"
+        else:
+            return "メールのみではない"
     mail = _mail_of(row)
     if not site_checker.EMAIL.fullmatch(mail):
         return "メールアドレスの形が不正"
@@ -491,7 +528,7 @@ def mail_skip_reason(row, include_supplemented=False, gate=None, done=None):
     if done is not None:
         if ng_list.norm_email(mail) in done:
             return "送信済みまたは同一回の重複アドレス"
-        if hp_root and "site:" + hp_root in done:
+        if hp_root and "co:" + _choice_key(row) in done:
             return "同じ会社(HP)に、フォームかメールで送る・送った行がある"
     return ""
 
@@ -537,7 +574,7 @@ def optout_destination_missing(text, sender):
     return True
 
 
-def _mail_scan(csv_path, include_supplemented=False, gate=None):
+def _mail_scan(csv_path, include_supplemented=False, gate=None, ignore_choice=False):
     """メールのみの行を1回だけ走査し、(対象, 対象外) を返す(対象と内訳を別々に数えない)。
     同じ会社へフォームとメールの両方が行かないよう、フォームで送る行・送信済みの行のHPを先に目印として入れる"""
     with open(csv_path, encoding="utf-8-sig", newline="") as f:
@@ -545,22 +582,25 @@ def _mail_scan(csv_path, include_supplemented=False, gate=None):
     form_done = _done_keys(gate)
     done = _sent_mail_addrs()  # すでにメールを送った(押した)アドレス。次の回で同じ宛先へ送り直さない
     for r in rows:
-        if row_channel(r) == "フォーム":
+        if ignore_choice:
+            break  # 文面を見るだけ(選択を見ない)なら、フォームで送る会社の目印は要らない
+        if row_channel(r) == "フォーム" and not (_mail_available() and not channel_choice.rule_enabled() and _mail_addr_ok(r)):
             key = (state.keys_of([r.get(formlist.LEDGER_COLS[7], "")]) or [""])[0]
             if (key in form_done or not _target_skip_reason(r, include_supplemented=include_supplemented, gate=gate, done=set())) and _hp_root(r):
-                done.add("site:" + _hp_root(r))
+                done.add("co:" + _choice_key(r))
     targets_, skips = [], []
     for r in rows:
-        if (r.get(formlist.EXTRA_COLS[0]) or "").strip() != "メールのみ":
-            continue
+        verdict = (r.get(formlist.EXTRA_COLS[0]) or "").strip()
+        if verdict != "メールのみ" and not (verdict in ("フォームあり", "要目視") and _mail_available() and _mail_addr_ok(r)):
+            continue  # メールのみの会社と、フォームもメールもある会社(選んだときだけ送る)
         mail = _mail_of(r)
-        reason = mail_skip_reason(r, include_supplemented=include_supplemented, gate=gate, done=done)
+        reason = mail_skip_reason(r, include_supplemented=include_supplemented, gate=gate, done=done, ignore_choice=ignore_choice)
         if reason:
             skips.append((r.get("企業名", ""), mail, reason))
             continue
         done.add(ng_list.norm_email(mail))
         if _hp_root(r):
-            done.add("site:" + _hp_root(r))
+            done.add("co:" + _choice_key(r))
         targets_.append((r.get("企業名", ""), mail, r.get("業種", ""), r.get("書き出し", ""), r.get("HP URL", "")))
     return targets_, skips
 
@@ -570,16 +610,32 @@ def mail_target_skip_reasons(csv_path, include_supplemented=False, gate=None):
     return _mail_scan(csv_path, include_supplemented, gate)[1]
 
 
-def mail_targets(csv_path, include_supplemented=False, gate=None):
-    """メール対象の (企業名, アドレス, 業種, 書き出し, HP URL)。リストの順。第2段のメール送信が使う(第1段では数えるだけで送らない)"""
-    return _mail_scan(csv_path, include_supplemented, gate)[0]
+def mail_targets(csv_path, include_supplemented=False, gate=None, only=None, ignore_choice=False):
+    """メール対象の (企業名, アドレス, 業種, 書き出し, HP URL)。リストの順。only は会社の鍵(channel_choice.company_key)の集合(画面で選んだ会社だけに絞る。会社名では絞らない)。ignore_choice は文面を見るだけのとき(送り方の選択を見ない)"""
+    found = _mail_scan(csv_path, include_supplemented, gate, ignore_choice)[0]
+    return [t for t in found if channel_choice.company_key(t[0], t[4]) in only] if only else found
+
+
+def _sent_mail_marks():
+    """メールで送った(押した)会社の目印: アドレス・会社名・メールのドメイン(フリーメール以外)。フォーム側が、別の行・作り直したリストでも同じ会社を外すため"""
+    addrs = _sent_mail_addrs()
+    marks = {"mail:" + a for a in addrs}
+    marks |= {"maildom:" + _mail_root(a) for a in addrs if not _FREE_MAIL.search(a)}
+    if addrs and LOG.exists():
+        with open(LOG, encoding="utf-8-sig", newline="") as f:
+            for r in csv.DictReader(f):
+                u = r.get("フォームURL") or ""
+                if u.startswith(MAILTO) and ng_list.norm_email(u[len(MAILTO):]) in addrs:
+                    marks.add("mailname:" + (r.get("企業名") or "").strip())
+    return marks
 
 
 def _done_keys(gate):
     """送らないフォームの鍵。画面版(gate)でも、コマンド版が送信ログに残した結果(送信済み・不明・入力エラー)を含める"""
+    mails = _sent_mail_marks()  # メールで送った会社。フォームでは二重に送らない(規則が有効なとき)
     if gate is not None:
-        return _gate_blocked_keys(gate) | sent_urls(results_only=True) | state.blocked_keys()
-    return sent_urls() | state.blocked_keys()
+        return _gate_blocked_keys(gate) | sent_urls(results_only=True) | state.blocked_keys() | mails
+    return sent_urls() | state.blocked_keys() | mails
 
 
 def target_skip_reasons(csv_path, include_supplemented=False, gate=None):
@@ -1304,11 +1360,11 @@ def check_adopted_message(csv_path, sender_path, message_path, company_name):
         return 4
 
 
-def build_mail_plan(csv_path, include_supplemented, gate, max_count, message_path, sender):
+def build_mail_plan(csv_path, include_supplemented, gate, max_count, message_path, sender, only=None, ignore_choice=False):
     """メール対象(フォーム無し・公開アドレスあり)の送る計画。文面は業種別を土台に会社ごとに生成し、件名は本文1行目の「件名:」、
     無ければ業種別・送信元設定の件名。仮の文字が残る・件名が空・連絡先が無い会社は、理由つきで外す(止めずに次へ)"""
     mail_channel = _mail_channel()
-    targets_ = mail_targets(csv_path, include_supplemented, gate)
+    targets_ = mail_targets(csv_path, include_supplemented, gate, only=only, ignore_choice=ignore_choice)
     if max_count is not None:
         targets_ = targets_[:max_count]
     todo, bodies, rejected = prepare_message_plan(targets_, message_path, sender)
@@ -1364,7 +1420,8 @@ def run_mail(a, sender, gate):
     """--channel mail。確認(--preview か付けない)は送らず全文と確認番号を出す。本番(--send)はフォームと同じ承認の鍵が要る。
     会社ごとに、時刻・同じ会社の間隔・NGをもう一度見て、1通ずつ個別に送る。1社の失敗は飛ばして理由を記録し、SMTPの設定の失敗は全体を止める"""
     mail_channel = _mail_channel()
-    plan = build_mail_plan(a.csv, a.include_supplemented, gate, a.max, a.message, sender)
+    only = set(getattr(a, "only_company", None) or []) or None  # 画面で選んだ会社だけ(無ければ対象の全社)
+    plan = build_mail_plan(a.csv, a.include_supplemented, gate, a.max, a.message, sender, only=only)
     for s in plan["skipped"]:
         print(f"送らない会社: {s['name']} <{s['url']}>  {s['text']}")
     todo, bodies, subjects = plan["todo"], plan["bodies"], plan["subjects"]
@@ -1472,6 +1529,7 @@ def main():
     ap.add_argument("--expect", help="確認(--preview)が出した確認番号。本番で送る会社・全文・送信元が、これと違えば送らずに止める")
     ap.add_argument("--include-supplemented", action="store_true", help="検索で補ったHPの会社も対象にする(別会社の恐れあり)")
     ap.add_argument("--ng-state-db", help="Explicit isolated NG/state DB used by the UI handoff; omitted keeps the normal text NG/state defaults.")
+    ap.add_argument("--only-company", action="append", default=None, help="--channel mail のとき、この会社の鍵(画面が渡す。company_key)だけを対象にする(何度でも指定できる)")
     ap.add_argument("--channel", choices=("form", "mail"), default="form", help="mail=フォームの無い会社へメールで1通ずつ送る(smtp.json が要る)。付けなければフォーム")
     ap.add_argument("--manual-company", help="画面の「手で送る」。この会社のフォームを開いて入力だけ自動で行う(送信ボタンは押さない)")
     ap.add_argument("--check-message-name", help="採用済み企業1社の本文検査のみ。NG/履歴/企業適格性は未検証。DB・ブラウザ・送信動作なし")

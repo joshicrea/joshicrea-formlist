@@ -142,7 +142,25 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
 </section>
 <section id="b"><div class="now" id="now_b"></div><div class="card">
   <div class="toolbar"><div class="grow"><label for="files">見るリスト</label><select id="files"></select></div><label class="check inl"><input type="checkbox" id="onlyOk" checked><span>フォームがある会社だけ表示</span></label><div style="margin-bottom:6px"><button class="btn sub sm" id="dl" type="button">CSVをダウンロード</button></div></div>
-  <div id="mailbar" hidden style="margin:6px 0 10px"><button class="btn sub sm" id="mailAll" type="button">全部選ぶ</button> <button class="btn sub sm" id="mailNone" type="button">選びなおす</button> <button class="btn" id="mailGo" type="button">選んだ会社に送る内容を確かめる</button><p class="why" id="mailNote" style="margin:6px 0 0"></p></div><div id="manualst" role="status" aria-live="polite" hidden style="margin:8px 0;padding:10px 12px;border:1px solid var(--ac);border-radius:6px;font-size:15px;line-height:1.6;white-space:pre-line"></div><div class="sum" id="sum"></div><p class="mut" id="sumnote" style="margin:6px 0 0"></p>
+  <div id="mailbar" hidden style="margin:6px 0 10px"><button class="btn sub sm" id="mailAll" type="button">全部選ぶ</button> <button class="btn sub sm" id="mailNone" type="button">選びなおす</button> <button class="btn" id="mailGo" type="button">選んだ会社に送る内容を確かめる</button><p class="why" id="mailNote" style="margin:6px 0 0"></p></div>  <div id="mailwrap" hidden style="margin:8px 0">
+   <details class="dt" id="mailSet"><summary id="mailSetSum">メール送信の設定</summary><div>
+    <p class="why">この設定は、このパソコンの中にだけ保存します。メールのサービス側の設定は変えません。パスワードは、ご自身で入力してください(画面にも記録にも表示しません)。</p>
+    <div class="row">
+     <div class="fld"><label for="ms_from_addr">送信元のメールアドレス<span class="opt">(空欄なら、送信元の設定のメール)</span></label><input type="text" id="ms_from_addr" autocomplete="off"></div>
+     <div class="fld"><label for="ms_from_name">送信者の表示名<span class="opt">(空欄なら、送信元の設定の氏名)</span></label><input type="text" id="ms_from_name" autocomplete="off"></div>
+     <div class="fld"><label for="ms_host">サーバー(SMTP)</label><input type="text" id="ms_host" autocomplete="off"></div>
+     <div class="fld"><label for="ms_port">ポート</label><input type="number" id="ms_port" autocomplete="off"></div>
+     <div class="fld"><label for="ms_security">暗号化</label><select id="ms_security"><option value="ssl">SSL(ポート465が多い)</option><option value="starttls">STARTTLS(ポート587が多い)</option></select></div>
+     <div class="fld"><label for="ms_user">ユーザー名</label><input type="text" id="ms_user" autocomplete="off"></div>
+     <div class="fld"><label for="ms_password">パスワード</label><input type="password" id="ms_password" autocomplete="new-password" style="width:100%;padding:11px 14px;border:1px solid var(--field);border-radius:8px;background:var(--card);color:var(--ink);font:inherit"></div>
+    </div>
+    <div class="actions"><button class="btn sub" id="msSave" type="button">この設定を保存</button> <button class="btn sub" id="msTest" type="button">つながるか試す(メールは送りません)</button></div>
+    <p class="why" id="msNote" role="status" aria-live="polite"></p>
+   </div></details>
+   <label class="check inl" style="margin:6px 0"><input type="checkbox" id="ruleChk"><span>フォームとメールの両方がある会社には、どちらか1つだけで送る(片方で送ったら、もう片方へは自動で送りません。外すと両方へ送れます)</span></label>
+  </div>
+  <div id="mailpanel" class="edit" hidden></div>
+  <div id="manualst" role="status" aria-live="polite" hidden style="margin:8px 0;padding:10px 12px;border:1px solid var(--ac);border-radius:6px;font-size:15px;line-height:1.6;white-space:pre-line"></div><div class="sum" id="sum"></div><p class="mut" id="sumnote" style="margin:6px 0 0"></p>
   <details class="dt"><summary>くわしい内訳</summary><div class="sum sm" id="sum2"></div></details>
   <details class="dt" id="funnelBox" hidden><summary>前回の探索の内訳</summary><div id="funnelCard"></div></details>
   <div class="legend" id="legend" hidden></div>
@@ -235,10 +253,10 @@ function verdict(r){const cc=r['contact_confidence']||'',sp=r['sales_permission'
  if(v=='robots禁止')return {k:'ng',t:'対象外',why:'ホームページ側が、自動で読むことを断っています'};
  if(v=='取得失敗')return {k:'ng',t:'対象外',why:'ホームページを読み込めませんでした（時間を置くと読めることがあります）'};
  return {k:'',t:v||'まだ調べていません',why:''}}
-let RTAB='all';const MAILSEL=new Set();
-function tabOf(v){if(v.t=='フォームあり')return 'form';if(v.t=='メールだけ')return 'mail';if(v.k=='ng')return 'ng';return 'check'}
+let RTAB='all';const MAILSEL=new Set();let MAILST={available:false};
+function tabOf(v,r){if(MAILST.available&&r&&r._mail&&r._choice=='mail')return 'mail';if(v.t=='フォームあり')return 'form';if(v.t=='メールだけ')return 'mail';if(v.k=='ng')return 'ng';return 'check'}
 const RTABS=[['all','すべて'],['form','フォームあり'],['check','手で確かめる'],['mail','メールだけ'],['ng','送れない']];
-function resCounts(rows){const c={all:rows.length,form:0,check:0,mail:0,ng:0};rows.forEach(r=>{c[tabOf(verdict(r))]++});return c}
+function resCounts(rows){const c={all:rows.length,form:0,check:0,mail:0,ng:0};rows.forEach(r=>{c[tabOf(verdict(r),r)]++});return c}
 function summ(rows){const c={ok:0,warn:0,ng:0,auto:0,cand:0,missing:0,official:0};rows.forEach(r=>{const k=verdict(r).k;if(k in c)c[k]++;const cc=r['contact_confidence']||'';if(cc=='自動確認:フォーム'||cc=='自動確認:メール')c.auto++;if(r['contact_candidate']=='True'||r['contact_candidate']===true||['自動確認:フォーム','自動確認:メール','候補:要目視'].includes(cc))c.cand++;if(cc=='未発見')c.missing++;if(cc=='公式HP再探索待ち')c.official++});return c}
 function est(){const n=Math.max(1,parseInt($('#limit').value)||0);const a=Math.max(1,Math.round((n*3+30)/60)),b=Math.max(1,Math.round((n*15+60)/60));$('#est').textContent=`最大${n}社まで調べます。目安は約${a}〜${b}分です（実測の一例: ホテル・旅館10社で約40秒。会社数や通信で変わります）`}
 $('#limit').oninput=est;
@@ -264,7 +282,7 @@ async function loadFunnel(){
  }catch(e){}
 }
 async function loadRes(){const f=$('#files').value;if(!f){$('#res').innerHTML='<tr><td>まだリストがありません</td></tr>';RESROWS=[];$('#sum').innerHTML='';$('#sum2').innerHTML='';banners();return}
- const all=await J('/api/results?file='+encodeURIComponent(f));if(all.error)return;RESROWS=all;const s=summ(all);
+ const all=await J('/api/results?file='+encodeURIComponent(f));if(all.error)return;RESROWS=all;await loadMailSt();const s=summ(all);
  const card=(lb,n,u)=>`<div><span class="lb">${lb}</span><span class="nm"><b>${n}</b>${u}</span></div>`;
  const rc=resCounts(all),scard=(k,lb,n)=>`<button type="button" class="sumc${RTAB==k?' on':''}" data-k="${k}" aria-pressed="${RTAB==k}"><span class="lb">${lb}</span><span class="nm"><b>${n}</b>社</span></button>`;
  $('#sum').innerHTML=scard('all','全体',rc.all)+scard('form',tag('フォームあり','ok'),rc.form)+scard('mail',tag('メールだけ','warn'),rc.mail)+scard('check',tag('手で確かめる','warn'),rc.check)+scard('ng',tag('送れない','ng'),rc.ng);
@@ -272,12 +290,12 @@ async function loadRes(){const f=$('#files').value;if(!f){$('#res').innerHTML='<
  $('#sumnote').textContent=$('#onlyOk').checked&&RTAB!='ng'&&rc.ng?'フォームもメールも無い会社('+rc.ng+'社)は、いまは表示していません。「送れない」を押すと見られます。':'';
  $('#sum2').innerHTML=card('自動で確かめた',s.auto,'件')+card('候補を含む',s.cand,'件')+card('見つからず',s.missing,'件')+card('公式のページを探す前',s.official,'件');
  const rank={ok:0,warn:1,ng:2,'':3};let rows=all.map(r=>({r,v:verdict(r)}));if($('#onlyOk').checked&&RTAB!='ng')rows=rows.filter(x=>x.v.k=='ok'||x.v.k=='warn');rows.sort((a,b)=>rank[a.v.k]-rank[b.v.k]);
- if(RTAB!='all')rows=rows.filter(x=>tabOf(x.v)==RTAB);
+ if(RTAB!='all')rows=rows.filter(x=>tabOf(x.v,x.r)==RTAB);
  $('#mailbar').hidden=RTAB!='mail';
  const wc={};rows.forEach(({v})=>{if(v.why)wc[v.why]=(wc[v.why]||0)+1});const shared=new Map();rows.forEach(({v})=>{if(v.why&&wc[v.why]>1&&!shared.has(v.why))shared.set(v.why,v)});
  $('#legend').hidden=!shared.size;$('#legend').innerHTML='<b style="color:var(--ink)">表示の意味</b>'+[...shared.values()].map(v=>`<div>${tag(v.t,v.k)}${esc(v.why)}</div>`).join('');
  $('#res').innerHTML='<tr><th style="width:30%">会社</th><th style="width:30%">状態</th><th style="width:20%">開いて確かめる</th><th style="width:20%">送らない</th></tr>'+(rows.length?rows.map(({r,v},i)=>{const form=r['問い合わせフォームURL 無ければメール']||'',mail=r['メールアドレス']||(form.startsWith('http')?'':form);
-  return `<tr><td>${RTAB=='mail'?`<label style="display:flex;gap:6px;align-items:center;font-weight:400"><input type="checkbox" class="mailChk" data-n="${esc(r['企業名'])}"${MAILSEL.has(r['企業名'])?' checked':''}>この会社に送る</label>`:''}<b>${esc(r['企業名'])}</b><div class="why">${esc(r['業種'])}</div><details class="dt"><summary>くわしく</summary><div>取得元: ${esc(r['取得元'])}<br>メール: ${esc(mail||'なし')}<br>メモ: ${esc(plain(r['判定メモ']))||'なし'}</div></details></td><td>${tag(v.t,v.k)}${v.why&&wc[v.why]==1?`<div class="why">${esc(v.why)}</div>`:''}</td><td>${lk(r['HP URL'],'ホームページを開く')}<br>${lk(form,'フォームを開く')}</td><td><button class="btn sub sm ngb" data-i="${i}" type="button">送らない</button>${form&&/^https?:/.test(form)?`<br><button class="btn sub sm manb" data-i="${i}" type="button" style="margin-top:6px" title="フォームを開き、入れられる欄だけ自動で入れます。送信ボタンは押しません">自分で送る</button>`:''}</td></tr>`}).join(''):'<tr><td colspan="4">表示できる会社がありません。上の、フォームがある会社だけ表示、を外すと、ほかの会社も見えます。</td></tr>');
+  return `<tr><td>${RTAB=='mail'?`<label style="display:flex;gap:6px;align-items:center;font-weight:400"><input type="checkbox" class="mailChk" data-n="${esc(r._key||r['企業名'])}"${MAILSEL.has(r._key||r['企業名'])?' checked':''}>この会社に送る</label>`:''}<b>${esc(r['企業名'])}</b><div class="why">${esc(r['業種'])}</div>${mailCell(r,i)}<details class="dt"><summary>くわしく</summary><div>取得元: ${esc(r['取得元'])}<br>メール: ${esc(mail||'なし')}<br>メモ: ${esc(plain(r['判定メモ']))||'なし'}</div></details></td><td>${tag(v.t,v.k)}${v.why&&wc[v.why]==1?`<div class="why">${esc(v.why)}</div>`:''}</td><td>${lk(r['HP URL'],'ホームページを開く')}<br>${lk(form,'フォームを開く')}</td><td><button class="btn sub sm ngb" data-i="${i}" type="button">送らない</button>${form&&/^https?:/.test(form)?`<br><button class="btn sub sm manb" data-i="${i}" type="button" style="margin-top:6px" title="フォームを開き、入れられる欄だけ自動で入れます。送信ボタンは押しません">自分で送る</button>`:''}</td></tr>`}).join(''):'<tr><td colspan="4">表示できる会社がありません。上の、フォームがある会社だけ表示、を外すと、ほかの会社も見えます。</td></tr>');
  document.querySelectorAll('.manb').forEach(b=>b.onclick=async()=>{const x=rows[+b.dataset.i].r;if(!confirm(x['企業名']+' のフォームを別の画面で開き、入れられる欄だけ自動で入れます。\n送信ボタンは押しません。中身を確かめて、ご自分で送ってください。よろしいですか'))return;MAN={busy:true,name:x['企業名'],i:+b.dataset.i,final:null};manPaint(JOB);let r;try{r=await post('/api/manual',{file:$('#files').value,name:x['企業名']})}catch(e){r={error:'ツールに届きませんでした。ツールが動いているか確かめてください'}}if(r.error){MAN={busy:false};manPaint(JOB);return resNote(r.error)}if(!r.started){MAN={busy:false};manPaint(JOB);resNote('いまほかの処理が動いています。終わってから押します')}else{wasRun=true;poll()}});manPaint(JOB);
  document.querySelectorAll('.ngb').forEach(b=>b.onclick=async()=>{const x=rows[+b.dataset.i].r;const form=x['問い合わせフォームURL 無ければメール']||'';
   const hostOf=v=>{try{return new URL(v).hostname.replace(/^www\./,'')}catch(e){return ''}};const host=hostOf(x['HP URL']||'');
@@ -287,8 +305,60 @@ async function loadRes(){const f=$('#files').value;if(!f){$('#res').innerHTML='<
  document.querySelectorAll('.mailChk').forEach(c=>c.onchange=()=>{c.checked?MAILSEL.add(c.dataset.n):MAILSEL.delete(c.dataset.n);mailNote()});
  $('#mailAll').onclick=()=>{document.querySelectorAll('.mailChk').forEach(c=>{c.checked=true;MAILSEL.add(c.dataset.n)});mailNote()};
  $('#mailNone').onclick=()=>{MAILSEL.clear();document.querySelectorAll('.mailChk').forEach(c=>{c.checked=false});mailNote()};
- $('#mailGo').onclick=()=>{if(!MAILSEL.size){$('#mailNote').textContent='送る会社を選んでください。';return}$('#mailNote').textContent=MAILSEL.size+'社を選びました。メールの送信は、送信用メールの認証(SMTP)の入力が要ります。入力するまで、1通も送りません。'};
+ document.querySelectorAll('.chSel').forEach(c=>c.onchange=()=>mailChoose(rows[+c.dataset.i].r,c.value));
+ document.querySelectorAll('.chBtn').forEach(b=>b.onclick=()=>mailChoose(rows[+b.dataset.i].r,b.dataset.c));
+ document.querySelectorAll('.mailOne').forEach(b=>b.onclick=()=>mailFlow([rows[+b.dataset.i].r._key]));
+ document.querySelectorAll('.mailDraftBox').forEach(d=>d.ontoggle=()=>{if(d.open&&!d.dataset.done){d.dataset.done='1';mailDraft(d,rows[+d.dataset.i].r._key)}});
+ $('#mailGo').onclick=()=>{if(!MAILSEL.size){$('#mailNote').textContent='送る会社を選んでください。';return}if(MAILST.available)return mailFlow([...MAILSEL]);$('#mailNote').textContent=MAILSEL.size+'社を選びました。メールの送信は、送信用メールの認証(SMTP)の入力が要ります。入力するまで、1通も送りません。'};
  mailNote();ngList();portalList();banners()}
+let MAILFLOW=null;
+async function loadMailSt(){try{const s=await J('/api/mail/status');MAILST=s&&!s.error?s:{available:false}}catch(e){MAILST={available:false}}paintMailSet()}
+function paintMailSet(){const w=$('#mailwrap');if(!w)return;w.hidden=!MAILST.available;if(!MAILST.available)return;
+ $('#mailSetSum').textContent='メール送信の設定'+(MAILST.configured?'(入力済み)':'(まだ足りません: '+(MAILST.missing&&MAILST.missing.length?MAILST.missing.join('・'):'入力の形')+')');
+ const set=(k,v)=>{const e=$('#ms_'+k);if(e&&document.activeElement!==e)e.value=v==null?'':v};
+ ['host','port','user','from_addr','from_name'].forEach(k=>set(k,MAILST[k]));set('security',MAILST.security=='starttls'?'starttls':'ssl');
+ $('#ms_password').placeholder=MAILST.has_password?'入力済みです。変えるときだけ入れます':'パスワード(ご自身で入れます)';
+ $('#ruleChk').checked=!!MAILST.rule}
+function openMailSet(msg){const d=$('#mailSet');if(!d)return;d.open=true;d.scrollIntoView({block:'center'});if(msg)$('#msNote').textContent=msg}
+function mailPanel(h){const p=$('#mailpanel');if(!p)return;p.hidden=!h;p.innerHTML=h||'';if(h)p.scrollIntoView({block:'nearest'})}
+function mailCell(r,i){if(!MAILST.available||!r._mail)return '';
+ const v=verdict(r),c=r._choice||'',n=esc(r['企業名']),box='margin:8px 0;padding:8px 10px;border:1px solid var(--line);border-radius:8px';let h=`<div class="mailpick" style="${box}">`;
+ if(v.t=='フォームあり'){h+=`<div class="why">フォームと、メール(${esc(r._mail)})の両方があります。${MAILST.rule?(c?'':'どちらで送るか選ぶと、送る対象に入ります。'):'いまの設定では、両方へ送れます。'}</div>`+
+  `<label class="check" style="margin:4px 0"><input type="radio" class="chSel" name="ch${i}" data-i="${i}" value="form"${c=='form'?' checked':''}><span>フォームで送る</span></label><label class="check" style="margin:4px 0"><input type="radio" class="chSel" name="ch${i}" data-i="${i}" value="mail"${c=='mail'?' checked':''}><span>メールで送る</span></label>`}
+ else if(v.t!='メールだけ'){h+=c=='mail'?`<div class="why">メールで送る方に入っています。宛先は ${esc(r._mail)} です。</div><button class="btn sub sm chBtn" data-i="${i}" data-c="" type="button">移すのをやめる</button>`:
+  `<div class="why">フォームは一般の問い合わせ用ではない可能性があります。メールアドレス ${esc(r._mail)} が見つかっています。</div><button class="btn sub sm chBtn" data-i="${i}" data-c="mail" type="button">メールで送る方へ移す</button>`}
+ else h+=`<div class="why">宛先は ${esc(r._mail)} です。</div>`;
+ if(c=='mail'||v.t=='メールだけ')h+=` <button class="btn sm mailOne" data-i="${i}" type="button">この1社にメールを送る</button>`;
+ return h+`<details class="dt mailDraftBox" data-i="${i}"><summary>届く件名と本文を見る</summary><div class="mailDraft">開くと表示します。</div></details></div>`}
+async function mailDraft(box,name){const d=box.querySelector('.mailDraft');d.textContent='作っています…';
+ const p=await J('/api/mail/plan?file='+encodeURIComponent($('#files').value)+'&draft=1&only='+encodeURIComponent(name));
+ if(p.error){d.innerHTML=errHtml(p);return}
+ const it=(p.sendable||[])[0];d.innerHTML=it?`<div>宛先: ${esc(it.addr)}</div><div>件名: ${esc(it.subject)}</div><pre style="white-space:pre-wrap;margin:6px 0">${esc(it.text)}</pre><div class="why">これは文面の見本です。送るときは、もう一度この全文を確かめます。</div>`:`<div>この会社の文面は作れませんでした。理由: ${esc(((p.skipped||[])[0]||{}).text||'対象外です')}</div>`}
+async function mailChoose(r,channel){const x=await post('/api/choice',{name:r['企業名'],hp:r['HP URL']||'',channel});if(x.error)return resNote(x.error);loadRes()}
+async function mailFlow(names){if(!MAILST.available)return;
+ if(!MAILST.configured)return openMailSet('メール送信の設定が足りません('+((MAILST.missing||[]).join('・')||'入力の形')+')。入れてから、もう一度押します。');
+ const f=$('#files').value;mailPanel('<p>送る内容を作っています…</p>');
+ const r=await post('/api/mail/preview',{file:f,only:names});
+ if(r.error){mailPanel('');if(r.fix=='mail_settings')openMailSet(r.error);else resNote(r.error);return}
+ let plan=null;const q='&only='+names.map(encodeURIComponent).join('&only=');
+ for(let k=0;k<120;k++){await new Promise(x=>setTimeout(x,1000));plan=await J('/api/mail/plan?file='+encodeURIComponent(f)+q);if(plan.error){mailPanel('');return resNote(plan.error)}if(plan.key_short)break}
+ if(!plan||!plan.key_short){mailPanel('');return resNote('送る内容を作れませんでした。もう一度押します。')}
+ MAILFLOW={names,key:plan.key_short};const who=plan.identity;
+ const items=(plan.sendable||[]).map(it=>`<details class="dt" ${plan.sendable.length==1?'open':''}><summary><b>${esc(it.name)}</b> ${esc(it.addr)}</summary><div>件名: ${esc(it.subject)}<pre style="white-space:pre-wrap;margin:6px 0">${esc(it.text)}</pre></div></details>`).join('');
+ const sk=(plan.skipped||[]).length?`<p class="why">送らない会社 ${plan.skipped.length}社: ${(plan.skipped||[]).slice(0,5).map(s=>esc(s.name+'('+s.text+')')).join('、')}</p>`:'';
+ mailPanel(`<h3 class="eh">メールで送る内容(${(plan.sendable||[]).length}社)</h3><p class="why">送信元: ${who?esc((who.from_name||'')+' <'+who.from_addr+'> / '+who.host+':'+who.port):'未設定'}</p>${items}${sk}<label class="check" style="margin:10px 0"><input type="checkbox" id="mailRead"><span>届く件名と本文を、全部読みました</span></label><div class="actions"><button class="btn" id="mailSend" type="button" disabled>この内容で送る(画面の外に確認が出ます)</button> <button class="lnk" id="mailCancel" type="button">やめる</button></div><p class="why" id="mailSendNote" role="status" aria-live="polite"></p>`);
+ $('#mailRead').onchange=()=>{$('#mailSend').disabled=!$('#mailRead').checked};
+ $('#mailCancel').onclick=async()=>{await post('/api/approve/cancel',{});MAILFLOW=null;mailPanel('')};
+ $('#mailSend').onclick=async()=>{const note=t=>{$('#mailSendNote').textContent=t};$('#mailSend').disabled=true;note('画面の外に出る確認で「はい」を押してください。');
+  const a=await post('/api/approve',{key:MAILFLOW.key});if(a.error){note(a.error);$('#mailSend').disabled=false;return}
+  if(!a.ok){note('送りませんでした(確認で「いいえ」を押したため)');$('#mailSend').disabled=false;return}
+  const s=await post('/api/mail/send',{file:f,only:MAILFLOW.names,confirm:'送信'});
+  if(s.error||!s.started){await post('/api/approve/cancel',{});note(s.error||'いまほかの処理が動いています。終わってから押します。');$('#mailSend').disabled=false;return}
+  MAILFLOW=null;mailPanel('<p>送信を始めました。進み具合は「進み具合」に出ます。結果は「送信の記録」で見られます。</p>');wasRun=true;poll()}}
+$('#msSave').onclick=async()=>{const g=k=>$('#ms_'+k).value;const r=await post('/api/mail/settings',{host:g('host'),port:parseInt(g('port'))||465,security:g('security'),user:g('user'),password:g('password'),from_addr:g('from_addr'),from_name:g('from_name')});
+ if(r.error){$('#msNote').textContent=r.error;return}$('#ms_password').value='';MAILST=r;paintMailSet();$('#msNote').textContent='保存しました。'+(r.configured?'つながるか試すこともできます。':'')};
+$('#msTest').onclick=async()=>{$('#msNote').textContent='つないでいます…';const r=await post('/api/mail/test',{});$('#msNote').textContent=r.error||r.message||''};
+$('#ruleChk').onchange=async()=>{const r=await post('/api/choice/rule',{enabled:$('#ruleChk').checked});if(r.error)return resNote(r.error);MAILST.rule=r.rule;loadRes()};
 function mailNote(){const n=$('#mailNote');if(n)n.textContent=MAILSEL.size?MAILSEL.size+'社を選んでいます。':'メールだけの会社を選ぶと、まとめて送る内容を確かめられます。'}
 let MAN={busy:false};
 function manView(j,name,pending){const ls=(j&&j.lines||[]).filter(l=>l.trim()),last=ls.length?ls[ls.length-1]:'',mine=!!j&&j.name=='手動入力',run=mine&&!!j.running;
