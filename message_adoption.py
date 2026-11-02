@@ -93,14 +93,19 @@ def changed_parts(name, url, body, sender):
     return parts
 
 def validate_body(name, url, body, sender):
+    """採用が承認されていなければ AdoptionError。そうでなければ、採用時から変わった要素の一覧(無ければ [])を返す"""
     case = case_for(name, url)
     if not case:
-        return
+        return []
     if not case.get('adoption_approved'):
         raise AdoptionError('本文採用が承認されていません')
-    parts = changed_parts(name, url, body, sender)
-    if parts:
-        raise AdoptionError('採用済みの' + '・'.join(parts) + 'が、採用時と変わりました(採用記録の照合値と一致しません)')
+    return changed_parts(name, url, body, sender)  # 食い違いでは止めない(2026-11-02 運用者の決定: 採用のあとに手で文面を直すのは通常の流れ)。変わった要素の一覧を返し、画面に出す
+
+def difference_text(parts):
+    """画面に出す、採用時との食い違いの文(無ければ空)。止めないこと・送る前に全文を見られることを言う"""
+    if not parts:
+        return ''
+    return '採用したときから変わっている点: ' + '・'.join(parts) + '。止めてはいません。送る前に、届く件名と全文を確かめられます'
 
 def validate_send(name, url, body, sender):
     validate_body(name, url, body, sender)

@@ -44,7 +44,9 @@ OUT = HERE / "出力"
 MSG = HERE / "文面"
 SENDER = HERE / "sender.json"
 LOG = OUT / "送信ログ.csv"
-PORT = int(os.environ.get("FORMLIST_PORT") or 8780)  # 複数の検索を同時に走らせるとき、MCP が8781以降で別のサーバーを立てる。画面で使うのは8780
+IS_DEV = (HERE / "開発版_自動更新しない.txt").exists()  # 開発用の作業フォルダの目印(公開物には含めない)。ある場所だけ「開発用」として動く
+DEV_PORT = 8785  # 開発用の既定の番号。お客様版の8780〜8782(更新の確認・同時検索が使う番号)とぶつけない
+PORT = int(os.environ.get("FORMLIST_PORT") or (DEV_PORT if IS_DEV else 8780))  # 複数の検索を同時に走らせるとき、MCP が8781以降で別のサーバーを立てる。画面で使うのは8780(開発用は8785)
 assert 8780 <= PORT <= 8790, PORT
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 PY = sys.executable[:-len("pythonw.exe")] + "python.exe" if sys.executable.lower().endswith("pythonw.exe") else sys.executable
@@ -914,7 +916,8 @@ class H(BaseHTTPRequestHandler):
             for (n, u, ind, op, hp), body, subject, label in zip(pl["todo"], pl["bodies"], pl["subjects"], pl["labels"]):
                 rows.append({"name": n, "form": u, "industry": ind, "hp": hp, "template_label": label, "opener": op,
                              "opener_source": opener_source(src.get((n, u), {})), "opener_why": opener_why(src.get((n, u), {})), "subject": subject,
-                             "warn": _send_warn(body), "notice": _send_notice(body), "text": body})
+                             "warn": _send_warn(body), "notice": _send_notice(body), "text": body,
+                             "adoption_diff": autosend.message_adoption.difference_text(autosend.message_adoption.changed_parts(n, u, body, sender))})
                 _, template, local_sender = autosend.message_adoption.resolve_row((n, u, ind, op, hp), str(MSG), sender, autosend.pick_message)
                 c = commons.setdefault((label, template), {"template_label": label, "subject": marked_subject(local_sender),
                                                             "text_with_marks": marked_text(template, local_sender), "count": 0})
@@ -1090,7 +1093,7 @@ class H(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         ng_store = _NG_STORE
         if u.path == "/":
-            if PORT != ports.MAIN and self.headers.get("Sec-Fetch-Mode") == "navigate" and ports.job(ports.MAIN, timeout=1):
+            if not IS_DEV and PORT != ports.MAIN and self.headers.get("Sec-Fetch-Mode") == "navigate" and ports.job(ports.MAIN, timeout=1):  # 開発用(8785)はお客様版の入口へ案内しない
                 # 画面のURLは常に入口の番号(8780)に固定する。8781・8782 をブックマークしていても、動いている入口へ案内する(古い画面のまま使わせない)
                 self.send_response(302)
                 self.send_header("Location", f"http://127.0.0.1:{ports.MAIN}/")
@@ -1115,7 +1118,7 @@ class H(BaseHTTPRequestHandler):
                                    "send_file": st["file"], "first_time": first, "last_max": last_max, "max_kind": max_kind, "limits": limits(),
                                    "message_summary": {"default": 1, "industries": [n for n, v in info["uses"].items() if v == "業種ごと"]}})
         if u.path == "/api/whoami":
-            return self.send(200, {"tool": "formlist", "here": str(HERE), "version": VERSION, "build": BUILD, "port": PORT, "running": JOB["running"] or SJOB["running"], "name": JOB["name"] if JOB["running"] else SJOB["name"]})
+            return self.send(200, {"tool": "formlist", "here": str(HERE), "version": VERSION, "build": BUILD, "port": PORT, "dev": IS_DEV, "running": JOB["running"] or SJOB["running"], "name": JOB["name"] if JOB["running"] else SJOB["name"]})
         if u.path == "/api/summary":
             # この画面(番号)の、最後の探索の内訳(段階別の件数・結果・理由)。画面の「結果を見る」が読む
             try:
@@ -1210,7 +1213,8 @@ class H(BaseHTTPRequestHandler):
             if problem:
                 return self.send(400, {"error": f"理由: {problem[0]}。直し方: {problem[1]}"})
             sender = read_sender()
-            return self.send(200, {"company": name, "subject": autosend.subject_for(row[0], row[1], sender, autosend.subject_industry(MSG, row[2])), "message": bodies[0]})
+            return self.send(200, {"company": name, "subject": autosend.subject_for(row[0], row[1], sender, autosend.subject_industry(MSG, row[2])), "message": bodies[0],
+                                   "adoption_diff": autosend.message_adoption.difference_text(autosend.message_adoption.changed_parts(row[0], row[1], bodies[0], sender))})
         if u.path == "/download":
             p = safe_out(q.get("file", ""))
             if not p:

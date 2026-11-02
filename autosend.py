@@ -773,6 +773,12 @@ def neutral_option(el):
     return hits[0] if len(hits) == 1 else None
 
 
+def split_name_guess(full):
+    """区切りの無い氏名を姓と名に分ける。漢字・かなだけの4文字は、姓2文字・名2文字(最も多い形)に分ける。それ以外(3文字・5文字・英字)は推測せず None"""
+    s = re.sub(r"[ 　]+", "", full or "")
+    return [s[:2], s[2:]] if re.fullmatch(r"[一-鿿々ぁ-ゖァ-ヶー]{4}", s) else None
+
+
 def fill_form(page, sender, message, skipped=None):
     """戻り値: (成功, メモ)。埋められない必須項目があれば送らない。
     skipped にリストを渡すと、埋められない必須項目で止まらず、理由をそこへ集めて残りを入力する(手動経路用。送らない前提)"""
@@ -783,6 +789,9 @@ def fill_form(page, sender, message, skipped=None):
         return None
 
     name_parts = [p for p in re.split(r"[ 　]+", sender.get("氏名", "").strip()) if p]
+    guessed = len(name_parts) == 1 and split_name_guess(name_parts[0]) is not None  # 区切りが無い4文字の氏名を、姓2文字・名2文字に分ける(推測であることをメモに残す)
+    if guessed:
+        name_parts = split_name_guess(name_parts[0])
     kana_parts = [p for p in re.split(r"[ 　]+", sender.get("フリガナ", "").strip()) if p]
     pref, city, rest_addr = split_address(sender.get("住所", ""))
     n_addr = sum(1 for e in page.locator("input:visible[type=text], input:visible:not([type])").all() if ADDR_PART.search(own_attrs(e)))
@@ -807,6 +816,10 @@ def fill_form(page, sender, message, skipped=None):
         return _cannot(why + "。送信ボタンは押さず、自分で送る会社へ回します" if skipped is None else why + "(手で直してください)") if why else None
 
     generic = []  # 欄の名前だけで割り当てた項目(同じ項目が2欄以上に入るなら、分割欄で誤入力の恐れ)
+    used_guess = False
+    zip_digits = re.sub(r"\D", "", sender.get("郵便番号", ""))
+    zip_n = sum(1 for e in page.locator("input:visible[type=text], input:visible[type=tel], input:visible:not([type])").all() if re.search(r"郵便|zip|postal", label_of(e) + " " + own_attrs(e), re.I)) if len(zip_digits) == 7 else 0
+    zip_seen = 0  # 郵便番号が前3桁・後4桁の2欄に分かれている形
     for el in scope.locator("input:visible, textarea:visible, select:visible").all():
         tag = el.evaluate("e => e.tagName.toLowerCase()")
         typ = (el.get_attribute("type") or "text").lower()
@@ -851,21 +864,28 @@ def fill_form(page, sender, message, skipped=None):
             filled.append("本文")
             continue
         own = own_attrs(el)
-        if len(name_parts) == 2 and not re.search(r"mail|tel|company|corp", own, re.I):  # 姓・名が別々の欄
+        is_sei = bool(SEI.search(own) and not MEI.search(own))
+        is_mei = bool(MEI.search(own) and not SEI.search(own))
+        if (is_sei or is_mei) and not re.search(r"mail|tel|company|corp", own, re.I):  # 姓・名が別々の欄
             kana = re.search(r"kana|カナ|かな|furigana|フリガナ", own, re.I)
-            parts = (kana_parts if len(kana_parts) == 2 else None) if kana else name_parts  # 読みが未設定ならかなの欄に漢字を入れない
-            if parts is None:
-                pass
-            elif SEI.search(own) and not MEI.search(own):
-                r = put(el, parts[0], "氏名" if not kana else "フリガナ")
+            parts = (kana_parts if len(kana_parts) == 2 else None) if kana else (name_parts if len(name_parts) == 2 else None)
+            if parts is not None:
+                r = put(el, parts[0] if is_sei else parts[1], "氏名" if not kana else "フリガナ")
                 if r:
                     return r
+                used_guess = used_guess or (guessed and not kana)
                 filled.append("氏名" if not kana else "フリガナ"); continue
-            elif MEI.search(own) and not SEI.search(own):
-                r = put(el, parts[1], "氏名" if not kana else "フリガナ")
-                if r:
-                    return r
-                filled.append("氏名" if not kana else "フリガナ"); continue
+            # 区切りが無くて分けられない。フルネームを姓の欄にも名の欄にも入れない(実機で、両方にフルネームが入る不具合があった)
+            if kana:
+                if required:
+                    r = _cannot("姓・名が別々のふりがな欄ですが、送信元のフリガナに姓と名の区切り(空白)がありません")
+                    if r:
+                        return r
+                continue  # 任意の欄は空のまま。漢字やフルネームを入れない
+            r = _cannot("姓・名が別々の欄ですが、送信元の氏名に姓と名の区切り(空白)がなく、分けられません")
+            if r:
+                return r
+            continue
         if ADDR_PART.search(own) and pref:  # 住所が複数欄に分かれている形
             addr_seen += 1
             if n_addr >= 2:
@@ -875,6 +895,12 @@ def fill_form(page, sender, message, skipped=None):
                     return r
                 filled.append("住所"); continue
         key = next((k for rx, k in FIELD_MAP if rx.search(lab)), None)
+        if key == "郵便番号" and zip_n == 2 and sender.get(key):  # 前3桁・後4桁の2欄: それぞれの桁だけを入れる(全桁を両方に入れて切れた「1351350」を作らない)
+            zip_seen += 1
+            r = put(el, zip_digits[:3] if zip_seen == 1 else zip_digits[3:], "郵便番号")
+            if r:
+                return r
+            filled.append("郵便番号"); continue
         if key and sender.get(key):
             r = put(el, fit_length(el, sender[key]) if key in ("郵便番号", "電話") else sender[key], key)
             if r:
@@ -895,7 +921,7 @@ def fill_form(page, sender, message, skipped=None):
         return False, "同じ種類の欄が複数あり判別できない: " + "・".join(dup)
     if "本文" not in filled:
         return False, "本文を入れられない"
-    return True, "入力: " + "・".join(dict.fromkeys(filled)) + (("／未入力%d件: " % len(skipped) + "、".join(skipped)) if skipped else "")
+    return True, "入力: " + "・".join(dict.fromkeys(filled)) + (("／未入力%d件: " % len(skipped) + "、".join(skipped)) if skipped else "") + ("／姓と名は2文字ずつに分けて入れました(送信元の氏名に区切りが無いため。違うときは氏名の姓と名の間に空白を入れてください)" if used_guess else "")
 
 
 # 自動記入の対応表(正本)。フォームの項目 → sender.json のキー → 見分ける手がかり。fill_form はこの表のとおりに動く。
