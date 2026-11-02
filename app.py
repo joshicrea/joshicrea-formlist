@@ -1197,6 +1197,20 @@ class H(BaseHTTPRequestHandler):
                 return self.send(502, {"error": str(e)})
         if u.path == "/api/manual_kit":
             return self.manual_kit(q, ng_store)
+        if u.path == "/api/manual_draft":  # 「自分で送る」の前に、その会社に届く件名と本文(フォームに入る文)を見せる。通信しない
+            p, err = list_or_error(q.get("file", ""))
+            if err:
+                return self.send(*err)
+            probs = send_rules.sender_problems(read_sender())
+            if probs:
+                return self.send(400, problem_error(probs))
+            import autosend
+            name = str(q.get("name", "")).strip()
+            row, bodies, problem = autosend.manual_precheck(str(p), str(SENDER), str(MSG), name)
+            if problem:
+                return self.send(400, {"error": f"理由: {problem[0]}。直し方: {problem[1]}"})
+            sender = read_sender()
+            return self.send(200, {"company": name, "subject": autosend.subject_for(row[0], row[1], sender, autosend.subject_industry(MSG, row[2])), "message": bodies[0]})
         if u.path == "/download":
             p = safe_out(q.get("file", ""))
             if not p:
