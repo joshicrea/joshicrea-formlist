@@ -2,6 +2,7 @@
 from pathlib import Path
 import hashlib
 import json
+import re
 
 HERE = Path(__file__).resolve().parent
 
@@ -52,17 +53,54 @@ def resolve_row(row, message_path, sender, pick_message):
     approved_row = (case['display_name'], url, industry, case['opener'], hp)
     return approved_row, template, effective_sender(name, url, sender)
 
+KANA_ONLY = re.compile(r'[ァ-ヶーぁ-ゖ 　]{0,40}')
+
+def sender_view(effective):
+    """送信元の照合値を作るときの見え方。採用のあとに足された設定は照合から外す:
+    資料URL=本文の置き換えにだけ使う(本文の照合値が変わらなければ、採用した全文に影響しない)。
+    フリガナ=氏名の読み仮名。値は照合せず、読み仮名の文字だけであることを changed_parts で別に確かめる(自由な文字列は通さない)。
+    氏名・メール・電話・郵便番号・住所・会社名・件名・署名が変われば照合値が変わる。新しい項目を足したときも、この見え方に入れない限り止まる(安全側)"""
+    return {k: v for k, v in effective.items() if k not in ('資料URL', 'フリガナ')}
+
+def _sender_matches(effective, recorded):
+    """採用記録の作り方(フリガナ・資料URLのキーが空であった/無かった/全項目で照合した)のどれでも、その後に足されただけなら一致とみなす"""
+    v = sender_view(effective)
+    return recorded in {digest(effective), digest(v), digest(dict(v, フリガナ='')), digest(dict(v, 資料URL='')), digest(dict(v, フリガナ='', 資料URL=''))}
+
+def changed_parts(name, url, body, sender):
+    """採用時から変わった要素を、全文・件名・送信元・フリガナのうち実際に違うものだけ返す(採用記録のない会社は[])"""
+    case = case_for(name, url)
+    if not case:
+        return []
+    effective = effective_sender(name, url, sender)
+    parts = []
+    if hashlib.sha256(body.encode('utf-8')).hexdigest() != case['body_sha256']:
+        parts.append('全文')
+    subject = case['subject']
+    subject_changed = effective.get('件名', '').replace('{企業名}', name) != subject
+    if subject_changed:
+        parts.append('件名')
+    # 件名は送信元の照合値にも入っている。件名と別の項目が同時に変わっても両方を示すため、採用時の件名の元の形(会社名の部分を {企業名} に戻したもの)に直して照合する
+    templates = {subject.replace(n, '{企業名}') for n in (name, case.get('display_name', name), case.get('source_name', name)) if n} | {subject}
+    if subject_changed:
+        sender_ok = any(_sender_matches(dict(effective, 件名=t), case['sender_sha256']) for t in templates)
+    else:
+        sender_ok = _sender_matches(effective, case['sender_sha256'])
+    if not sender_ok:
+        parts.append('送信元')
+    if not KANA_ONLY.fullmatch(str(effective.get('フリガナ', ''))):
+        parts.append('フリガナ(読み仮名以外の文字)')
+    return parts
+
 def validate_body(name, url, body, sender):
     case = case_for(name, url)
     if not case:
         return
-    effective = effective_sender(name, url, sender)
     if not case.get('adoption_approved'):
         raise AdoptionError('本文採用が承認されていません')
-    actual = hashlib.sha256(body.encode('utf-8')).hexdigest()
-    subject = effective.get('件名', '').replace('{企業名}', name)
-    if actual != case['body_sha256'] or subject != case['subject'] or digest(effective) != case['sender_sha256']:
-        raise AdoptionError('採用済み全文・件名・送信元のどれかが変わりました')
+    parts = changed_parts(name, url, body, sender)
+    if parts:
+        raise AdoptionError('採用済みの' + '・'.join(parts) + 'が、採用時と変わりました(採用記録の照合値と一致しません)')
 
 def validate_send(name, url, body, sender):
     validate_body(name, url, body, sender)
