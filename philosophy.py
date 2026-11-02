@@ -160,78 +160,42 @@ def collect(soup, final, site):
 
 
 
-# ---- v2(2026-11-02): 書き出しは2文。第1文=相手の特徴を事実として言い切る、第2文=送る文面の提案に接続して提案で締める ----
-# 禁止: 拝見・共感・お世辞の語、根拠文の引用貼り付け(『』「」)、どの会社にも使える接続文
-BANNED = re.compile(r"拝見|共感|惹か|惹か|素敵|魅力的|素晴らしい|感銘|感動|敬服|感服|ご立派|ぜひご覧|ご覧ください")
+# ---- v3(2026-11-02 運用者の指摘「一行目と2行目が繋がっておらず浮いている、誰目線?」で v2 を差し替え) ----
+# 目線は送り手(文面の差出人)。第1文=お客様・過ごす時間・場面を前提にした「ご提案したく、ご連絡しました」。第2文=その場面に合う提案物(送る文面にある語だけ)。
+# 会社を評価する独立文は置かない。提案につながらない特徴(薬剤へのこだわり等)は根拠にしない。場面が拾えない会社は空欄(社数が減ってよい)
+BANNED = re.compile(r"拝見|共感|惹か|素敵|魅力的|素晴らしい|感銘|感動|敬服|感服|ご立派|ぜひご覧|ご覧ください")
 QUOTE_MARKS = re.compile(r"[『』「」]")
-
-# 特徴の言い切り文を作る規則: (根拠文中の手がかり, 手がかりの前の語句 head を使う文の型)。head は手がかり直前の読点までの語句
-FACT_RULES = [
-    (re.compile(r"にこだわ"), "{h}にこだわっておられます。"),
-    (re.compile(r"を大切に"), "{h}を大切にされています。"),
-    (re.compile(r"に寄り添"), "{h}に寄り添うことを大切にされています。"),
-    (re.compile(r"を目指"), "{h}を目指しておられます。"),
-    (re.compile(r"を使命"), "{h}を使命にされています。"),
-    (re.compile(r"を目標"), "{h}を目標にされています。"),
-    (re.compile(r"に貢献"), "{h}への貢献を大切にされています。"),
-    (re.compile(r"丁寧に仕上げ"), "丁寧に仕上げることを大切にされています。"),
-    (re.compile(r"を心がけ|を心掛け"), "{h}を心がけておられます。"),
-    (re.compile(r"をお届け|をご提供|を提供"), "{h}をお届けすることに力を入れておられます。"),
-]
-_LEAD = re.compile(r"^(?:そして|また|さらに|なにより|何よりも|私たちは|わたしたちは|当店は|当社は|当サロンは)")
-
-# 特徴の種類 → 第2文の「接続」。上から順に最初に当たったものを使う。どれにも当たらない会社は作らない(汎用の接続を禁止するため)
-CONNECT = [
-    ("family", re.compile(r"家族|ご友人|親子|お子"), "ご家族やご友人と過ごすその機会に、", ("ワークショップ", "体験", "イベント")),
-    ("relax", re.compile(r"癒し|くつろ|リラックス|ゆっくり|安心|落ち着|心地"), "その過ごしていただく時間に、", ("制作体験", "体験", "ワークショップ")),
-    ("care", re.compile(r"ケア|トリートメント|施術|カラー|パーマ|薬剤|仕上がり|技術|髪|頭皮|ダメージ"), "その施術やケアの時間に合わせて、", ("制作体験", "体験", "ワークショップ")),
-    ("polite", re.compile(r"丁寧|クオリティ|品質|確か|短い時間"), "ご来店を機に、", ("記念品", "ギフト", "特典", "制作体験", "体験")),
-    ("town", re.compile(r"地域|街|寄り添|近隣"), "地域のお客様との接点づくりとして、", ("ワークショップ", "イベント", "体験")),
-    ("people", re.compile(r"社会|貢献|スタッフ|成長|価値観|理想"), "お客様やスタッフとの関わりを深める場として、", ("ワークショップ", "体験", "イベント")),
-]
+NEGATED = re.compile(r"ません|ていない|いない|ない|なかっ|なく|ず|たら|れば")  # 根拠の語の直後の否定・条件。場面の根拠にしない
+# 第1文が会社を評価して終わる述語(v2 の浮いた形)。これで終わる第1文は不合格
+BAD_FIRST_END = re.compile(r"(?:大切に(?:され|し)|目指し|こだわっ|力を入れ|心がけ|心掛け)て(?:い|おられ)ます。$")
+SENDER_ACT = re.compile(r"ご提案|ご用意|ご連絡")
 # 提案の具体語(その文面に実際にある語だけを使う)
 PROPOSAL_TERMS = ("制作体験", "ワークショップ", "体験", "イベント", "ギフト", "記念品", "特典")
 
-
-def _head_before(clause, cue):
-    m = cue.search(clause)
-    if not m:
-        return ""
-    h = clause[:m.start()]
-    h = re.split(r"では|は", h)[-1] if re.search(r"では|は", h) and len(re.split(r"では|は", h)[-1]) >= 2 else h
-    h = re.split(r"[ 　]|よう", h)[-1] if re.search(r"[ 　]|よう", h) and len(re.split(r"[ 　]|よう", h)[-1]) >= 3 else h
-    h = _LEAD.sub("", h.strip())
-    h = QUOTE_MARKS.sub("", h).strip(" 　,、")
-    return h
-
-
-def fact_sentence(basis):
-    """根拠文から、相手の特徴を事実として言い切る第1文を作る(引用を貼らない・感想を入れない)。作れなければ ""。
-    手がかり(にこだわ・を大切に・に寄り添・を目指 等)の直前の語句を使うので、根拠に無い特徴は足さない"""
-    for sent in [x for x in (basis or "").split(" / ") if x.strip()]:
-        s = re.sub(r"(?<=[^\x00-\x7f]) +(?=[^\x00-\x7f])", "", sent.strip().rstrip("。！？!?").strip())
-        for clause in [c for c in re.split(r"[、，,。]", s) if c.strip()]:
-            clause = re.sub(r"^(?:[0-9０-９]{1,2}\s*[.．)）、]\s*|[①-⑩]\s*)", "", clause.strip())
-            for cue, frame in FACT_RULES:
-                m = cue.search(clause)
-                if m and NEGATED.search(clause[m.end():m.end() + 10]):
-                    continue  # 「こだわっていません」を「こだわっておられます」にしない
-                h = _head_before(clause, cue)
-                if 2 <= len(h) <= 30 and specific_nouns(h) and not THANKS_ONLY.search(h):
-                    return frame.format(h=h)
-    return ""
+# 提案物の種類 → その場面に合う、送る文面の提案語(この語だけを使い、他の種類の語に流れない)
+KIND_TERMS = {"long": ("制作体験", "体験"), "workshop": ("ワークショップ", "イベント"), "gift": ("ギフト", "記念品", "特典")}
+KIND_LABEL = {"long": "滞在が長い→制作体験", "workshop": "交流の場→ワークショップ", "gift": "滞在が短い・記念→ギフト"}
+_CARE = {"頭皮": "頭皮ケア", "ヘッドスパ": "ヘッドスパ", "トリートメント": "トリートメント", "髪質改善": "髪質改善", "ケア": "ケア"}
+_RELAX = {"癒し": "癒しの時間", "くつろ": "くつろぎの時間", "リラックス": "くつろぎの時間", "ゆっくり": "ゆっくり過ごす時間", "心地": "心地よい時間", "快適な時間": "快適な時間"}
+# (場面名, 根拠の語, 第1文の前提(お客様・時間・場面)を作る関数, 第1文の目的, 提案物の種類, 第2文の導入)。上から順に、最初に作れた場面を使う
+SCENES = [
+    ("家族連れ", re.compile(r"家族|ご友人|親子|お子"), lambda kw: "ご家族やご友人と過ごされるお客様へ", "お客様同士で楽しんでいただく企画", "workshop", "ご家族やご友人と一緒に楽しめる場として、"),
+    ("癒しの時間", re.compile(r"癒し|くつろ|リラックス|ゆっくり|心地|快適な時間"), lambda kw: _RELAX[kw] + "を求めて来店されるお客様へ", "その時間をさらに楽しんでいただく企画", "long", "施術の合間やお待ちの時間に、"),
+    ("施術中の過ごし方", re.compile(r"施術中"), lambda kw: "施術中の時間をお過ごしのお客様へ", "その時間をさらに楽しんでいただく企画", "long", "施術の合間やお待ちの時間に、"),
+    ("ケアの施術", re.compile("|".join(_CARE)), lambda kw: _CARE[kw] + "の施術を受けに来られるお客様へ", "美容の時間を丸ごと楽しんでいただく企画", "long", "施術の合間やお待ちの時間に、"),
+    ("短時間の来店", re.compile(r"短い時間|時短|スピーディ|手早"), lambda kw: "短い時間でのご来店を求めるお客様へ", "ご来店の記念になるものをお渡しできる企画", "gift", "滞在が短くても無理なく取り入れられる、"),
+    ("記念日", re.compile(r"記念日|お祝い|ご褒美|プレゼント|晴れの日"), lambda kw: "大切な日にご来店のお客様へ", "ご来店の記念になるものをお渡しできる企画", "gift", "お帰りの際にお渡しできる、"),
+    ("地域のお客様", re.compile(r"地域|近隣"), lambda kw: "地域のお客様が通われる御社へ", "地域の方との接点づくりになる企画", "workshop", "地域の方とお客様が一緒に楽しめる場として、"),
+    ("お客様との交流", re.compile(r"つながり|交流|コミュニティ"), lambda kw: "お客様とのつながりを大切にする御社へ", "お客様同士やスタッフとの交流が生まれる企画", "workshop", "会話が生まれる場として、"),
+]
 
 
-NEGATED = re.compile(r"ません|ていない|いない|ない|なかっ|なく|ず|たら|れば")  # 手がかりの直後の否定・条件。肯定の言い切りに変えない
-THANKS_ONLY = re.compile(r"^(?:お客様|お客さま|皆様)(?:の|に|を)?$")
-
-
-def proposal_phrases(template, kind_terms):
-    """送る文面(template)に実際にある提案の具体語を、相手の特徴に合う順に並べた [(語, 提案の句)]。同じ句は1つ。無ければ []"""
+def proposal_phrases(template, kind_terms, strict=False):
+    """送る文面(template)に実際にある提案の具体語を、kind_terms の順(strict でなければ続けて全提案語)に並べた [(語, 提案の句)]。同じ句は1つ。無ければ []"""
     text = template or ""
     base = "本物のお花を使った" if ("本物のお花" in text or "本物の花" in text) else ""
     out, seen, spans = [], set(), []
-    for term in tuple(kind_terms) + PROPOSAL_TERMS:
+    for term in (tuple(kind_terms) if strict else tuple(kind_terms) + PROPOSAL_TERMS):
         m = re.search(r"(?:(?<![一-龥ぁ-んァ-ヶー])(?!企業向けの)[一-龥ぁ-んァ-ヶー]{1,4}の)?" + re.escape(term) + ("会?" if term == "体験" else ""), text)  # 「企業向けの」は相手の会社を指す語で、書き出しでは不自然なので前置きに取らない
         if not m or (base + m.group(0)) in seen:
             continue
@@ -244,26 +208,46 @@ def proposal_phrases(template, kind_terms):
     return out
 
 
+def first_sentence(opener):
+    return (opener or "").split("。")[0] + "。"
+
+
+def valid_opener(opener, template=""):
+    """v3 の合格条件: 2文・第1文に送り手の行為(ご提案/ご用意/ご連絡)・第1文が会社評価の述語で終わらない・禁止語と引用符なし・第2文に文面の提案語"""
+    parts = [x for x in (opener or "").split("。") if x]
+    if len(parts) != 2 or not SENDER_ACT.search(parts[0]) or BAD_FIRST_END.search(parts[0] + "。"):
+        return False
+    if BANNED.search(opener) or QUOTE_MARKS.search(opener):
+        return False
+    return not template or any(p in parts[1] for _t, p in proposal_phrases(template, PROPOSAL_TERMS, strict=True))
+
+
+def opener_traces(basis, template=""):
+    """(書き出し, {根拠, 場面, 提案物}) を候補の順に出す。根拠の語(basis にある)が第1文の前提を決め、その場面の種類に合う提案語(文面にある語だけ)が第2文を決める。
+    場面が拾えない・場面に合う提案語が文面に無い会社は何も出さない(汎用の接続で埋めない)"""
+    text = basis or ""
+    for scene, rx, premise, purpose, kind, when in SCENES:
+        for m in rx.finditer(text):
+            if NEGATED.search(re.split(r"[。、]", text[m.end():m.end() + 16])[0]):  # 同じ句の中(読点・句点まで)の否定・条件
+                continue
+            kw = m.group(0)
+            first = f"{premise(kw)}、{purpose}をご提案したく、ご連絡しました。"
+            for term, phrase in proposal_phrases(template, KIND_TERMS[kind], strict=True):
+                out = f"{first}{when}{phrase}をご用意できます。"
+                if valid_opener(out):
+                    yield out, {"根拠": kw, "場面": scene, "提案物": phrase, "種類": KIND_LABEL[kind]}
+            break  # 同じ場面の2つ目以降の語は同じ第1文を作りやすいので、場面ごとに最初の語だけ
+
+
 def opener_variants(basis, template=""):
-    """根拠文と、その会社に送る文面から作れる2文の書き出しを、候補の順に出す(第2文の提案語を変えた候補が続く)。作れなければ何も出さない。
-    第1文: 相手の特徴の言い切り(fact_sentence)。第2文: 特徴の種類に合う接続 + 文面にある提案の具体語 + 「を取り入れる企画をご提案できます。」
-    同じ書き出しが他の会社に既にあるとき、呼び出し側が次の候補を使う(2文とも同一の行を作らないため)"""
-    first = fact_sentence(basis)
-    if not first:
-        return
-    for ctx in (first, basis or ""):  # まず第1文の特徴から接続を決め、当たらなければ根拠文全体から
-        for _kind, rx, connect, terms in CONNECT:
-            if rx.search(ctx):
-                for _term, phrase in proposal_phrases(template, terms):
-                    out = f"{first}{connect}{phrase}を取り入れる企画をご提案できます。"
-                    if not (BANNED.search(out) or QUOTE_MARKS.search(out)):
-                        yield out
-                return
+    for out, _t in opener_traces(basis, template):
+        yield out
 
 
 def opener_from_basis(basis, template="", taken=()):
-    """opener_variants の最初の候補。taken(他の会社の書き出し)にあるものは飛ばす。使える候補が無ければ空文字"""
+    """最初の合格候補。taken(他の会社の書き出し)と、2文とも同じものも、第1文だけ同じものも飛ばす(他社の第1文と入れ替えて成立する文を作らない)。無ければ空文字"""
+    taken_first = {first_sentence(t) for t in taken if t}
     for out in opener_variants(basis, template):
-        if out not in taken:
+        if out not in taken and first_sentence(out) not in taken_first:
             return out
     return ""
