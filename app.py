@@ -706,12 +706,12 @@ def busy_error():
     """E-17。ほかの処理が動いているとき、何が動いているかを言う"""
     if not JOB["running"]:
         return None
-    what = {"探す": "「探す」", "確認": "「送る内容を出す」", "本番送信": "送信", "手動入力": "「自分で送る」の入力"}.get(JOB["name"], "ほかの処理")
+    what = {"探す": "「探す」", "確認": "「送る内容を出す」", "本番送信": "送信", "手動入力": "「フォームで送る(自動挿入)」の入力"}.get(JOB["name"], "ほかの処理")
     return {"error": f"いま{what}が動いています。終わってから押します", "started": False}
 
 
 def send_counts(since, running=False):
-    """送信ログのうち since(本番を始めた時刻)以降の行を、送れた・送れたか確かめる・自分で送る に数える。
+    """送信ログのうち since(本番を始めた時刻)以降の行を、送れた・送れたか確かめる・フォームで送る(自動挿入) に数える。
     1社につき数えるのは最後の1行だけ(押す直前に「送信試行」を書き、そのあと「送信済み」を書くので、全部の行を数えると送れた会社が「確かめる」にも入る。
     陽性対照: test_send_counts_count_each_company_once_by_its_last_row)"""
     out = {"sent": 0, "check": 0, "manual": 0}
@@ -1200,7 +1200,7 @@ class H(BaseHTTPRequestHandler):
                 return self.send(502, {"error": str(e)})
         if u.path == "/api/manual_kit":
             return self.manual_kit(q, ng_store)
-        if u.path == "/api/manual_draft":  # 「自分で送る」の前に、その会社に届く件名と本文(フォームに入る文)を見せる。通信しない
+        if u.path == "/api/manual_draft":  # 「フォームで送る(自動挿入)」の前に、その会社に届く件名と本文(フォームに入る文)を見せる。通信しない
             p, err = list_or_error(q.get("file", ""))
             if err:
                 return self.send(*err)
@@ -1454,7 +1454,7 @@ class H(BaseHTTPRequestHandler):
             shown = "\n".join("・" + n for n in names[:10]) + (f"\n ほか {len(names) - 10} 社" if len(names) > 10 else "")
             what_ = "メールアドレス" if PREVIEW.get("channel") == "mail" else "問い合わせフォーム"
             body = ("次の %d 社の%sに、画面に表示した文面を送ります。\n%s\n\n送信元: %s %s\n送信元のメール: %s\n"
-                    "送らない会社: %d 社(理由は画面に出ています)\n入力がうまくいかなかったフォームは送信ボタンを押さず、「自分で送る会社」に回します(数は送り終えたあとに出ます)\n"
+                    "送らない会社: %d 社(理由は画面に出ています)\n入力がうまくいかなかったフォームは送信ボタンを押さず、「フォームで送る会社」に回します(数は送り終えたあとに出ます)\n"
                     "確認番号: %s\n\n画面で届く文を読んでいない場合は「いいえ」を押してください。\n「はい」で承認します。承認は1回の送信で使い切ります。"
                     % (len(names), what_, shown, sender.get("会社名", ""), sender.get("氏名", ""), sender.get("メール", ""), skipped_n, short_key(key_now[-1])))
             if PREVIEW.get("channel") == "mail":
@@ -1557,14 +1557,14 @@ class H(BaseHTTPRequestHandler):
                 return self.send(*err)
             name = str(d.get("name", "")).strip()
             if not name:
-                return self.send(400, {"error": "自分で送る会社を選んでください"})
+                return self.send(400, {"error": "フォームで送る会社を選んでください"})
             probs = send_rules.sender_problems(read_sender())
             if probs:
                 return self.send(400, problem_error(probs))
             import autosend
             _row, _bodies, problem = autosend.manual_precheck(str(p), str(SENDER), str(MSG), name)  # 始める前に、書き出し空欄・フォームURLなしを確かめる(ジョブを走らせて終了コードだけ見せない)
             if problem:
-                return self.send(400, {"error": f"「{name}」の「自分で送る」は始められません。理由: {problem[0]}。直し方: {problem[1]}", "field": LIST_FIELD, "fix": "list"})
+                return self.send(400, {"error": f"「{name}」の「フォームで送る(自動挿入)」は始められません。理由: {problem[0]}。直し方: {problem[1]}", "field": LIST_FIELD, "fix": "list"})
             return self.send(200, {"started": run_job("手動入力", ["autosend.py", str(p), "--sender", str(SENDER), "--message", str(MSG), "--manual-company", name])})
         if self.path == "/api/send/dismiss":  # 送り終えた表示(s7)を閉じて、次の送る準備(s3)へ。送信の記録は消さない
             SEND_INFO["dismissed"] = True

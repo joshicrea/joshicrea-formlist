@@ -813,7 +813,7 @@ def fill_form(page, sender, message, skipped=None):
                 el.fill(value or "")
             except Exception:
                 pass
-        return _cannot(why + "。送信ボタンは押さず、自分で送る会社へ回します" if skipped is None else why + "(手で直してください)") if why else None
+        return _cannot(why + "。送信ボタンは押さず、フォームで送る会社へ回します" if skipped is None else why + "(手で直してください)") if why else None
 
     generic = []  # 欄の名前だけで割り当てた項目(同じ項目が2欄以上に入るなら、分割欄で誤入力の恐れ)
     used_guess = False
@@ -963,7 +963,7 @@ def prefill_manual(url, sender, message):
 
 
 def manual_precheck(csv_path, sender_path, message_path, company_name):
-    """「自分で送る」を始める前の確認(通信しない)。戻り値: (row, bodies, 問題)。問題は (理由, 直し方) か None。
+    """「フォームで送る(自動挿入)」を始める前の確認(通信しない)。戻り値: (row, bodies, 問題)。問題は (理由, 直し方) か None。
     画面の入口(/api/manual)と manual_prefill_company が同じ確認を使う(始める前に理由と直し方を返すため)"""
     sender = json.loads(Path(sender_path).read_text(encoding="utf-8-sig"))
     with open(csv_path, encoding="utf-8-sig", newline="") as f:

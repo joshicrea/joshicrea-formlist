@@ -1,10 +1,10 @@
 {
- "version": "167f1209d6fd",
+ "version": "a750e237eca2",
  "files": {
-  "app.py": "d746db77dbc596b177f9f50a14c5c25f6a30ab3a98fd1bef977386b917d5e444",
-  "ui.html": "d853c0484b76024adc8fb4e2c16a1e8c105779d6762207cb9f3299744d4e9b64",
+  "app.py": "0acdf737e2b8c9a43a45302dc835019f853104627089402411485c1ce2e0ff15",
+  "ui.html": "b9604a3b4e756e70a704e2875bddcf1c844074a743cbe1880d1bf05256e01776",
   "approval.py": "0b4a4908efedd041f50655ccc209f8fc0f433bd3c8c51788928fb0bcd0b07f2a",
-  "autosend.py": "bb303d550b7613a276feec2f4c0fc14d29c3018d38c8d405f01a45a5f7cf1da4",
+  "autosend.py": "4f7a168ff6c15678971c1e24f584a3d23f23c7af1488ee9d30b18ba95eb5e1ee",
   "channel_choice.py": "be644c15fc234a674c8315f1d191cda50e22c3f2b0e6f63e95c34966b5e70889",
   "filelock.py": "47c41ed1e3d231198a278e13fe30ca3146eca5bb6f163f8242b7b63529221eea",
   "form_kind.py": "a3a3da8645d200cda3422b507e3f526c02fe7784fd3935c47bd404d2e4ac0861",
@@ -16,7 +16,7 @@
   "limited_http_budget.py": "229b0b36fcec3af27c287f405b79ece1ca4a912b35b936467e5ede6d0e87e0f3",
   "mail_channel.py": "2c933418cc2162c0903a00d8d29916749f49bcd92a95d4423f65e88d859950a3",
   "map_browser_source.py": "d5237ebc58ea8c05d004f2c0656fa358d25554ebbee8076c84c0f9dc604baeb5",
-  "mcp_server.py": "a8d1636fb4ef6f62ec41f4c868f693a0a0662f8a7a99cf304026c98188910d74",
+  "mcp_server.py": "b85cc8a32d298f6dd8c1d419eee75f3051caae35725546fad389aa7510c07079",
   "mcp_register.py": "5de5a19bc3cfaae46ce8296bd48571182a2f72710751e07bd244090be8a4fddc",
   "message_adoption.py": "502dd4c6ac1f68f969e272728be73b1d022f76dfc66d1973f8e94189cc03e9fe",
   "netguard.py": "980fd728eb766e268fbe16b82d5fc3df38ceddb68c4526102d17d631e1e27798",
