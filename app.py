@@ -54,6 +54,7 @@ OPENER_COL = "書き出しの作り方"  # リストの列。画面はこの値�
 BASIS_COL, BASIS_URL_COL, BASIS_WHY_COL = "書き出しの根拠", "根拠URL", "根拠が拾えなかった理由"  # リストの列。根拠の文・取得元・拾えなかった理由(人が後から確かめられるように残す)
 OPENER_SOURCES = {"philosophy": "ホームページの特徴と文面の提案から作った下書き",
                   "title": "ホームページの題から作った下書き", "general": "会社名と業種から作った下書き",  # 旧版が作った行の表示用。いまは新しく作らない
+                  "fallback": "書き出しは自動の下書き(ホームページから特徴が取れなかったため、業種の文面に沿った型を入れています。直せます)",
                   "ai": "AI(Claude)が書き直した下書き", "person": "あなたが直した書き出し"}
 _SOURCE_OF = {v: k for k, v in OPENER_SOURCES.items()}
 
@@ -68,7 +69,10 @@ def opener_draft_for(overview="", industry="", basis="", template=None, taken=()
         except OSError:
             template = ""
     d = philosophy.opener_from_basis(basis, template, taken)  # taken=他の会社の書き出し。2文とも同じ行を作らない
-    return (d, "philosophy") if d else ("", "")
+    if d:
+        return d, "philosophy"
+    d = philosophy.fallback_opener(template)  # 前提が取れない会社も、空欄で止めずに自動の下書きを入れる(印で分かる)
+    return (d, "fallback") if d else ("", "")
 
 
 def opener_why(row):
@@ -667,7 +671,7 @@ def fill_drafts(p, supp, store=None):
             if (r.get("企業名", ""), r.get("問い合わせフォームURL 無ければメール", "")) in want and not (r.get("書き出し") or "").strip() and needs(r.get("業種", "")):
                 d, src = opener_draft_for(industry=r.get("業種", ""), basis=r.get(BASIS_COL, ""), taken={(x.get("書き出し") or "").strip() for x in rows})
                 if not d:
-                    continue  # 根拠が拾えなかった会社は、題や業種で埋めずに空のまま(理由は画面が言う)
+                    continue  # 送る文面に提案語が無く自動の下書きも作れない会社だけが空のまま
                 r["書き出し"], r[OPENER_COL] = d, OPENER_SOURCES[src]
                 n += 1
         if n:

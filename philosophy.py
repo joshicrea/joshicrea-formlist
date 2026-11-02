@@ -266,6 +266,20 @@ def opener_traces(basis, template=""):
             break  # 同じ前提の2つ目以降の語は同じ第1文を作りやすいので、前提ごとに最初の語だけ
 
 
+FALLBACK_FIRST = "御社に、新しいお客様との接点を増やす施策をご提案したく、ご連絡しました。"
+FALLBACK_SECOND = "{phrase}を開催し、お店を訪れる、もうひとつの理由になり、新しいお客様との出会いが生まれます。"  # 企業向け提案書のスライド6(店舗への来店促進)・スライド3の01と08の言葉
+
+
+def fallback_opener(template=""):
+    """ホームページから前提が取れない会社に入れる、業種の文面に沿った自動の下書き(書き出しを空欄にして送れなくしないため)。
+    会社の特徴は言えないので、第1文は施策の提案だけにする。第2文は送る文面にある提案語(無ければ「本物のお花を使った催し」)で、提案書の言葉(スライド6・3の01と08)で言い切る。
+    方向検査(時間を舞台にしない・3目的のどれかを言い切る)は通す。画面では「書き出しは自動の下書き」と分かる印を付ける"""
+    found = proposal_phrases(template, PROPOSAL_TERMS, strict=True)
+    phrase = found[0][1] if found else "本物のお花を使った催し"
+    out = FALLBACK_FIRST + FALLBACK_SECOND.format(phrase=phrase)
+    return out if valid_opener(out) else ""
+
+
 def opener_variants(basis, template=""):
     for out, _t in opener_traces(basis, template):
         yield out

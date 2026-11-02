@@ -131,6 +131,10 @@ def prepare_message_plan(todo, message_path, sender):
         try:
             row, template, local_sender = message_adoption.resolve_row(row, message_path, sender, pick_message)
             name, url, industry, opener, _hp = row
+            if "{書き出し}" in template and not (opener or "").strip():  # 空欄を理由に送れなくしない。業種の文面に沿った自動の下書きを入れる(画面では下書きの印が付く)
+                import philosophy
+                opener = philosophy.fallback_opener(template)
+                row = (name, url, industry, opener, _hp)
             body = render(template, name, opener, local_sender)
             message_adoption.validate_body(name, url, body, sender)
         except (EmptyOpenerError, message_adoption.AdoptionError) as exc:
