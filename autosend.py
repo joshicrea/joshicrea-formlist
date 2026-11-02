@@ -774,9 +774,8 @@ def neutral_option(el):
 
 
 def split_name_guess(full):
-    """区切りの無い氏名を姓と名に分ける。漢字・かなだけの4文字は、姓2文字・名2文字(最も多い形)に分ける。それ以外(3文字・5文字・英字)は推測せず None"""
-    s = re.sub(r"[ 　]+", "", full or "")
-    return [s[:2], s[2:]] if re.fullmatch(r"[一-鿿々ぁ-ゖァ-ヶー]{4}", s) else None
+    """区切りの無い氏名は分けない(常に None)。埋められない項目は推測で入れず、空のまま手動の経路へ回して理由を出す(2026-11-02 の方針)"""
+    return None
 
 
 def fill_form(page, sender, message, skipped=None):
