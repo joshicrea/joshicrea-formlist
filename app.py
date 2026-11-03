@@ -374,7 +374,7 @@ def ensure_ng_migrated(store, src=None):
             raise RuntimeError(f"送らない会社の移行が途中の状態です({status})。手で確かめてください")
         store.sync_legacy_txt(src)
     except Exception as e:
-        NG_MIGRATION["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        NG_MIGRATION["error"] = f"{type(e).__name__}: {str(e)}"
     return NG_MIGRATION["error"]
 
 
@@ -385,7 +385,7 @@ def sync_ng_txt(store):
     try:
         store.sync_legacy_txt(ng_list.FILE)
     except Exception as e:
-        NG_MIGRATION["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        NG_MIGRATION["error"] = f"{type(e).__name__}: {str(e)}"
 
 
 NGMARK = "画面で「送らない」"
@@ -1260,6 +1260,8 @@ class H(BaseHTTPRequestHandler):
                 args += ["--ng-state-db", str(ng_store.db_path)]
             if d.get("resume_checks"):
                 args.append("--resume-checks")
+            if d.get("restart_search"):  # 画面の「最初からやり直す」。付けなければ、同じエリア・業種は前回の続きから集める(探索履歴)
+                args.append("--restart-search")
             if d.get("official_research"):
                 args.append("--official-research")
             if d.get("include_large") is False:  # 既定は含める。画面で「大手・チェーンも含める」を外したときだけ外す

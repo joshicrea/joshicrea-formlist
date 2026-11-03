@@ -697,7 +697,7 @@ class NgStateStore:
                 c.execute("ROLLBACK")
             except sqlite3.Error:
                 pass
-            return False, ("スキップ", "NG移行状態を確認できないため送らない: " + str(e)[:80])
+            return False, ("スキップ", "NG移行状態を確認できないため送らない: " + str(e))
         finally:
             c.close()
 
@@ -729,7 +729,7 @@ class NgStateStore:
             finally:
                 c.close()
         except sqlite3.Error as e:
-            return "migration", "NG移行状態を確認できないため送らない: " + str(e)[:80]
+            return "migration", "NG移行状態を確認できないため送らない: " + str(e)
         if status != CANONICAL:
             return "migration", "NG移行状態がcanonicalではないため送らない: " + status
         if self.is_ng(urls):

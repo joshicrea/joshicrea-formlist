@@ -25,6 +25,7 @@ from openpyxl.styles import Font, PatternFill
 
 import google_places_text_source
 import hp_finder
+import search_history
 import hp_verify
 from limited_http_budget import HttpBudgetExceeded
 import size_guess
@@ -1354,8 +1355,14 @@ def main(budget=None):
         return _main(budget)
     except BaseException as e:
         if not isinstance(e, SystemExit):
-            write_run_summary("failed", error=f"{type(e).__name__}: {str(e)[:200]}")
+            write_run_summary("failed", error=f"{type(e).__name__}: {str(e)}")
         raise
+
+
+def history_company_key(r):
+    """探索履歴で「同じ会社」を見分ける鍵(文字列)。場所の識別子かホームページの鍵があればそれ、無ければ名前+URL"""
+    k = store_identity_key(r)
+    return repr(k) if k else "name|" + str(r.get("name", "")) + "|" + str(r.get("url", ""))
 
 
 def _main(budget=None):
@@ -1377,6 +1384,7 @@ def _main(budget=None):
     ap.add_argument("--exclude-large", action="store_true", help="大手・チェーンと推定した会社を外す(既定は含める)")
     ap.add_argument("--ng", help="送らない会社のドメイン一覧(1行1件のTXT/CSV)。既存客・競合を入れる")
     ap.add_argument("--ng-state-db", help="SQLite DB for NG and send-state gating")
+    ap.add_argument("--restart-search", action="store_true", help="同じエリア・業種の探索履歴(前回どこまで探し、どの会社を調べたか)を捨てて、最初から集め直す。付けなければ前回の続きから集める")
     ap.add_argument("--resume-checks", action="store_true", help="サイト確認結果を既存SQLiteに保存し、途中停止後に行単位で再開する")
     ap.add_argument("--check-retry-limit", type=int, default=2, help="--resume-checks 時の取得再試行上限")
     ap.add_argument("--official-research", action="store_true", help="SNS/portal/no-contact URLs are re-searched for an official HP, then checked again")
@@ -1395,6 +1403,8 @@ def _main(budget=None):
     if count_note:
         log(f"[件数] {count_note}")
     cache = {}  # 調べ終えた会社(行の識別子 -> 調べた行)。小分けの途中で調べた分を、最後の出力まで持ち越す
+    hist_key, hist_prev, hist_state = "", None, {}  # 探索履歴(Googleマップで探す回だけ使う。hist_state は集める段階の進み具合)
+    hist_carry = 0  # 前回の送れる会社のうち、今回の目標から引いた数
     sendable = 0
 
     if a.source and "google_places_text" in a.source:
@@ -1453,6 +1463,27 @@ def _main(budget=None):
             log(f"\nGoogleマップは、同時に動いていた別の検索がGoogleに止められたため、{until[11:16]}ごろまで使いません。時間をおいて探し直してください")
         use_google = "google" in (a.source or ["google"]) and not until
         n_all = _google_job_count(area, units) if use_google else 0
+        # 探索履歴: 同じエリア×業種は前回の続きから集める(最初からは --restart-search)。出力数の数え方は変えない
+        hist_key = search_history.group_key(a.area, inds, a.keyword) if use_google else ""
+        hist_prev, hist_plan = None, search_history.resume_plan(None, n_all, a.limit)
+        if hist_key:
+            try:
+                if a.restart_search:
+                    search_history.forget(OUT_DIR, hist_key)
+                    log("[続き] 「最初からやり直す」が指定されたので、前回までの探索履歴を捨てて、最初から集めます")
+                else:
+                    hist_prev = search_history.load(OUT_DIR, hist_key)
+                    hist_plan = search_history.resume_plan(hist_prev, n_all, a.limit)
+            except Exception as e:  # 履歴が読めなくても探せる。最初から集める
+                log(f"（探索履歴を読めませんでした。最初から集めます: {e!r}）")
+                hist_prev, hist_plan = None, search_history.resume_plan(None, n_all, a.limit)
+        if hist_plan["note"]:
+            log(f"[続き] {hist_plan['note']}")
+            RUN_STATS["resumed_from_history"] = True
+        if hist_plan["carry"]:
+            hist_carry = hist_plan["carry"]
+            a.limit = max(1, a.limit - hist_carry)  # 前回の分と合わせて目標に届く(今回の目標=残り)
+        hist_new = {}  # 今回調べた会社 {鍵: sendable|excluded}
 
         def collect(pre, rnd):
             """この回のGoogleマップの結果(と、最初の回は地図データ osm)から、候補の行を作る"""
@@ -1533,17 +1564,27 @@ def _main(budget=None):
         if use_google:
             log(f"\n目標: 送れる会社（問い合わせフォームかメールアドレスが見つかった会社）{a.limit}社。候補は最大{a.fetch_limit}件まで集めて調べます。"
                 f"検索は全部で{n_all}件あり、目標まであと何社かに合わせて、少しずつ探しては調べるを繰り返します")
-        pos, rnd, state_g = 0, 0, {}
+        pos, rnd, state_g = hist_plan["start"], 0, {}
+        round_start = pos  # 最後に始めた回の開始位置(調べ残しがあるとき、履歴の「終えた検索」をここへ戻す)
         while True:
             pre = {}
             if use_google and pos < n_all and "google" not in blocked:
                 rp = plan.round_plan(a.limit - sendable, a.parallel, n_all - pos)
                 pre = prefetch_google(area, units, a.limit, rp["workers"], block_check=google_block_active, stop_check=stop_requested,
                                       fetch_limit=a.fetch_limit, job_range=(pos, pos + rp["searches"]), read_limit=rp["read_limit"], state=state_g)
+                round_start = pos
                 pos += rp["searches"]
-            rows += collect(pre, rnd)
+            got_rows = collect(pre, rnd)
+            if hist_plan["skip"]:  # 前回までに調べた会社(出した会社も対象外になった会社も)は、もう一度調べない
+                kept_rows = [r for r in got_rows if history_company_key(r) not in hist_plan["skip"]]
+                if len(kept_rows) != len(got_rows):
+                    RUN_STATS["history_skipped"] = RUN_STATS.get("history_skipped", 0) + len(got_rows) - len(kept_rows)
+                    log(f"  前回までに調べた会社 {len(got_rows) - len(kept_rows)}社を除きました")
+                got_rows = kept_rows
+            rows += got_rows
             rnd += 1
             sendable, _left = check_step(rows, a, ng_store, budget, cache)
+            hist_state.update(pos=pos, left=_left, round_start=round_start, n_all=n_all)
             if (sendable >= a.limit or not use_google or "google" in blocked or stop_requested() or pos >= n_all
                     or state_g.get("auto_stop") or state_g.get("budget_stop")):
                 break
@@ -1646,11 +1687,22 @@ def _main(budget=None):
     else:
         why = "止める指示で止めたため" if stop_requested() else ("候補を集める上限（検索する数の上限）に達したため" if (RUN_STATS.get("auto_stopped_budget") or fetched >= a.fetch_limit) else "探せる範囲の候補を調べ尽くしたため")
         log(f"\n送れる会社は{reached}社で、目標の{a.limit}社には届きませんでした（{why}）。検索する数の上限を増やすか、場所・業種を広げて探し直してください")
+    if hist_key and hist_state:  # 探索履歴を保存する。調べ済み=出力した会社+対象外になった会社(目標数で切り捨てた送れる会社は次回に拾えるよう入れない)
+        try:
+            newly = {history_company_key(c): "excluded" for c in cache.values() if not is_sendable_row(c, ng_store)}
+            newly.update({history_company_key(r): "sendable" for r in checked if is_sendable_row(r, ng_store)})
+            jobs_done = hist_state["round_start"] if hist_state["left"] > 0 else hist_state["pos"]  # 調べ残しがあれば、その回の検索をもう一度やる
+            search_history.save(OUT_DIR, hist_key, search_history.make_entry(
+                hist_prev, jobs_done, hist_state["n_all"], newly, hist_carry + reached, reached >= a.limit))
+        except Exception as e:  # 履歴が書けなくても、探した結果は壊さない
+            log(f"（探索履歴を保存できませんでした。次回は最初から集めます: {e!r}）")
     failed_some = RUN_STATS.get("fetch_failed", 0) > 0 or bool(blocked)
     outcome = "stopped" if RUN_STATS.get("not_checked_stopped") or stop_requested() else ("partial" if failed_some else "ok")
     write_run_summary(outcome, area=a.area, fetched=fetched, checked=len(checked), no_url=len(no_url),
                       dropped_other_company=len(dropped), refused=len(refused), blocked=sorted(blocked), list_file=Path(c).name,
                       not_checked_stopped=RUN_STATS.get("not_checked_stopped", 0),
+                      history_resumed=bool(RUN_STATS.get("resumed_from_history")), history_skipped=RUN_STATS.get("history_skipped", 0),
+                      history_prev_checked=len((hist_prev or {}).get("checked") or {}), history_carry=hist_carry,
                       funnel=build_funnel(fetched, no_url_first, len(deduped_before_limit), large_excluded, cut, len(targets), len(dropped), len(refused), checked))
     return 0
 

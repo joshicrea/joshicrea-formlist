@@ -206,7 +206,7 @@ def fail_check(url, company, error, lease_id=None, variant=""):
     try:
         n = c.execute("""UPDATE check_results SET company=?, status=?, last_error=?, updated=?
             WHERE key=? AND status=? AND lease_id=?""",
-                      (company, CHECK_FAILED, str(error)[:200], time.time(), key, CHECK_RUNNING, lease_id)).rowcount
+                      (company, CHECK_FAILED, str(error), time.time(), key, CHECK_RUNNING, lease_id)).rowcount
         return n == 1
     finally:
         c.close()
