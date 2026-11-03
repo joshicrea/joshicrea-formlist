@@ -78,6 +78,7 @@ th{color:var(--mut);font-size:14px;position:sticky;top:0;background:var(--bg);z-
 .zone .lock{margin:0 0 8px;font-weight:700;color:var(--danger-ink)}.zone.off{border:1px dashed var(--line);background:var(--bg)}.zone.off .lock{color:var(--mut)}
 .aibox{margin-top:16px;border:1px solid var(--line);border-radius:12px;padding:14px 18px;background:var(--bg)}.aibox h4{margin:0;font-size:16px}
 .msgbody{white-space:pre-wrap;font-size:16px;color:var(--ink);background:var(--bg);border-radius:8px;padding:10px 12px;margin-top:6px}
+.fullbox,.fullrow .msgbody{height:20em;overflow:auto;border:1px solid var(--line,#c9c9c9);border-radius:8px;padding:10px 12px;background:var(--bg);font:inherit;font-size:16px;line-height:1.6}
 .w-bad{color:var(--danger-ink);font-weight:700}.w-note{color:var(--warn-ink)}
 @media(max-width:640px){
  .hd{padding-top:12px}nav{display:grid;grid-template-columns:1fr 1fr;gap:0}nav button{padding:8px 6px;justify-content:center}
@@ -191,6 +192,7 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
    <p class="hint"><label><input type="checkbox" id="expandOn"> 業種ごとの文面を使う</label> <button type="button" id="expandMake">基本の文面から、業種ごとの文面を作る</button></p>
    <label for="mind">どの業種の文面か</label><select id="mind"></select>
    <p class="hint" id="mstate"></p><p class="ferr" id="mprob" hidden></p>
+   <div id="msubjRow" hidden><label for="msubj">この業種の件名（本文と同じ画面で直せます）</label><input type="text" id="msubj" autocomplete="off"><p class="hint">空にすると、初期の件名に戻ります。相手の会社名は {企業名} の位置に自動で入ります。</p></div>
    <p class="hint" id="mwhere"></p>
    <div class="autobox"><p class="ah">自動で入る部分</p>
     <div class="arow" id="greetRow"><span class="al">宛名</span><span id="greetView"></span> <button class="lnk" id="greetToggle" type="button"></button></div>
@@ -299,7 +301,7 @@ async function loadRes(){const f=$('#files').value;if(!f){$('#res').innerHTML='<
   return `<tr><td>${RTAB=='mail'?`<label style="display:flex;gap:6px;align-items:center;font-weight:400"><input type="checkbox" class="mailChk" data-n="${esc(r._key||r['企業名'])}"${MAILSEL.has(r._key||r['企業名'])?' checked':''}>この会社に送る</label>`:''}<b>${esc(r['企業名'])}</b><div class="why">${esc(r['業種'])}</div>${mailCell(r,i)}<details class="dt"><summary>くわしく</summary><div>取得元: ${esc(r['取得元'])}<br>メール: ${esc(mail||'なし')}<br>メモ: ${esc(plain(r['判定メモ']))||'なし'}</div></details></td><td>${tag(v.t,v.k)}${v.why&&wc[v.why]==1?`<div class="why">${esc(v.why)}</div>`:''}</td><td>${lk(r['HP URL'],'ホームページを開く')}<br>${lk(form,'フォームを開く')}</td><td><button class="btn sub sm ngb" data-i="${i}" type="button">送らない</button>${form&&/^https?:/.test(form)?`<br><button class="btn sub sm manb" data-i="${i}" type="button" style="margin-top:6px" title="フォームを開き、入れられる欄だけ自動で入れます。送信ボタンは押しません">フォームで送る(自動挿入)</button><details class="dt manDraft" data-i="${i}"><summary>届く件名と本文を見る</summary><div class="manDraftBody">開くと表示します。</div></details>`:''}</td></tr>`}).join(''):'<tr><td colspan="4">表示できる会社がありません。上の、フォームがある会社だけ表示、を外すと、ほかの会社も見えます。</td></tr>');
  document.querySelectorAll('.manb').forEach(b=>b.onclick=async()=>{const x=rows[+b.dataset.i].r;if(!confirm(x['企業名']+' のフォームを別の画面で開き、入れられる欄だけ自動で入れます。\n送信ボタンは押しません。中身を確かめて、ご自分で送ってください。よろしいですか'))return;MAN={busy:true,name:x['企業名'],i:+b.dataset.i,final:null};manPaint(JOB);let r;try{r=await post('/api/manual',{file:$('#files').value,name:x['企業名']})}catch(e){r={error:'ツールに届きませんでした。ツールが動いているか確かめてください'}}if(r.error){MAN={busy:false,final:{busy:false,kind:'ng',text:r.error}};manPaint(JOB);return resNote(r.error)}if(!r.started){MAN={busy:false};manPaint(JOB);resNote('いまほかの処理が動いています。終わってから押します')}else{wasRun=true;poll()}});manPaint(JOB);
  document.querySelectorAll('.manDraft').forEach(d=>d.ontoggle=async()=>{if(!d.open)return;const box=d.querySelector('.manDraftBody');box.textContent='作っています…';const x=rows[+d.dataset.i].r;let p;try{p=await J('/api/manual_draft?file='+encodeURIComponent($('#files').value)+'&name='+encodeURIComponent(x['企業名']))}catch(e){box.textContent='ツールに届きませんでした。ツールが動いているか確かめてください';return}
-  box.innerHTML=p.error?esc(p.error):`${p.adoption_diff?`<div class="why">【採用との違い】${esc(p.adoption_diff)}</div>`:''}<div>件名: ${esc(p.subject)}</div><pre style="white-space:pre-wrap;margin:6px 0">${esc(p.message)}</pre><div class="why">フォームに入る文です。送るのはご自分の手で、確かめてからです。</div>`});
+  box.innerHTML=p.error?esc(p.error):`${p.adoption_diff?`<div class="why">【採用との違い】${esc(p.adoption_diff)}</div>`:''}<div>件名: ${esc(p.subject)}</div><pre class="fullbox" tabindex="0" aria-label="届く本文の全文" style="white-space:pre-wrap;margin:6px 0">${esc(p.message)}</pre><div class="why">フォームに入る文です。送るのはご自分の手で、確かめてからです。</div>`});
  document.querySelectorAll('.ngb').forEach(b=>b.onclick=async()=>{const x=rows[+b.dataset.i].r;const form=x['問い合わせフォームURL 無ければメール']||'';
   const hostOf=v=>{try{return new URL(v).hostname.replace(/^www\./,'')}catch(e){return ''}};const host=hostOf(x['HP URL']||'');
   const same=host?RESROWS.filter(y=>y!==x&&hostOf(y['HP URL']||'')==host).map(y=>y['企業名']):[];
@@ -336,7 +338,7 @@ function mailCell(r,i){if(!MAILST.available||!r._mail)return '';
 async function mailDraft(box,name){const d=box.querySelector('.mailDraft');d.textContent='作っています…';
  const p=await J('/api/mail/plan?file='+encodeURIComponent($('#files').value)+'&draft=1&only='+encodeURIComponent(name));
  if(p.error){d.innerHTML=errHtml(p);return}
- const it=(p.sendable||[])[0];d.innerHTML=it?`<div>宛先: ${esc(it.addr)}</div><div>件名: ${esc(it.subject)}</div><pre style="white-space:pre-wrap;margin:6px 0">${esc(it.text)}</pre><div class="why">これは文面の見本です。送るときは、もう一度この全文を確かめます。</div>`:`<div>この会社の文面は作れませんでした。理由: ${esc(((p.skipped||[])[0]||{}).text||'対象外です')}</div>`}
+ const it=(p.sendable||[])[0];d.innerHTML=it?`<div>宛先: ${esc(it.addr)}</div><div>件名: ${esc(it.subject)}</div><pre class="fullbox" tabindex="0" aria-label="届く本文の全文" style="white-space:pre-wrap;margin:6px 0">${esc(it.text)}</pre><div class="why">これは文面の見本です。送るときは、もう一度この全文を確かめます。</div>`:`<div>この会社の文面は作れませんでした。理由: ${esc(((p.skipped||[])[0]||{}).text||'対象外です')}</div>`}
 async function mailChoose(r,channel){const x=await post('/api/choice',{name:r['企業名'],hp:r['HP URL']||'',channel});if(x.error)return resNote(x.error);loadRes()}
 async function mailFlow(names){if(!MAILST.available)return;
  if(!MAILST.configured)return openMailSet('メール送信の設定が足りません('+((MAILST.missing||[]).join('・')||'入力の形')+')。入れてから、もう一度押します。');
@@ -347,7 +349,7 @@ async function mailFlow(names){if(!MAILST.available)return;
  for(let k=0;k<120;k++){await new Promise(x=>setTimeout(x,1000));plan=await J('/api/mail/plan?file='+encodeURIComponent(f)+q);if(plan.error){mailPanel('');return resNote(plan.error)}if(plan.key_short)break}
  if(!plan||!plan.key_short){mailPanel('');return resNote('送る内容を作れませんでした。もう一度押します。')}
  MAILFLOW={names,key:plan.key_short};const who=plan.identity;
- const items=(plan.sendable||[]).map(it=>`<details class="dt" ${plan.sendable.length==1?'open':''}><summary><b>${esc(it.name)}</b> ${esc(it.addr)}</summary><div>件名: ${esc(it.subject)}<pre style="white-space:pre-wrap;margin:6px 0">${esc(it.text)}</pre></div></details>`).join('');
+ const items=(plan.sendable||[]).map(it=>`<details class="dt" ${plan.sendable.length==1?'open':''}><summary><b>${esc(it.name)}</b> ${esc(it.addr)}</summary><div>件名: ${esc(it.subject)}<pre class="fullbox" tabindex="0" aria-label="届く本文の全文" style="white-space:pre-wrap;margin:6px 0">${esc(it.text)}</pre></div></details>`).join('');
  const sk=(plan.skipped||[]).length?`<p class="why">送らない会社 ${plan.skipped.length}社: ${(plan.skipped||[]).slice(0,5).map(s=>esc(s.name+'('+s.text+')')).join('、')}</p>`:'';
  mailPanel(`<h3 class="eh">メールで送る内容(${(plan.sendable||[]).length}社)</h3><p class="why">送信元: ${who?esc((who.from_name||'')+' <'+who.from_addr+'> / '+who.host+':'+who.port):'未設定'}</p>${items}${sk}<label class="check" style="margin:10px 0"><input type="checkbox" id="mailRead"><span>届く件名と本文を、全部読みました</span></label><div class="actions"><button class="btn" id="mailSend" type="button" disabled>この内容で送る(画面の外に確認が出ます)</button> <button class="lnk" id="mailCancel" type="button">やめる</button></div><p class="why" id="mailSendNote" role="status" aria-live="polite"></p>`);
  $('#mailRead').onchange=()=>{$('#mailSend').disabled=!$('#mailRead').checked};
@@ -501,6 +503,7 @@ function showMsg(){const k=S.msgInd=$('#mind').value,mi=META.message_info||{orph
  $('#mstate').textContent=k=='default'?'':o?'古い業種名で作った文面です。いまの業種の分類にこの名前は無いので、送るときには使われません。':own?'この業種には、業種ごとの文面を使います。':'この業種には、基本の文面を使います。直して保存すると、この業種だけの文面になります。';
  const mp=msgProbs().filter(p=>(p.industry||'default')==k);const bt=($('#now_c')&&$('#now_c').textContent)||'',mt=mp.map(p=>p.text).filter(t=>!bt.includes(t));$('#mprob').hidden=!mt.length&&S.parts.ok;$('#mprob').textContent=mt.join(' ')+(S.parts.ok?'':' 自動で入る部分の位置が、ほかの文面と違います。印のところは送るときに置き換わります。');
  $('#delMsg').hidden=!(own&&(META.messages||{})[k]!=null);$('#moveMsg').hidden=!(o&&o.to);$('#moveMsg').textContent=o&&o.to?`この文面を ${o.to} の文面にコピーする`:'';
+ const sj=(mi.subjects||{})[k];$('#msubjRow').hidden=sj==null||k=='default';$('#msubj').value=sj||'';S.subj0=sj||'';
  renderAuto();renderSample()}
 function renderAuto(){const p=S.parts||{};show('#greetRow',!!p.ok);show('#openRow',!!p.ok);
  $('#greetView').innerHTML=S.greet?chips(p.greetLine||'{企業名} ご担当者さま'):'<span class="mut">宛名の行は入れません</span>';$('#greetToggle').textContent=S.greet?'この行を入れない':'宛名の行を入れる';
@@ -515,7 +518,9 @@ $('#mind').onchange=()=>{$('#msgSaved').textContent='';showMsg()};
 $('#greetToggle').onclick=()=>{S.greet=!S.greet;renderAuto()};
 $('#toSender').onclick=()=>{S.editMsg=false;S.editSender=true;renderSend();const e=$('#s_会社名');if(e){e.scrollIntoView({block:'center'});e.focus()}};
 $('#msgClose').onclick=()=>{S.editMsg=false;renderSend()};
-async function saveMsg(){S.err='';const k=S.msgInd,before=sState();const r=await post('/api/message',{[k]:assemble()});
+async function saveMsg(){S.err='';const k=S.msgInd,before=sState();
+ if(!$('#msubjRow').hidden&&$('#msubj').value.trim()!==S.subj0){const rs=await post('/api/message/subject',{industry:k,subject:$('#msubj').value});if(rs.error){$('#mprob').hidden=false;$('#mprob').innerHTML=errHtml(rs);S.err=errHtml(rs);renderSend();return}}
+ const r=await post('/api/message',{[k]:assemble()});
  if(r.error){$('#mprob').hidden=false;$('#mprob').innerHTML=errHtml(r);S.err=errHtml(r);renderSend();return}
  await refreshMeta(true);S.flash=(before=='s4'||before=='s5')?'文面を直したので、もう一度送る内容を出します。':'文面を保存しました。';$('#msgSaved').textContent='保存しました。';
  renderMsgOptions();showMsg();renderSend()}

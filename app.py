@@ -254,6 +254,7 @@ def message_info():
     mt = max([f.stat().st_mtime for f in MSG.glob("*.txt")] or [0]) if MSG.exists() else 0  # 画面が「文面が変わったか」を見分け、保存先と最終更新を利用者に見せる
     return {"msg_dir": str(MSG), "msg_mtime": time.strftime("%m/%d %H:%M:%S", time.localtime(mt)) if mt else "", "expand_on": not (MSG / autosend.EXPAND_OFF).exists(), "industries": {n: ("専用" if n in have else "標準") for n in names}, "uses": uses,
             "patterns": {n: pat[n] for n in texts}, "pattern_texts": texts,
+            "subjects": {n: patterns.subject_for_industry(n) for n in names if patterns.subject_for_industry(n)},  # 業種の型ごとの件名(文面の画面で同時に直せる)
             "orphans": [{"name": n, "to": industries.LEGACY.get(n, "")} for n in sorted(have) if n != "default" and n not in names and not n.startswith("承認")]}
 
 
@@ -1520,6 +1521,17 @@ class H(BaseHTTPRequestHandler):
             # 見本の文字が残っていても保存はできる(途中で保存したい人のため)。送る内容を出すところで止まる。ここでは何が残っているかを返す
             probs = message_problems({("標準" if k == "default" else k): v for k, v in saved.items()})
             return self.send(200, {"ok": True, "problems": probs, "parts": {k: split_message(v) for k, v in saved.items()}})
+        if self.path == "/api/message/subject":
+            # 業種の型(パターン)ごとの件名を、文面と同じ画面で直す: {"industry": 業種名, "subject": 件名(空なら初期値に戻す)}
+            import patterns
+            ind, subj = str(d.get("industry", "")), str(d.get("subject", "")).strip()
+            n = patterns.pattern_for(ind) if ind in osm_source.INDUSTRY_TAGS else None
+            if not n:
+                return self.send(400, {"error": "この業種には、業種の型ごとの件名がありません（基本の文面の件名は「送信元」の件名です）"})
+            if "\n" in subj or "\r" in subj or len(subj) > 100:
+                return self.send(400, {"error": "件名は、1行・100文字までで入れてください"})
+            patterns.set_subject(n, subj)
+            return self.send(200, {"ok": True, "subject": patterns.subject_for_industry(ind)})
         if self.path == "/api/message/expand":
             # 業種ごとの文面の切り替え(希望者だけ): {"on": true|false} は使う/使わないの印、{"make": true} は標準(原本)を写して、まだ専用の無い業種に専用の文面を作る
             import autosend

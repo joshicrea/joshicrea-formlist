@@ -82,6 +82,23 @@ def subject_for_pattern(number, directory=None):
     return DEFAULT_SUBJECTS.get(number)
 
 
+def set_subject(number, text, directory=None):
+    """パターン番号の件名を 件名.json に保存する(空なら上書きを消して初期値に戻す)。他のパターンの件名は残す"""
+    import json
+    d = Path(directory) if directory else PATTERN_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    try:
+        over = json.loads((d / SUBJECT_FILE).read_text(encoding="utf-8-sig"))
+        over = over if isinstance(over, dict) else {}
+    except (OSError, ValueError):
+        over = {}
+    if str(text or "").strip():
+        over[str(number)] = str(text).strip()
+    else:
+        over.pop(str(number), None)
+    (d / SUBJECT_FILE).write_text(json.dumps(over, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
 def subject_for_industry(industry, directory=None):
     """業種に割り当てたパターンの件名。割り当てが無ければ None(呼び出し側が送り主設定の件名を使う)"""
     n = pattern_for(industry)
