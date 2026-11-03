@@ -122,7 +122,7 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
   <div class="grid-chips" id="inds"></div>
   <label for="kw">3. キーワード（無くても探せます）</label><input id="kw" type="text" placeholder="例 サロン、フラワー、ケアハウス">
   <details class="dt"><summary>キーワードの使い方</summary><div>地図に載っている店名・施設名に含まれる語で探します。事業内容では探せません。スペースか「、」で区切ると、いくつでも入れられます。業種を選ばず、キーワードだけでも探せます。業種とキーワードを両方入れると、両方で探します。キーワードは最大3つずつ同時に探します（同時に探しすぎるとGoogleマップに止められやすいため）。</div></details>
-  <div class="row"><div><label for="limit">4. 出力する会社の数（リストに入れる上限）</label><input id="limit" type="number" value="10" min="1"><p class="hint" id="est"></p></div><div><label for="fetchLimit">5. 検索する数の上限（候補を集める数）</label><input id="fetchLimit" type="number" min="1" value="10"><p class="hint">候補をこの件数まで集めたら、残りの検索はせずにリストを作ります。止まる条件はこの数字だけで、出力する会社の数とは連動しません。</p></div></div>
+  <div class="row"><div><label for="limit">4. 出力する会社の数（送れる会社の目標）</label><input id="limit" type="number" placeholder="10" min="1"><p class="hint">問い合わせフォームかメールアドレスが見つかった会社を、この数そろえるまで、探す・調べるを続けます。空欄なら、右の「検索する数の上限」に合わせます（両方空欄なら10）。</p><p class="hint" id="est"></p></div><div><label for="fetchLimit">5. 検索する数の上限（候補を集めて調べる総量）</label><input id="fetchLimit" type="number" min="1" placeholder="10"><p class="hint">候補を集めて調べる総量の上限です（安全弁）。出力する会社の数がそろわなくても、この数まで調べたら止めます。出力する数より小さいときは、出力する数に合わせて始めます。空欄なら出力する数に合わせます。</p></div></div>
   <label class="check"><input type="checkbox" id="large" checked><span>大手・チェーンの会社も含める<span class="hint d">ふつうは入れたままにします。一人サロンや小さな会社だけにしたいときに外します。自動車販売店・保険代理店・ホテルなど、チェーンの多い業種は、外すと全部が除かれることがあります。</span></span></label>
   <details class="more"><summary>くわしい設定（最初は開かなくて大丈夫です）</summary>
    <label class="check"><input type="checkbox" id="resumeChecks" checked><span>途中で止まっても確認済みの行を再利用する</span></label>
@@ -258,8 +258,8 @@ function tabOf(v,r){if(MAILST.available&&r&&r._mail&&r._choice=='mail')return 'm
 const RTABS=[['all','すべて'],['form','フォームあり'],['check','手で確かめる'],['mail','メールだけ'],['ng','送れない']];
 function resCounts(rows){const c={all:rows.length,form:0,check:0,mail:0,ng:0};rows.forEach(r=>{c[tabOf(verdict(r),r)]++});return c}
 function summ(rows){const c={ok:0,warn:0,ng:0,auto:0,cand:0,missing:0,official:0};rows.forEach(r=>{const k=verdict(r).k;if(k in c)c[k]++;const cc=r['contact_confidence']||'';if(cc=='自動確認:フォーム'||cc=='自動確認:メール')c.auto++;if(r['contact_candidate']=='True'||r['contact_candidate']===true||['自動確認:フォーム','自動確認:メール','候補:要目視'].includes(cc))c.cand++;if(cc=='未発見')c.missing++;if(cc=='公式HP再探索待ち')c.official++});return c}
-function est(){const n=Math.max(1,parseInt($('#limit').value)||0);const a=Math.max(1,Math.round((n*3+30)/60)),b=Math.max(1,Math.round((n*15+60)/60));$('#est').textContent=`最大${n}社まで調べます。目安は約${a}〜${b}分です（実測の一例: ホテル・旅館10社で約40秒。会社数や通信で変わります）`}
-$('#limit').oninput=est;
+function est(){const n=Math.max(1,parseInt($('#limit').value)||parseInt($('#fetchLimit').value)||10);const a=Math.max(1,Math.round((n*3+30)/60)),b=Math.max(1,Math.round((n*15+60)/60));$('#est').textContent=`送れる会社が${n}社そろうまで調べます。目安は約${a}〜${b}分です（実測の一例: ホテル・旅館10社で約40秒。そろうまでの候補の数や通信で変わります）`}
+$('#limit').oninput=est;$('#fetchLimit').oninput=est;
 const NX='<b>次に</b>',NW='<b>いま</b>';
 function banners(){const j=JOB,mine=j.name=='探す';
  const run=(t)=>`${NW}「${esc(t)}」を実行しています。このままお待ちください。`;

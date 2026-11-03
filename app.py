@@ -1232,10 +1232,12 @@ class H(BaseHTTPRequestHandler):
         try:
             d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
             assert isinstance(d, dict)
-            lim = count(d.get("limit"), 200, 1, 1000)
+            lim_in = count(d.get("limit"), None, 1, 1000)  # 出力する会社の数 = 送れる会社の目標数。空欄は None(下で検索する数の上限に合わせる。両方空欄なら10)
             mx = count(d.get("max"), None, 1, None)
             par = count(d.get("parallel"), 3, 1, 5)
-            flim = count(d.get("fetch_limit"), 0, 0, 100000)  # 検索する数の上限。0・空欄は未指定(formlist側の固定の既定値で止まる)
+            flim_in = count(d.get("fetch_limit"), None, 0, 100000)  # 検索する数の上限 = 候補を集めて調べる総量の上限。0・空欄は未指定(出力する数に合わせる)
+            import plan
+            lim, flim, count_note = plan.normalize_counts(lim_in, flim_in)
         except Exception:
             if self.path in ("/api/send", "/api/targets"):  # 社数の欄の範囲外(E-12)。ほかの数の欄と分ける
                 try:
@@ -1253,9 +1255,7 @@ class H(BaseHTTPRequestHandler):
                 return self.send(403, {"error": why, "license": "denied"})
         if self.path == "/api/search":
             sync_ng_txt(ng_store)
-            args = ["formlist.py", "--limit", str(lim), "--parallel", str(par)]
-            if flim:
-                args += ["--fetch-limit", str(flim)]
+            args = ["formlist.py", "--limit", str(lim), "--fetch-limit", str(flim), "--parallel", str(par)]
             if ng_store is not None:
                 args += ["--ng-state-db", str(ng_store.db_path)]
             if d.get("resume_checks"):

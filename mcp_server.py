@@ -333,18 +333,18 @@ def _start_search_on_free_server(body):
 
 @mcp.tool()
 def formlist_search(area: str, industries: list[str] | None = None, keywords: str = "", sources: list[str] | None = None,
-                    limit: int = 50, include_large: bool = True, wait_seconds: int = 90, fetch_limit: int = 0) -> dict:
+                    limit: int = 0, include_large: bool = True, wait_seconds: int = 90, fetch_limit: int = 0) -> dict:
     """会社を探してフォームリストを作る。area は「東京都江東区」のように市区町村まで。industries は
     ホテル・旅館／百貨店／商業施設／ブライダル／観光施設／住宅・不動産／結婚相談所／自動車・保険／携帯ショップ／美容・コスメ／アパレル／
     ライフスタイル雑貨／食品・生産者直売／教育機関／福祉施設／自治体・地域団体／メーカー／企業の社内イベント／サロン から選ぶ。
     戦略書の優先順位は 商業施設 → 住宅・不動産 → ホテル・旅館 → ブライダル → 百貨店。sources は google（既定）/osm。Yahoo!マップは外した。
     一人サロン・小さな会社なら「サロン」。一覧に無い業種は industries に入れず、keywords に語として入れる。
-    limit は出力する会社数の上限(リストに入れる数)。fetch_limit は検索する数の上限(候補を集める全体の件数)で、集める段階の停止条件はこれ1つ。0 なら既定値200で止める(limit とは連動しない)。時間がかかりすぎるときは fetch_limit を小さくする。かかる時間の見込みは、始めた直後の経過(last_lines)と、終わったあとの summary.estimate_minutes に出る。利用者には見込みを伝え、やめたいと言われたら formlist_stop を呼ぶ。
+    limit は出力する会社の数 = 送れる会社(問い合わせフォームかメールアドレスが見つかった会社)の目標数で、その数がそろうまで探す・調べるを続ける。fetch_limit は検索する数の上限 = 候補を集めて調べる総量の上限(安全弁)。fetch_limit が limit より小さいときは limit に合わせて始める。どちらか0(空欄)なら、もう一方に合わせる。両方0なら10。時間がかかりすぎるときは fetch_limit を小さくする(送れる会社が目標に届かないまま止まることがある)。かかる時間の見込みは、始めた直後の経過(last_lines)と、終わったあとの summary.estimate_minutes に出る。利用者には見込みを伝え、やめたいと言われたら formlist_stop を呼ぶ。
     大手・チェーンと推定した会社は既定で含める（include_large=false で外す）。一人サロン・小さな会社だけにしたいときだけ include_large=false にする。wait_seconds 秒まで待ち、終わらなければ formlist_status で続きを見る。"""
     miss = _chromium_missing()
     if miss:
         return {"started": False, "error": miss}
-    body = {"area": area, "limit": limit, "fetch_limit": fetch_limit, "industries": industries or [], "keywords": keywords, "sources": sources or ["google"], "include_large": include_large,
+    body = {"area": area, "limit": limit or None, "fetch_limit": fetch_limit, "industries": industries or [], "keywords": keywords, "sources": sources or ["google"], "include_large": include_large,
             "official_research": True}
     port, d = _start_search_on_free_server(body)
     if port is None:
@@ -355,7 +355,7 @@ def formlist_search(area: str, industries: list[str] | None = None, keywords: st
 
 
 @mcp.tool()
-def formlist_search_many(area: str, searches: list[dict], limit: int = 50, include_large: bool = True, sources: list[str] | None = None,
+def formlist_search_many(area: str, searches: list[dict], limit: int = 0, include_large: bool = True, sources: list[str] | None = None,
                          wait_seconds: int = 90, fetch_limit: int = 0) -> dict:
     """複数の探す処理を、別々のサーバーで同時に走らせる(最大3つ)。searches は {"industries": [...], "keywords": "語 語"} の並び。
     たとえば「江東区でサロンと、ホテルと、フラワー教室を別々のリストで同時に」なら、3つ入れる。
@@ -369,7 +369,7 @@ def formlist_search_many(area: str, searches: list[dict], limit: int = 50, inclu
         return {"error": miss}
     started, results = [], []
     for i, sr in enumerate(searches):
-        body = {"area": area, "limit": limit, "fetch_limit": fetch_limit, "industries": sr.get("industries") or [], "keywords": sr.get("keywords", ""),
+        body = {"area": area, "limit": limit or None, "fetch_limit": fetch_limit, "industries": sr.get("industries") or [], "keywords": sr.get("keywords", ""),
                 "sources": sources or ["google"], "include_large": include_large, "official_research": True}
         port, d = _start_search_on_free_server(body)
         if port is None:
