@@ -17,7 +17,7 @@ import unicodedata
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from threading import Lock
+from threading import Event, Lock
 from urllib.parse import quote_plus, urlparse
 
 import openpyxl
@@ -626,8 +626,11 @@ def run_checks(rows, workers=4, resume_checks=False, retry_limit=2, official_res
     done = [0]
     budget_stop_rows = []
     budget_stop_lock = Lock()
+    budget_stopped = Event()  # 予算が尽きた印。map は全行を先に登録するので、例外が主スレッドへ届く前に空いたワーカーが次の行を始める競合があった(負荷が高いほど起きる)。印が立ったあとは、まだ始めていない行を調べない
 
     def one(r):
+        if budget_stopped.is_set():
+            return None
         if stop_check and stop_check():
             with budget_stop_lock:
                 RUN_STATS["not_checked_stopped"] = RUN_STATS.get("not_checked_stopped", 0) + 1
@@ -648,6 +651,7 @@ def run_checks(rows, workers=4, resume_checks=False, retry_limit=2, official_res
                 res = apply_result_state(r, res, checkpoint_status)
             judge_hp(r, res)
         except HttpBudgetExceeded as e:
+            budget_stopped.set()  # 例外を投げ直す前に印を立てる(次の行を始めるワーカーより先)
             try:
                 stopped = _record_budget_stop_row(r, e, stage="initial_check", current_url=r.get("url", ""))
                 with budget_stop_lock:
