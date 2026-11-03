@@ -1400,15 +1400,34 @@ def check_adopted_message(csv_path, sender_path, message_path, company_name):
         return 4
 
 
+def _unlisted_reasons(csv_path, only, found_names, scan_reasons):
+    """指定された会社のうち、メール対象に入らなかった会社の {name, url, text}。理由は走査で付いたもの、無ければ判定からの説明"""
+    with open(csv_path, encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.DictReader(f))
+    out, seen = [], set()
+    for r in rows:
+        name = r.get("企業名", "")
+        if channel_choice.company_key(name, r.get("HP URL", "")) not in only or name in found_names or name in seen:
+            continue
+        seen.add(name)
+        verdict = (r.get(formlist.EXTRA_COLS[0]) or "").strip()
+        why = scan_reasons.get(name) or ("メールアドレスが見つかっていません(判定: " + (verdict or "未判定") + ")。フォームで送る会社です" if not _mail_of(r) else "メールで送る対象に入っていません(判定: " + (verdict or "未判定") + ")")
+        out.append({"name": name, "url": _mail_of(r), "text": why})
+    return out
+
+
 def build_mail_plan(csv_path, include_supplemented, gate, max_count, message_path, sender, only=None, ignore_choice=False):
     """メール対象(フォーム無し・公開アドレスあり)の送る計画。文面は業種別を土台に会社ごとに生成し、件名は本文1行目の「件名:」、
     無ければ業種別・送信元設定の件名。仮の文字が残る・件名が空・連絡先が無い会社は、理由つきで外す(止めずに次へ)"""
     mail_channel = _mail_channel()
-    targets_ = mail_targets(csv_path, include_supplemented, gate, only=only, ignore_choice=ignore_choice)
+    found, scan_skips = _mail_scan(csv_path, include_supplemented, gate, ignore_choice)
+    targets_ = [t for t in found if channel_choice.company_key(t[0], t[4]) in only] if only else found
     if max_count is not None:
         targets_ = targets_[:max_count]
     todo, bodies, rejected = prepare_message_plan(targets_, message_path, sender)
     skipped = [{"name": n, "url": u, "text": "書き出しが空です" if "書き出し" in w else w} for n, u, w in rejected]
+    if only:  # 画面で指定したのに対象にならなかった会社は、黙って消さず理由を出す(文面が出ない理由が分からなくなる)
+        skipped += _unlisted_reasons(csv_path, only, {t[0] for t in found}, {n: why for n, _a, why in scan_skips})
     words = placeholders.sample_words()
     headings = placeholders.heading_words(words=words)
     settings_error = ""
