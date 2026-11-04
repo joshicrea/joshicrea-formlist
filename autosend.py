@@ -1463,7 +1463,7 @@ def build_mail_plan(csv_path, include_supplemented, gate, max_count, message_pat
                 try:
                     mail_channel.build_message(settings or {}, sender, addr, subject, text)  # 送る段階で落ちる宛先・件名(特殊な改行文字など)を確認で外す
                 except (mail_channel.MailError, ValueError) as e:
-                    why = "メールを組み立てられません: " + str(e)[:60]
+                    why = "メールを組み立てられません: " + str(e)  # 原文を切らない(理由が途中で切れて読めなくなるのを防ぐ)
         if why:
             skipped.append({"name": name, "url": addr, "text": why})
             continue
@@ -1543,7 +1543,7 @@ def run_mail(a, sender, gate):
             try:
                 msg = mail_channel.build_message(settings, sender, addr, subject, body)
             except (mail_channel.MailError, ValueError) as e:
-                res, memo = "要手動", str(e)[:80]
+                res, memo = "要手動", str(e)  # 原文を切らない
             else:
                 try:
                     claimed = claim_mail_attempt([now(), name, MAILTO + addr, "送信試行", subject], addr)  # 送る前に書く: 確認と書き込みは同じ鍵の中。落ちても二重に送らない

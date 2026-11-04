@@ -1,10 +1,10 @@
 {
- "version": "c04f1edc7aaf",
+ "version": "8cc516e8a830",
  "files": {
   "app.py": "cfde89baaea3413b9a325f1dd6fedc63fc3039a7943b4d208e6f7503ae9fe856",
   "ui.html": "7da05227a635aef765a7190b7a563e46b88e5aa08f2a5b6eee85a43b706adec9",
   "approval.py": "0b4a4908efedd041f50655ccc209f8fc0f433bd3c8c51788928fb0bcd0b07f2a",
-  "autosend.py": "b0700bce32b09c89204458dc433fbffddbc4eedc07e3f84985e42baa5bf2ba12",
+  "autosend.py": "375a1891f325500f2884ec074cf3e16928a1d1898734bc20b7d0461c14fd4e62",
   "channel_choice.py": "be644c15fc234a674c8315f1d191cda50e22c3f2b0e6f63e95c34966b5e70889",
   "filelock.py": "47c41ed1e3d231198a278e13fe30ca3146eca5bb6f163f8242b7b63529221eea",
   "form_kind.py": "a3a3da8645d200cda3422b507e3f526c02fe7784fd3935c47bd404d2e4ac0861",
