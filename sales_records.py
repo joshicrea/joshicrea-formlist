@@ -16,7 +16,10 @@ import send_rules
 HERE = Path(__file__).resolve().parent
 REPLY_LOG = HERE / "出力" / "反応記録.csv"
 REPLY_COLS = ["日時", "企業名", "フォームURL", "種類", "原文", "メモ"]
-KINDS = ("興味あり", "資料がほしい", "金額を知りたい", "時期未定", "担当違い", "不要", "その他")
+KINDS = ("興味あり", "資料がほしい", "金額を知りたい", "時期未定", "担当違い", "不要", "その他", "商談した", "契約した")
+ACTION_KINDS = ("興味あり", "資料がほしい", "金額を知りたい", "時期未定", "担当違い", "その他")  # 最後の返事がこれなら「返事に対応する」に出す。不要・商談した・契約した は対応が済んだ扱い
+LOG_COLS = ["日時", "企業名", "フォームURL", "結果", "メモ", "文面名"]
+RATE_MIN_SENT = 30  # 送った社数がこれ未満の文面は返事の割合を出さない(1社の返事で割合が大きく動く。値は独断なので、変えるときはこの1か所)
 DELIVERED, NOT_DELIVERED, MANUAL_SENT = "届いた(本人確認)", "届いていない(本人確認)", "手で送信済み"
 UNSURE = ("不明(要確認)", "送信試行", "入力エラー(要確認)")
 NEXT_STEP = {  # 返事の種類ごとの、部長(利用者のClaude)が次にすること。営業の手順書「問い合わせ後の流れ」の型に合わせる
@@ -27,6 +30,8 @@ NEXT_STEP = {  # 返事の種類ごとの、部長(利用者のClaude)が次に�
     "担当違い": "お礼を返し、担当の方の窓口を教えてもらう",
     "不要": "これ以上送らない(送らないリストに入れた)。返信はしなくてよい",
     "その他": "原文を読んで、利用者に返し方を相談する",
+    "商談した": "商談の日程と内容を残す。次の手(見積・提案)を決める",
+    "契約した": "契約の内容を残す。お礼を返し、始めるまでの流れを伝える",
 }
 
 
@@ -59,6 +64,52 @@ def final_states(log):
     for r in _read(log):
         out[(r.get("企業名", ""), r.get("フォームURL", ""))] = r
     return out
+
+
+def widen_log(path):
+    """古い見出し(文面名の列が無い)の送信ログに「文面名」の列を足す。呼ぶ側が filelock を持っている前提。
+    行は消さず、足りない列は空で埋める。書き換えは一時ファイルに書いてから入れ替える(途中で止まっても元のログが残る)"""
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.reader(f))
+    if not rows or "文面名" in rows[0]:
+        return False
+    head = rows[0] + ["文面名"]
+    tmp = Path(str(path) + ".widen")
+    with open(tmp, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(head)
+        for r in rows[1:]:
+            w.writerow(r + [""] * (len(head) - len(r)))
+    tmp.replace(path)
+    return True
+
+
+def message_names(log):
+    """会社名ごとの、最後に記録された文面名(空の行は飛ばす)。手で記録した行(文面名なし)があっても、送ったときの文面名を引き継ぐ"""
+    out = {}
+    for r in _read(log):
+        n = (r.get("文面名") or "").strip()
+        if n:
+            out[r.get("企業名", "")] = n
+    return out
+
+
+def latest_replies():
+    """会社名ごとの、最後の返事(日時の古い順に読んで後勝ち)"""
+    out = {}
+    for r in _read(REPLY_LOG):
+        out[r.get("企業名", "")] = r
+    return out
+
+
+def aftercare(log, now=None, days=7):
+    """送ったあとの画面(送信の記録)に要るものを1回で返す: 最後の返事・「返事に対応する」会社・追いかける会社・期間内の「N社に送り、M社から返事」"""
+    now = now or dt.datetime.now()
+    latest = latest_replies()
+    rep = report(log, days, now=now)
+    return {"replies": [{"company": k, "kind": v.get("種類", ""), "when": v.get("日時", ""), "text": v.get("原文", ""), "memo": v.get("メモ", "")} for k, v in latest.items()],
+            "action_needed": [k for k, v in latest.items() if v.get("種類") in ACTION_KINDS],
+            "followups": rep["followups"], "summary": rep["summary"]}
 
 
 def unsure(log):
@@ -108,10 +159,25 @@ def report(log, days=7, now=None):
     kinds = {}
     for r in replies:
         kinds[r["種類"]] = kinds.get(r["種類"], 0) + 1
+    names = {c for c, _u in pressed}
+    answered = names & {r.get("企業名", "") for r in _read(REPLY_LOG)}  # 期間内に送った会社のうち、(いつでも)返事を記録した会社。不要の返事も返事に数える
+    kind_by_company = {r.get("企業名", ""): r.get("種類", "") for r in _read(REPLY_LOG)}  # 会社ごとの最後の種類
+    label = message_names(log)
+    by_message = {}
+    for c in names:
+        m = by_message.setdefault(label.get(c) or "文面名なし(記録を始める前の送信)", {"sent": 0, "replied": 0})
+        m["sent"] += 1
+        m["replied"] += c in answered
+    for m in by_message.values():
+        m["rate"] = round(m["replied"] / m["sent"], 2) if m["sent"] >= RATE_MIN_SENT else None  # 分母が少ないうちは率を出さない
+    summary = {"days": days, "sent_companies": len(names), "replied_companies": len(answered),
+               "meetings": sum(1 for c in names if kind_by_company.get(c) == "商談した"), "contracts": sum(1 for c in names if kind_by_company.get(c) == "契約した"),
+               "by_message": by_message, "rate_min_sent": RATE_MIN_SENT,
+               "rate": round(len(answered) / len(names), 2) if len(names) >= RATE_MIN_SENT else None}
     return {"period_days": days, "since": since.strftime("%Y-%m-%d"), "pressed_companies": len(pressed), "results": count,
             "delivered_confirmed": sum(1 for r in final_states(log).values() if r.get("結果") == DELIVERED and recent(r)),
-            "replies": len(replies), "reply_kinds": kinds, "need_check": unsure(log), "followups": followups(log, now=now),
-            "note": "件数が少ないうちは割合を出していません。届いたかは本人の確認で、先方が読んだかは分かりません"}
+            "replies": len(replies), "reply_kinds": kinds, "need_check": unsure(log), "followups": followups(log, now=now), "summary": summary,
+            "note": f"送った会社が{RATE_MIN_SENT}社に届くまで、返事の割合は出していません。届いたかは本人の確認で、先方が読んだかは分かりません"}
 
 
 def followups(log, now=None):

@@ -197,6 +197,16 @@ def _same_store(a, b):
     return not (ta and tb)
 
 
+def _same_store_strict(a, b):
+    """同じ店だと言える材料が両方にそろっているときだけ True(同じ電話、または同じ名前と住所)"""
+    ta, tb = (hp_verify.tel_digits(r.get("tel", "") or r.get("phone", "")) for r in (a, b))
+    if ta and ta == tb:
+        return True
+    aa, ab = (hp_verify.addr_key(r.get("address", "")) or hp_verify._addr_norm(r.get("address", "")) for r in (a, b))
+    name = lambda r: re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(r.get("name", "")))).lower()
+    return bool(aa and ab and aa == ab and name(a) == name(b) and name(a))
+
+
 def dedupe(rows):
     """同じホームページの行のうち、同じ店の行だけを1行に畳む(畳んだ行は duplicate_removed に記録)。
     本部のHPを共有する別店舗は畳まない(同じフォームに届くかの扱いは送信側の判断)"""
@@ -205,8 +215,13 @@ def dedupe(rows):
         if not r["url"]:
             no_url.append(r)
             continue
-        same = seen.setdefault(canonical_url_key(r), [])
-        kept = next((k for k in same if _same_store(k, r)), None)
+        full = canonical_url_key(r)
+        key = full
+        if not ng_list._shared(full[0]):  # 共有サービス(複数の会社が使う)でなければ、調べる前にドメインでまとめる(同じ店が /index.html や別のページで2行になるのを防ぐ)
+            key = (full[0],)
+        same = seen.setdefault(key, [])
+        # ページの形まで同じなら今までどおり(材料が片方に無ければ同じ店)。ページが違うときは、電話か「名前+住所」が一致したときだけ同じ店とみなす(本部のHPを共有する別店舗を巻き込まない)
+        kept = next((k for k in same if (_same_store(k, r) if canonical_url_key(k) == full else _same_store_strict(k, r))), None)
         if kept:
             dup = f'{r.get("name", "")} / {r.get("source", "")}'.strip(" /")
             old = kept.get("duplicate_removed", "")
@@ -1456,7 +1471,10 @@ def _main(budget=None):
         renamed = [(i, industries.canonical(i)) for i in inds if industries.canonical(i) != i]
         for old, new in renamed:
             log(f"  [業種] 「{old}」は、いまの分類「{new}」にまとめました。「{new}」の検索語で探します")
-        inds = list(dict.fromkeys(industries.canonical(i) for i in inds))
+        for i in inds:
+            if industries.retired_reason(i):
+                log(f"  [業種] 「{i}」は探しません。{industries.retired_reason(i)}")
+        inds = list(dict.fromkeys(industries.canonical(i) for i in inds if not industries.retired_reason(i)))
         for ind in inds:
             if ind not in INDUSTRIES and ind not in MAP_TERMS:
                 log(f"  [業種] 「{ind}」は業種の一覧にありません。この言葉をそのままGoogleマップで探します（地図で引きにくい言葉だと、関係の薄い店が混ざるか、ほとんど出ません）")

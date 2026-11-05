@@ -74,14 +74,21 @@ def _read(path):
 
 def read_key():
     """計測キー(利用許可のキーを兼ねる)。無い・形が違うときは空文字。実値は呼び出し側でも記録・表示しない"""
-    k = os.environ.get("FORMLIST_TRACK_KEY", "").strip()
-    for f in (KEY_FILE, LEGACY_KEY_FILE):
-        if not k:
-            try:
-                k = f.read_text(encoding="utf-8").strip()
-            except OSError:
-                k = ""
-    return k if KEY_OK.fullmatch(k) else ""
+    # 画面で保存した鍵(KEY_FILE)を最優先にし、次に旧置き場、最後に環境変数。各出どころを形で検査し、最初に合うものを使う
+    # (環境変数が先だと、画面で保存した鍵が使われないのに「設定済み」と出る / 環境変数の形が違うと鍵ファイルを読み飛ばす。REQ-1001 破壊検証)
+    for src in ("file", "legacy", "env"):
+        try:
+            if src == "file":
+                k = KEY_FILE.read_text(encoding="utf-8").strip()
+            elif src == "legacy":
+                k = LEGACY_KEY_FILE.read_text(encoding="utf-8").strip()
+            else:
+                k = os.environ.get("FORMLIST_TRACK_KEY", "").strip()
+        except OSError:
+            k = ""
+        if KEY_OK.fullmatch(k):
+            return k
+    return ""
 
 
 def _secret():
@@ -96,7 +103,9 @@ def save_key(key):
     key = str(key).strip()
     if not KEY_OK.fullmatch(key):
         raise ValueError("計測キーは、英数字と - _ だけの32〜128文字です。設定の文のとおりに貼ってください")
-    KEY_FILE.write_text(key, encoding="utf-8")
+    tmp = KEY_FILE.with_name(KEY_FILE.name + ".tmp")  # 途中で落ちても今の鍵を壊さない(一時ファイルに書いてから差し替える)
+    tmp.write_text(key, encoding="utf-8")
+    os.replace(tmp, KEY_FILE)
 
 
 def _mint(secret):

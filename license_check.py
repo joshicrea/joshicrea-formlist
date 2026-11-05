@@ -83,8 +83,10 @@ def _pubkey():
     p = os.environ.get("FORMLIST_LICENSE_PUBKEY") or str(Path(__file__).with_name(PUBKEY_NAME))
     try:
         data = Path(p).read_bytes()
-    except OSError:
+    except FileNotFoundError:
         return None  # 鍵ファイルが無い(公開鍵を同梱する前の版)
+    except OSError:
+        return _BrokenKey()  # 在るのに読めない(更新中のロックなど): 検証を外さず、止める側に倒す
     try:
         from cryptography.hazmat.primitives import serialization
         return serialization.load_pem_public_key(data)

@@ -1,7 +1,8 @@
 """フォームリスト作成ツールが作ったCSVの「フォームあり」の会社へ、問い合わせフォームに自動で入力して送る。
 実行環境: Windows / Python 3.9+ / playwright（py -m playwright install chromium）
 
-標準は試走: 入力して画面を保存するだけで、送信ボタンは押さない。ただし試走でも実際のサイトの入力欄に入力するため、
+画面と MCP からは、試走の道は無い(送る内容を出す→読む→承認→本番、の順だけ)。このファイルを直接動かしたときだけ、--send を付けなければ試走になる。
+試走は、入力して画面を保存するだけで、送信ボタンは押さない。ただし試走でも実際のサイトの入力欄に入力するため、
 サイトによっては入力の途中で内容が先方に送られる作り(入力中の自動保存・チェックで送信するUI等)があり得る。
 「何も届かない」は保証できない。本番は --send を付け、
 文面の全文と件数を見て「送信」と入力したときだけ送る。
@@ -22,6 +23,7 @@ import csv
 import datetime as dt
 import hashlib
 import json
+import os
 import random
 import re
 import sys
@@ -36,6 +38,7 @@ import channel_choice
 import message_adoption
 import placeholders
 import proposal_links
+import sales_records
 import send_rules
 
 # Explicit message-only CLI bypasses transport/browser/state imports.
@@ -59,7 +62,7 @@ LOG = HERE / "出力" / "送信ログ.csv"
 SHOTS = HERE / "出力" / "送信画面"
 sys.path.insert(0, str(HERE))
 
-LOG_COLS = ["日時", "企業名", "フォームURL", "結果", "メモ"]
+LOG_COLS = sales_records.LOG_COLS  # 日時・企業名・フォームURL・結果・メモ・文面名
 
 FIELD_MAP = [  # (正規表現, sender.jsonのキー)。上から順に最初に当たったもの
     (re.compile(r"確認|confirm|re-?mail|再入力", re.I), "メール"),
@@ -116,7 +119,7 @@ class EmptyOpenerError(ValueError):
 def render(text, name, opener, sender):
     """{企業名}{書き出し}{署名}を置き換える。書き出し差込がある文面は、空欄なら停止する"""
     if "{書き出し}" in text and not opener.strip():
-        raise EmptyOpenerError("書き出しが空欄のため、この会社の文面生成を停止しました")
+        raise EmptyOpenerError("書き出しが空欄のため、この会社には送りません（ホームページから特徴が取れず、送る文面にも提案の語が見つからないため、下書きを作れませんでした。文面に提案の語を入れるか、書き出しを直します）")
     text = text.replace("{企業名}", name).replace("{署名}", sender.get("署名", "")).replace("{書き出し}", opener.strip())
     if sender.get("資料URL"):  # 空のときは置き換えない: {資料URL}が残り、送信前の「差し込みの取り残し」で止まる
         # 資料URLに {識別} があれば、会社ごとの専用リンクにする(開かれたかを会社単位で数えるため)
@@ -312,8 +315,22 @@ class LogError(Exception):
 STATE = {"clicked": False}  # 送信ボタンを押したあとか。押したあとの失敗は「要手動」ではなく「不明(要確認)」にする
 
 
+def message_label(message_path, name, url, industry):
+    """送信ログの「文面名」。採用済みの会社は採用した文面のファイル名、それ以外は pick_message_source の名前(標準・業種名・指定の文面)。
+    取れなくても送信は止めない(空にする)"""
+    try:
+        case = message_adoption.case_for(name, url)
+        if case:
+            return Path(case["template_name"]).stem
+        return pick_message_source(message_path, industry)[0]
+    except Exception:
+        return ""
+
+
 def _append_log(row):
     new = not LOG.exists()
+    if not new and len(row) > 5:  # 文面名の列を足した行を、古い見出し(5列)のログへ足すときは、見出しを先に広げる
+        sales_records.widen_log(LOG)
     with open(LOG, "a", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
         if new:
@@ -1475,6 +1492,31 @@ def build_mail_plan(csv_path, include_supplemented, gate, max_count, message_pat
     return {"todo": keep, "bodies": keep_bodies, "subjects": subjects, "skipped": skipped, "digest": digest, "identity": identity, "settings_error": settings_error}
 
 
+
+STOP_ENV = "FORMLIST_SEND_STOP_FLAG"  # 画面の「ここで止める」が置く印のファイル。ある間は、次の会社に進まない(今の1社は終える)
+
+
+def stop_requested():
+    p = os.environ.get(STOP_ENV)
+    return bool(p) and os.path.exists(p)
+
+
+def pause(sec):
+    """会社と会社の間の待ち。止める指示が出たら、待ちの途中でも切り上げる(1秒ごとに見る)"""
+    left = sec
+    while left > 0:
+        if stop_requested():
+            return
+        step = min(1.0, left)
+        time.sleep(step)
+        left -= step
+
+
+def stop_notice(i, total):
+    """止める指示で次の会社に進まないときの1文(画面はこの文を見て「止めました」と出す)。i は次に送るはずだった会社の番号"""
+    return f"止める指示があったため、ここで止めます。残り{total - i + 1}社には送っていません(次の「送る内容を出す」に、残りの会社が出ます)"
+
+
 def run_mail(a, sender, gate):
     """--channel mail。確認(--preview か付けない)は送らず全文と確認番号を出す。本番(--send)はフォームと同じ承認の鍵が要る。
     会社ごとに、時刻・同じ会社の間隔・NGをもう一度見て、1通ずつ個別に送る。1社の失敗は飛ばして理由を記録し、SMTPの設定の失敗は全体を止める"""
@@ -1530,10 +1572,14 @@ def run_mail(a, sender, gate):
         return 3
     results = []
     for i, ((name, addr, ind, opener, hp), subject, body) in enumerate(zip(todo, subjects, bodies), 1):
+        if stop_requested():
+            print(stop_notice(i, len(todo)))
+            break
         stop = send_rules.window_refusal()
         if stop:
             print(f"{stop}。残りの会社には送らず、ここで止めます")
             break
+        label = message_label(a.message, name, MAILTO + addr, ind)
         again = send_rules.company_refusal(LOG, name, "", hp)
         if again:
             res, memo = "要手動", "同じ会社のため送りません: " + again
@@ -1546,7 +1592,7 @@ def run_mail(a, sender, gate):
                 res, memo = "要手動", str(e)  # 原文を切らない
             else:
                 try:
-                    claimed = claim_mail_attempt([now(), name, MAILTO + addr, "送信試行", subject], addr)  # 送る前に書く: 確認と書き込みは同じ鍵の中。落ちても二重に送らない
+                    claimed = claim_mail_attempt([now(), name, MAILTO + addr, "送信試行", subject, label], addr)  # 送る前に書く: 確認と書き込みは同じ鍵の中。落ちても二重に送らない
                 except LogError as e:
                     print("送信ログに書けません（Excelで開いていませんか）。二重送信を防ぐため、ここで止めます:", e)
                     return 2
@@ -1557,7 +1603,7 @@ def run_mail(a, sender, gate):
                     res = "送信済み" if ok else ("不明(要確認)" if memo.startswith("不明") else "要手動")
                     if not ok and mail_channel.is_setting_failure(memo):
                         try:
-                            log_row([now(), name, MAILTO + addr, res, memo])
+                            log_row([now(), name, MAILTO + addr, res, memo, label])
                         except LogError as e:
                             print("送信ログに書けません（Excelで開いていませんか）。止めます:", e)
                             return 2
@@ -1566,12 +1612,12 @@ def run_mail(a, sender, gate):
         results.append(res)
         print(f"[{i}/{len(todo)}] {res}  {name}  {memo}")
         try:
-            log_row([now(), name, MAILTO + addr, res, memo])
+            log_row([now(), name, MAILTO + addr, res, memo, label])
         except LogError as e:
             print("送信ログに書けません（Excelで開いていませんか）。二重送信を防ぐため、ここで止めます:", e)
             return 2
         if i < len(todo):
-            time.sleep(random.uniform(30, 60))
+            pause(random.uniform(30, 60))
     c = Counter(results)
     print(f"\n結果の集計（全{len(results)}社中）: " + " / ".join(f"{k} {v}社" for k, v in c.items()) + f"\n\n記録: {LOG}")
     return 0
@@ -1680,6 +1726,9 @@ def main():
         ctx = page = None
         results = []
         for i, (name, url, ind, opener, hp) in enumerate(todo, 1):
+            if a.send and stop_requested():
+                print(stop_notice(i, len(todo)))
+                break
             if a.send:  # 1社ごとに、時刻・同じ会社の間隔をもう一度見る(待ち時間や並行実行の間に変わるため)
                 stop = send_rules.window_refusal()
                 if stop:
@@ -1720,7 +1769,7 @@ def main():
             results.append(res)
             print(f"[{i}/{len(todo)}] {res}  {name}  {memo}")
             try:
-                log_row([now(), name, url, res, memo])
+                log_row([now(), name, url, res, memo, message_label(a.message, name, url, ind)])
             except LogError as e:
                 print("送信ログに書けません（Excelで開いていませんか）。二重送信を防ぐため、ここで止めます:", e)
                 br.close()
@@ -1736,7 +1785,7 @@ def main():
                 if gate is not None:
                     gate.add_form_ng(url, "自動で送れない", name)
             if a.send and i < len(todo):
-                time.sleep(random.uniform(30, 60))
+                pause(random.uniform(30, 60))
         br.close()
     c = Counter(results)
     print(f"\n結果の集計（全{len(results)}社中）: " + " / ".join(f"{k} {v}社（{100 * v // len(results)}%）" for k, v in c.items()))

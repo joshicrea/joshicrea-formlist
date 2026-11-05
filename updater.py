@@ -4,7 +4,7 @@
       → 1つでも検査に通らなければ、手元には何も書かず終わる → 通れば、前の版を「更新前の版」に残して1つずつ入れ替える
       → 画面のサーバーを起動し直す。起動し直した画面が応答しなければ、前の版に戻して起動し直す。
 信じる範囲: 取得元は、導入と同じ公開リポジトリ(https)。導入の1行と同じ信頼で、署名は付けていない(リポジトリの持ち主を乗っ取られた場合は防げない)。
-更新しないもの: 送信元・文面・送らないリスト・できたリスト・計測キー(manifest に載るのは、公開物の実行ファイルと説明書だけ。名前の検査もする)。
+更新しないもの: 送信元・文面・送らないリスト・できたリスト・計測キー(manifest に載るのは、公開物の実行ファイルと説明書と、利用許可の公開鍵 license_sign_pub.pem の1つだけ。名前の検査もする)。
 見ていないもの: 取得元が https の正規の応答かどうか(OSの証明書の検査に任せる)。MCP(mcp_server.py)は Claude が読み込んだまま動くので、更新しても Claude を開き直すまで古い。"""
 import hashlib
 import json
@@ -21,6 +21,7 @@ HERE = Path(__file__).resolve().parent
 DEV_MARK = HERE / "開発版_自動更新しない.txt"  # 開発用の作業フォルダの目印。公開物には含めない。あると、公開版で手元の変更を上書きしない(2026-10-29: 自動更新が未公開の変更を上書きした)
 BASE = "https://raw.githubusercontent.com/joshicrea/joshicrea-formlist/master/"
 UPDATABLE = {".py", ".html", ".md"}
+PUBKEY_FILE = "license_sign_pub.pem"  # 利用許可の署名を確かめる公開鍵。この名前1つだけ、拡張子の許可の例外にする(.pem 全般は許さない)。鍵が差し替わると署名の検証が変わるので、公開は本番の署名と同梱鍵の一致を実導入で確かめてから
 NO_UPDATE = {"sender.json", "message_adoptions.json", "sender.sample.json"}  # 本人の設定。万一 manifest に載っても触らない
 KEEP_BACKUPS = 3
 ADDED_NAME = "_新規.txt"
@@ -85,8 +86,8 @@ _STDLIB_FALLBACK = {"json", "os", "re", "sys", "time", "csv", "ssl", "socket", "
 
 
 def name_ok(name):
-    """manifest の名前が、この フォルダ直下の実行ファイル・説明書だけを指すか(上の階層・サブフォルダ・設定ファイルは拒否)"""
-    if not (bool(NAME_OK.match(name)) and ".." not in name and Path(name).suffix in UPDATABLE and name not in NO_UPDATE
+    """manifest の名前が、この フォルダ直下の実行ファイル・説明書・利用許可の公開鍵だけを指すか(上の階層・サブフォルダ・設定ファイルは拒否)"""
+    if not (bool(NAME_OK.match(name)) and ".." not in name and (Path(name).suffix in UPDATABLE or name == PUBKEY_FILE) and name not in NO_UPDATE
             and not name.startswith(("test_", ".")) and len(name) <= 80):
         return False
     stem = Path(name).stem
@@ -95,6 +96,15 @@ def name_ok(name):
     if name.endswith(".py") and (stem in SHADOW_EXTRA or stem in getattr(sys, "stdlib_module_names", ()) or stem in _STDLIB_FALLBACK):
         return False  # json.py など、標準ライブラリを隠す名前は入れない(import されるだけで別のコードが動く)
     return True
+
+
+def _can_verify_signature():
+    """公開鍵を読む部品(cryptography)がこの導入にあるか"""
+    try:
+        from cryptography.hazmat.primitives import serialization  # noqa: F401
+        return True
+    except Exception:
+        return False
 
 
 def fetch_manifest():
@@ -109,7 +119,10 @@ def fetch_manifest():
             return None
         if any(not isinstance(k, str) or not isinstance(v, str) or not re.fullmatch(r"[0-9a-f]{64}", v) for k, v in files.items()):
             return None
-        return {"version": str(m.get("version", ""))[:40], "files": {k: v for k, v in files.items() if name_ok(k)}}
+        keep = {k: v for k, v in files.items() if name_ok(k)}
+        if PUBKEY_FILE in keep and not _can_verify_signature():
+            keep.pop(PUBKEY_FILE)  # 暗号の部品が無い導入へ鍵を入れると、どの署名も合わず止まり続ける(更新では部品を入れられない)。鍵を入れず、今までの動きのまま
+        return {"version": str(m.get("version", ""))[:40], "files": keep}
     except Exception:
         return None
 
@@ -163,6 +176,8 @@ def _stage(m, names, stage):
                 compile(b.removeprefix(b"\xef\xbb\xbf").decode("utf-8"), n, "exec")
             except (SyntaxError, UnicodeDecodeError, ValueError) as e:
                 raise ValueError(f"{n} が Python として読めません（{e}）。何も入れ替えていません")
+        if n == PUBKEY_FILE and (b"-----BEGIN PUBLIC KEY-----" not in b or b"PRIVATE" in b):
+            raise ValueError(f"{n} が公開鍵の形をしていません。何も入れ替えていません")
         (stage / n).write_bytes(b)
         got[n] = b
     return got

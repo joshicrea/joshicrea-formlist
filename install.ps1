@@ -467,12 +467,12 @@ try {
 $checked = ""
 if (-not $SkipDeps) {
     Write-Host "部品を入れています（数分かかります）..."
-    Invoke-Py -Rest @("-m", "pip", "install", "--quiet", "--disable-pip-version-check", "playwright==1.58.0", "requests>=2.32,<3", "beautifulsoup4>=4.12,<5", "openpyxl>=3.1,<4", "mcp>=1.29,<2", "pydantic>=2.10,<3") | Out-Host
+    Invoke-Py -Rest @("-m", "pip", "install", "--quiet", "--disable-pip-version-check", "playwright==1.58.0", "requests>=2.32,<3", "beautifulsoup4>=4.12,<5", "openpyxl>=3.1,<4", "mcp>=1.29,<2", "pydantic>=2.10,<3", "cryptography>=42,<50") | Out-Host
     if ($LASTEXITCODE -ne 0) { Write-Host "部品の導入に失敗しました（終了コード $LASTEXITCODE）。上の表示に「CERTIFICATE_VERIFY_FAILED」があれば、会社のネットワークの証明書検査が原因です。「407」があればプロキシの認証が原因です。それ以外は、$Ask"; exit 1 }
     Write-Host "ホームページを開くための専用ブラウザを入れています（数分かかります）..."
     Invoke-Py -Rest @("-m", "playwright", "install", "chromium") | Out-Host
     if ($LASTEXITCODE -ne 0) { Write-Host "専用ブラウザの導入に失敗しました（終了コード $LASTEXITCODE）。上の表示に「self signed certificate」があれば、会社のネットワークの証明書検査が原因です。それ以外は、$Ask"; exit 1 }
-    $code = "import importlib.util, os, sys; miss=[m for m in ('playwright','requests','bs4','openpyxl','mcp','pydantic') if importlib.util.find_spec(m) is None]; print('MISSING ' + ' '.join(miss)) if miss else None; sys.exit(2) if miss else None; from mcp.server.fastmcp import FastMCP; from playwright.sync_api import sync_playwright; pw=sync_playwright().start(); exe=pw.chromium.executable_path; pw.stop(); ok=os.path.exists(exe); print(('CHROMIUM ' if ok else 'NOCHROMIUM ') + exe); sys.exit(0 if ok else 3)"
+    $code = "import importlib.util, os, sys; miss=[m for m in ('playwright','requests','bs4','openpyxl','mcp','pydantic','cryptography') if importlib.util.find_spec(m) is None]; print('MISSING ' + ' '.join(miss)) if miss else None; sys.exit(2) if miss else None; from mcp.server.fastmcp import FastMCP; from playwright.sync_api import sync_playwright; pw=sync_playwright().start(); exe=pw.chromium.executable_path; pw.stop(); ok=os.path.exists(exe); print(('CHROMIUM ' if ok else 'NOCHROMIUM ') + exe); sys.exit(0 if ok else 3)"
     $res = @(Invoke-Py -Rest @("-X", "utf8", "-c", $code))
     $resCode = $LASTEXITCODE
     $res | Out-Host

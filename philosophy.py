@@ -267,16 +267,20 @@ def opener_traces(basis, template=""):
 
 
 FALLBACK_FIRST = "御社に、新しいお客様との接点を増やす施策をご提案したく、ご連絡しました。"
-FALLBACK_SECOND = "{phrase}を開催し、お店を訪れる、もうひとつの理由になり、新しいお客様との出会いが生まれます。"  # 企業向け提案書のスライド6(店舗への来店促進)・スライド3の01と08の言葉
+FALLBACK_SECOND = "{phrase}を開催し、{shop}を訪れる、もうひとつの理由になり、新しいお客様との出会いが生まれます。"  # 企業向け提案書のスライド6(店舗への来店促進)・スライド3の01と08の言葉
+FALLBACK_SECOND_NO_SHOP = "{phrase}を開催し、新しいお客様との出会いが生まれます。"  # 文面に「お店」「店舗」の語が無いとき(語を足さない)
 
 
 def fallback_opener(template=""):
-    """ホームページから前提が取れない会社に入れる、業種の文面に沿った自動の下書き(書き出しを空欄にして送れなくしないため)。
-    会社の特徴は言えないので、第1文は施策の提案だけにする。第2文は送る文面にある提案語(無ければ「本物のお花を使った催し」)で、提案書の言葉(スライド6・3の01と08)で言い切る。
-    方向検査(時間を舞台にしない・3目的のどれかを言い切る)は通す。画面では「書き出しは自動の下書き」と分かる印を付ける"""
+    """ホームページから前提が取れない会社に入れる、業種の文面に沿った自動の下書き。
+    商材の語(提案の語・「お店」)は送る文面からだけ取る。取れなければ空文字(固定の語で埋めない。呼び出し側が空欄と理由を出し、送る対象に入れない)。
+    会社の特徴は言えないので、第1文は施策の提案だけにする。方向検査(時間を舞台にしない・3目的のどれかを言い切る)は通す。画面では「書き出しは自動の下書き」と分かる印を付ける"""
     found = proposal_phrases(template, PROPOSAL_TERMS, strict=True)
-    phrase = found[0][1] if found else "本物のお花を使った催し"
-    out = FALLBACK_FIRST + FALLBACK_SECOND.format(phrase=phrase)
+    if not found:
+        return ""
+    shop = next((w for w in ("お店", "店舗") if w in (template or "")), "")
+    second = (FALLBACK_SECOND.format(phrase=found[0][1], shop=shop) if shop else FALLBACK_SECOND_NO_SHOP.format(phrase=found[0][1]))
+    out = FALLBACK_FIRST + second
     return out if valid_opener(out) else ""
 
 

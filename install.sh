@@ -303,7 +303,7 @@ while IFS= read -r n; do
   if [ -d "$SRC/$n" ]; then rm -rf "$APP/$n"; cp -R "$SRC/$n" "$APP/$n"; else cp "$SRC/$n" "$APP/$n"; fi
 done < "$WORK/names.txt"
 cp "$WORK/names.txt" "$APP/$MANIFEST"
-chmod +x "$APP"/*.command "$APP"/install.sh 2>/dev/null
+chmod +x "$APP"/*.command "$APP"/install.sh 2>/dev/null   # 配布の経路で実行権限が落ちても、入れたあとのダブルクリック用の入口は動くようにする
 [ -f "$APP/sender.json" ] || { [ -f "$APP/sender.sample.json" ] && cp "$APP/sender.sample.json" "$APP/sender.json"; }   # 最初は、送信元のひな形から始める
 mkdir -p "$APP/出力"
 PROFILE_NOTE=""
@@ -322,14 +322,14 @@ if [ "$SKIP_DEPS" != 1 ]; then
   fi
   RPY="$VENV/bin/python"
   echo "部品を入れています（数分かかります）..."
-  "$RPY" -m pip install --quiet --disable-pip-version-check "playwright==1.58.0" "requests>=2.32,<3" "beautifulsoup4>=4.12,<5" "openpyxl>=3.1,<4" "mcp>=1.29,<2" "pydantic>=2.10,<3" </dev/null
+  "$RPY" -m pip install --quiet --disable-pip-version-check "playwright==1.58.0" "requests>=2.32,<3" "beautifulsoup4>=4.12,<5" "openpyxl>=3.1,<4" "mcp>=1.29,<2" "pydantic>=2.10,<3" "cryptography>=42,<50" </dev/null
   rc=$?
   [ "$rc" != 0 ] && die "部品の導入に失敗しました（終了コード $rc）。上の表示に「CERTIFICATE_VERIFY_FAILED」があれば、会社のネットワークの証明書検査が原因です。「407」があればプロキシの認証が原因です。それ以外は、$ASK"
   echo "ホームページを開くための専用ブラウザを入れています（数分かかります）..."
   "$RPY" -m playwright install chromium </dev/null
   rc=$?
   [ "$rc" != 0 ] && die "専用ブラウザの導入に失敗しました（終了コード $rc）。上の表示に「self signed certificate」があれば、会社のネットワークの証明書検査が原因です。それ以外は、$ASK"
-  CHECK_PY="import importlib.util, os, sys; miss=[m for m in ('playwright','requests','bs4','openpyxl','mcp','pydantic','certifi') if importlib.util.find_spec(m) is None]; print('MISSING ' + ' '.join(miss)) if miss else None; sys.exit(2) if miss else None; from mcp.server.fastmcp import FastMCP; from playwright.sync_api import sync_playwright; pw=sync_playwright().start(); exe=pw.chromium.executable_path; pw.stop(); ok=os.path.exists(exe); print(('CHROMIUM ' if ok else 'NOCHROMIUM ') + exe); sys.exit(0 if ok else 3)"
+  CHECK_PY="import importlib.util, os, sys; miss=[m for m in ('playwright','requests','bs4','openpyxl','mcp','pydantic','cryptography','certifi') if importlib.util.find_spec(m) is None]; print('MISSING ' + ' '.join(miss)) if miss else None; sys.exit(2) if miss else None; from mcp.server.fastmcp import FastMCP; from playwright.sync_api import sync_playwright; pw=sync_playwright().start(); exe=pw.chromium.executable_path; pw.stop(); ok=os.path.exists(exe); print(('CHROMIUM ' if ok else 'NOCHROMIUM ') + exe); sys.exit(0 if ok else 3)"
   "$RPY" -X utf8 -c "$CHECK_PY" </dev/null
   rc=$?
   [ "$rc" != 0 ] && die "部品か専用ブラウザが、入れたあとも読み込めませんでした（終了コード $rc）。同じ手順をもう一度実行してください。それでも同じなら、$ASK"

@@ -26,7 +26,7 @@ def estimate_minutes(n_searches, limit, workers):
 
 def plan_searches(area, inds, kws, limit, workers=3):
     """始める前の見積もり。Googleマップの検索が何件(検索語×町名)になり、地図だけで何分かかるか"""
-    inds = [industries.canonical(i) for i in (inds or [])]
+    inds = [industries.canonical(i) for i in (inds or []) if not industries.retired_reason(i)]
     subs = subareas.split(area) if area else []
     terms = [t for k in (kws or []) for t in [k]] + [t for i in inds for t in map_terms(i)]
     n = len(dict.fromkeys((t, sub) for t in terms for sub in subs))

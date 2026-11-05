@@ -68,6 +68,8 @@ th{color:var(--mut);font-size:14px;position:sticky;top:0;background:var(--bg);z-
 .sum{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:14px 0 0;align-items:start}
 .sum>div{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px 14px}.sum .lb{display:block;font-size:14px;color:var(--mut);line-height:1.5}.sum .nm{display:block;font-size:15px;line-height:1.3;margin-top:4px}.sum .nm b{font-size:28px;font-weight:700;margin-right:2px}
 .sum>button.sumc{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px 14px;text-align:left;cursor:pointer;font:inherit;color:inherit}.sum>button.sumc.on{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}.sum>button.sumc .lb{display:block;font-size:14px;color:var(--mut);line-height:1.5}.sum>button.sumc .nm{display:block}.sum>button.sumc .nm b{font-size:26px;margin-right:2px}
+.sum>button.hsumc{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px 14px;text-align:left;cursor:pointer;font:inherit;color:inherit}.sum>button.hsumc.on{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}.sum>button.hsumc .lb{display:block;font-size:14px;color:var(--mut);line-height:1.5}.sum>button.hsumc .nm b{font-size:26px;margin-right:2px}
+.recopts .btn{margin:4px 6px 4px 0}.recreply{margin:6px 0}.recreply textarea{min-height:60px;margin:6px 0}
 .sum.sm>div{padding:8px 12px}.sum.sm .nm b{font-size:20px}
 .legend{margin:12px 0 0;padding:10px 14px;background:var(--bg);border-radius:10px;font-size:14px;color:var(--mut)}.legend div{margin:8px 0;display:grid;grid-template-columns:auto 1fr;gap:4px 10px;align-items:start}.legend .tag{margin:0;justify-self:start}
 .st{font-size:16px;margin:0 0 4px}.prog{margin-top:14px;padding:12px 16px;background:var(--bg);border-radius:10px}
@@ -84,7 +86,6 @@ th{color:var(--mut);font-size:14px;position:sticky;top:0;background:var(--bg);z-
  .hd{padding-top:12px}nav{display:grid;grid-template-columns:1fr 1fr;gap:0}nav button{padding:8px 6px;justify-content:center}
  .card{padding:16px}.legend div{grid-template-columns:1fr}.now{font-size:16px;padding:12px 14px}.grid-chips{grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}.chip{padding:12px 10px}
  .steps{grid-template-columns:repeat(5,1fr);gap:4px}.steps li{font-size:14px;padding:6px 4px;text-align:center;line-height:1.4}.steps li .s{display:none}
- #foot{display:flex;justify-content:center;padding:8px 16px 32px}
  .btn.big{width:100%}#go,#prev,#real{width:100%}
  table.rt,table.rt tbody,table.rt tr,table.rt td{display:block;width:100%!important}table.rt tr:has(th){display:none}
  table.rt tr{border-bottom:1px solid var(--line);padding:8px 4px}table.rt td{border:0;padding:4px 8px}.tw{max-height:none}
@@ -108,10 +109,11 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
 @media(min-width:641px){#c .now.stick{position:sticky;top:0;z-index:4;box-shadow:0 2px 8px rgba(16,24,40,.12)}}
 @media(max-width:640px){.sumline .k{min-width:0}.al{display:block}.edit{padding:12px}table.op textarea{min-height:96px}}
 </style></head><body>
-<header class="top"><div class="wrap hd"><div><h1><span class="mark" aria-hidden="true"></span>AIまるなげ営業</h1><p>地域と業種から、問い合わせフォームのある会社を探して、営業の文面を送ります。</p></div><button type="button" id="restart" class="btn sub sm">再起動する</button><button type="button" id="quit" class="btn sub sm">ツールを終了する</button></div>
+<header class="top"><div class="wrap hd"><div><h1><span class="mark" aria-hidden="true"></span>AIまるなげ営業</h1><p>地域と業種から、問い合わせフォームのある会社を探して、営業の文面を送ります。</p></div></div>
 <nav class="wrap" aria-label="画面の切り替え"><button data-t="a" class="on"><span class="n">1</span>探す</button><button data-t="b"><span class="n">2</span>結果を見る</button><button data-t="c"><span class="n">3</span>送る</button><button data-t="d">送信の記録</button></nav></header>
 <div id="upd" role="status" aria-live="polite" hidden style="background:#fff7e0;border-bottom:1px solid #e6c36a;padding:10px 16px;text-align:center"></div>
 <div id="lic" role="alert" hidden style="background:#fde8e8;border-bottom:1px solid #d9534f;padding:10px 16px;text-align:center"></div>
+<div id="keybar" class="wrap" style="padding:8px 16px;font-size:15px"><span id="keyState"></span> <button type="button" id="keyOpen" class="btn sub sm">設定する</button><span id="keyMsg" class="hint" role="status" style="margin-left:8px"></span><div id="keyEdit" hidden style="margin-top:8px"><label for="keyIn">許可キー（担当者から届いた鍵。画面には表示されません）</label> <input id="keyIn" type="password" autocomplete="new-password" spellcheck="false" style="width:min(420px,100%)"> <button type="button" id="keySave" class="btn sm">保存して確かめる</button> <button type="button" id="keyCancel" class="btn sub sm">やめる</button><p class="hint" id="keyNote" role="status"></p></div></div>
 <div id="jobbar" role="status" aria-live="polite"><div class="wrap"><b id="jobname"></b><span id="jobline"></span><button type="button" id="stop2" class="btn sub sm" hidden style="margin-left:auto;white-space:nowrap">ここで止める</button></div><div class="bar"></div></div>
 <main class="wrap">
 <section id="a" class="on">
@@ -125,7 +127,7 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
   <details class="dt"><summary>キーワードの使い方</summary><div>地図に載っている店名・施設名に含まれる語で探します。事業内容では探せません。スペースか「、」で区切ると、いくつでも入れられます。業種を選ばず、キーワードだけでも探せます。業種とキーワードを両方入れると、両方で探します。キーワードは最大3つずつ同時に探します（同時に探しすぎるとGoogleマップに止められやすいため）。</div></details>
   <div class="row"><div><label for="limit">4. 出力する会社の数（送れる会社の目標）</label><input id="limit" type="number" placeholder="10" min="1"><p class="hint">問い合わせフォームかメールアドレスが見つかった会社を、この数そろえるまで、探す・調べるを続けます。空欄なら、右の「検索する数の上限」に合わせます（両方空欄なら10）。</p><p class="hint" id="est"></p></div><div><label for="fetchLimit">5. 検索する数の上限（候補を集めて調べる総量）</label><input id="fetchLimit" type="number" min="1" placeholder="10"><p class="hint">候補を集めて調べる総量の上限です（安全弁）。出力する会社の数がそろわなくても、この数まで調べたら止めます。出力する数より小さいときは、出力する数に合わせて始めます。空欄なら出力する数に合わせます。</p></div></div>
   <label class="check"><input type="checkbox" id="large" checked><span>大手・チェーンの会社も含める<span class="hint d">ふつうは入れたままにします。一人サロンや小さな会社だけにしたいときに外します。自動車販売店・保険代理店・ホテルなど、チェーンの多い業種は、外すと全部が除かれることがあります。</span></span></label>
-  <label class="check"><input type="checkbox" id="restartSearch"><span>最初からやり直す<span class="hint d">同じ地域・業種でもう一度探すと、ふつうは前回の続きから集めます。前回までに調べた会社は、もう一度調べません(出した会社も、対象外になった会社も同じです)。最初から集め直したいときだけ、チェックを入れます。</span></span></label>
+  <label class="check"><input type="checkbox" id="restartSearch"><span>最初からやり直す<span class="hint d">続きから探したいときは、チェックを入れません。Googleマップで同じ地域・業種をもう一度探すと、前回の続きから集めます(前回リストに出した会社と、対象外になった会社は、もう一度調べません)。最初から集め直したいときだけ、チェックを入れます。</span></span></label>
   <details class="more"><summary>くわしい設定（最初は開かなくて大丈夫です）</summary>
    <label class="check"><input type="checkbox" id="resumeChecks" checked><span>途中で止まっても確認済みの行を再利用する</span></label>
    <label class="check"><input type="checkbox" id="officialResearch" checked><span>SNSやポータルサイトしか見つからない会社は、公式ホームページを探し直して、連絡先を確かめ直す</span></label>
@@ -162,7 +164,7 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
    <label class="check inl" style="margin:6px 0"><input type="checkbox" id="ruleChk"><span>フォームとメールの両方がある会社には、どちらか1つだけで送る(片方で送ったら、もう片方へは自動で送りません。外すと両方へ送れます)</span></label>
   </div>
   <div id="mailpanel" class="edit" hidden></div>
-  <div id="manualst" role="status" aria-live="polite" hidden style="margin:8px 0;padding:10px 12px;border:1px solid var(--ac);border-radius:6px;font-size:15px;line-height:1.6;white-space:pre-line"></div><div class="sum" id="sum"></div><p class="mut" id="sumnote" style="margin:6px 0 0"></p>
+  <div id="manualst" role="status" aria-live="polite" hidden style="margin:8px 0;padding:10px 12px;border:1px solid var(--ac);border-radius:6px;font-size:15px;line-height:1.6;white-space:pre-line"></div><div class="manAsk edit" hidden><b class="manAskName"></b> のフォームから、送りましたか。 <button class="btn sm manYes" type="button">送りました</button> <button class="btn sub sm manNo" type="button">送っていません</button></div><div class="sum" id="sum"></div><p class="mut" id="sumnote" style="margin:6px 0 0"></p>
   <details class="dt"><summary>くわしい内訳</summary><div class="sum sm" id="sum2"></div></details>
   <details class="dt" id="funnelBox" hidden><summary>前回の探索の内訳</summary><div id="funnelCard"></div></details>
   <div class="legend" id="legend" hidden></div>
@@ -196,7 +198,7 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
    <p class="hint" id="mwhere"></p>
    <div class="autobox"><p class="ah">自動で入る部分</p>
     <div class="arow" id="greetRow"><span class="al">宛名</span><span id="greetView"></span> <button class="lnk" id="greetToggle" type="button"></button></div>
-    <div class="arow" id="openRow"><span class="al">書き出し</span><span id="openView"></span></div></div>
+    <div class="arow" id="openRow"><span class="al">書き出し</span><span id="openView"></span></div><p class="hint" id="aiOpenHint" style="margin:4px 0 0">書き出しは、Claude に頼むと書き直せます。書き直した書き出しは、送る内容の一覧で読んで直せます。</p></div>
    <label for="mtext">本文（ここを直します）</label><textarea id="mtext" style="min-height:260px"></textarea>
    <div class="autobox"><p class="ah">自動で入る部分</p><div class="arow"><span class="al">署名（送信元から）</span><button class="lnk" id="toSender" type="button">送信元を直す</button></div><div class="msgbody" id="sigView"></div></div>
    <div class="actions"><button class="btn sub" id="saveMsg" type="button">この文面を保存</button> <button class="btn sub" id="moveMsg" type="button" hidden></button> <button class="btn sub" id="delMsg" type="button" hidden>この業種の文面をやめる（基本の文面に戻す）</button> <button class="lnk" id="msgClose" type="button">閉じる</button></div>
@@ -207,18 +209,18 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
   <div id="c_plan" hidden></div>
   <div id="c_run" hidden></div>
   <details class="dt" id="condMore"><summary>くわしい条件</summary><div><label class="check"><input type="checkbox" id="supp"><span>検索で見つけたホームページの会社にも送る<span class="hint d">別の会社のページを拾っていることがあります。結果を見るで開いて確かめてから入れます。</span></span></label></div></details>
-  <details class="dt" id="aiOpen"><summary>AIに書き出しを書き直してもらう方法</summary><div>Claude に、送るリストの会社の書き出しを、ホームページに書いてあることだけで書き直して、と頼みます。書き直した書き出しは、送る内容の一覧に、AI（Claude）が書き直した下書き、と出ます。送る前に読んで直せます。</div></details>
   <details class="dt" id="aiSend" hidden><summary>AI（Claude）に送ってもらうとき</summary><div>AIは承認を押せません。上の文を読んで、読みましたにチェックを入れてから、下のボタンを押します。画面の外に確認が出たら、内容を読んで「はい」を押します。それから AI に、送って、と伝えます。承認は1回の送信で使い切ります。<br><button class="btn sub" id="approve" type="button">この内容で送ることを承認する</button><p class="hint" id="aiNote"></p></div></details>
  </div>
  <details class="dt" id="supLog"><summary>くわしい記録（サポート用）</summary><pre id="log2">まだ何も動いていません</pre></details>
 </section>
-<section id="d"><div class="now" id="now_d"></div><div class="card"><div class="toolbar"><h2 style="flex:1">送信の記録</h2><button class="btn sub sm" id="reload" type="button">更新</button></div><div class="sum" id="hsum"></div><p class="hint" id="hfnote"></p><div class="tw"><table class="rt" id="hist"></table></div></div></section>
+<section id="d"><div class="now" id="now_d"></div><div class="card"><div class="toolbar"><h2 style="flex:1">送信の記録</h2><button class="btn sub sm" id="reload" type="button">更新</button></div><div class="sum" id="hsum"></div><p class="hint" id="hsent" style="margin:8px 0 0"></p><p class="hint" id="hfnote"></p><div id="manualst_d" role="status" aria-live="polite" hidden style="margin:8px 0;padding:10px 12px;border:1px solid var(--ac);border-radius:6px;font-size:15px;line-height:1.6;white-space:pre-line"></div><div class="manAsk edit" hidden><b class="manAskName"></b> のフォームから、送りましたか。 <button class="btn sm manYes" type="button">送りました</button> <button class="btn sub sm manNo" type="button">送っていません</button></div><div class="tw"><table class="rt" id="hist"></table></div></div></section>
 </main>
-<div id="foot"></div><p id="ver" style="text-align:center;color:#888;font-size:12px"></p>
+<div class="wrap"><details class="dt" id="supBox" style="margin-bottom:32px"><summary>サポート用（再起動・終了・版）</summary><div><p class="hint" style="margin:6px 0">困ったときに担当者から言われたときだけ使います。</p><button type="button" id="restart" class="btn sub sm">再起動する</button> <button type="button" id="quit" class="btn sub sm">ツールを終了する</button> <button type="button" id="supCopy" class="btn sub sm">担当者に送る文をコピー</button> <span class="hint" id="supNote" role="status"></span><p id="ver" style="color:var(--mut);font-size:14px;margin:8px 0 0"></p></div></details></div>
 <script>
 const TOKEN='__TOKEN__';const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const J=(u,o={})=>fetch(u,{...o,headers:{...(o.headers||{}),'X-Token':TOKEN}}).then(async r=>{const d=await r.json().catch(()=>({error:'ツールから読み取れない応答が返りました（'+r.status+'）。ツールを起動し直して、もう一度押します'}));if(r.status==403){if(d.code=='token'){location.reload();return {error:d.error}}return {error:d.error||'この操作は受け付けられませんでした'}}return d});
+let NETFAIL=false;
+const J=(u,o={})=>fetch(u,{...o,headers:{...(o.headers||{}),'X-Token':TOKEN}}).then(async r=>{NETFAIL=false;const d=await r.json().catch(()=>({error:'ツールから読み取れない応答が返りました（'+r.status+'）。ツールを起動し直して、もう一度押します'}));if(r.status==403){if(d.code=='token'){location.reload();return {error:d.error}}return {error:d.error||'この操作は受け付けられませんでした'}}return d}).catch(e=>{NETFAIL=true;return {error:'ツールにつながりません（通信に失敗しました）。ツールが止まっているか、起動しているところです。少し待つと、自動で戻ることがあります。画面を読み込み直しても同じなら、この表示を担当者に送ってください',net:true}});
 const post=(u,d)=>J(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
 let META={},JOB={lines:[],running:false,name:'',code:null,files:[]},RESROWS=[];
 const SF=['会社名','氏名','フリガナ','メール','電話','郵便番号','住所','件名','資料URL'],FIELDS=[...SF,'署名'];
@@ -269,8 +271,8 @@ function banners(){const j=JOB,mine=j.name=='探す';
  $('#now_a').innerHTML=j.running&&mine?run('探す')+'<span class="hint">終わると自動で「2 結果を見る」に移ります。</span>':NX+'場所と業種を選んで「探しはじめる」を押します。'+(META.files&&META.files.length?'<span class="hint">前に作ったリストは「2 結果を見る」で見られます。</span>':'');
  bannerB();renderSend()}
 function bannerB(){const s=RESROWS.length?summ(RESROWS):null,box=$('#now_b');
- if(!s){box.innerHTML=NX+'先に、探す画面でリストを作ります。<div class="nowact"><button class="btn big" id="toA" type="button">探すへ</button></div>';$('#toA').onclick=()=>goto('a');return}
- if(!s.ok){box.innerHTML=NX+'このリストには、フォームがある会社がありません。別の条件で探します。<div class="nowact"><button class="btn big" id="toA" type="button">探すへ</button></div>';$('#toA').onclick=()=>goto('a');return}
+ if(!s){box.innerHTML=NX+'リストを作ります。探す画面で場所と業種を選びます。<div class="nowact"><button class="btn big" id="toA" type="button">探すへ</button></div>';$('#toA').onclick=()=>goto('a');return}
+ if(!s.ok){box.innerHTML=NX+'別の条件で探します。このリストには、フォームがある会社がありません。<div class="nowact"><button class="btn big" id="toA" type="button">探すへ</button></div>';$('#toA').onclick=()=>goto('a');return}
  box.innerHTML=NX+'送りたくない会社があれば「送らない」を押して、「このリストで送る準備へ」を押します。<div class="nowact"><button class="btn big" id="toC" type="button">このリストで送る準備へ（フォームあり '+s.ok+'社）</button></div><span class="hint">'+NOTE_FORM+'。営業お断りの表示がある会社は、自動で外しています。</span>';
  $('#toC').onclick=()=>{const f=$('#files').value;if(f&&$('#sfile').value!=f){$('#sfile').value=f;markDirty('送るリスト')}goto('c')}}
 async function loadFunnel(){
@@ -284,8 +286,8 @@ async function loadFunnel(){
   $('#funnelBox').hidden=false
  }catch(e){}
 }
-async function loadRes(){const f=$('#files').value;if(!f){$('#res').innerHTML='<tr><td>まだリストがありません</td></tr>';RESROWS=[];$('#sum').innerHTML='';$('#sum2').innerHTML='';banners();return}
- const all=await J('/api/results?file='+encodeURIComponent(f));if(all.error)return;RESROWS=all;await loadMailSt();const s=summ(all);
+async function loadRes(){const f=$('#files').value;if(!f){const down=NETFAIL||!META||!!META.error;$('#res').innerHTML=down?'<tr><td>ツールと通信できず、リストを読み込めていません（リストが無いのではありません）。'+esc((META&&META.error)||'ツールが止まっているか、起動しているところです。少し待って画面を読み込み直します')+'</td></tr>':'<tr><td>まだリストがありません</td></tr>';RESROWS=[];$('#sum').innerHTML='';$('#sum2').innerHTML='';banners();return}
+ const all=await J('/api/results?file='+encodeURIComponent(f));if(all.error){$('#res').innerHTML='<tr><td>リストを読み込めませんでした: '+esc(all.error)+'</td></tr>';return}RESROWS=all;await loadMailSt();const s=summ(all);
  const card=(lb,n,u)=>`<div><span class="lb">${lb}</span><span class="nm"><b>${n}</b>${u}</span></div>`;
  const rc=resCounts(all),scard=(k,lb,n)=>`<button type="button" class="sumc${RTAB==k?' on':''}" data-k="${k}" aria-pressed="${RTAB==k}"><span class="lb">${lb}</span><span class="nm"><b>${n}</b>社</span></button>`;
  $('#sum').innerHTML=scard('all','全体',rc.all)+scard('form',tag('フォームあり','ok'),rc.form)+scard('mail',tag('メールだけ','warn'),rc.mail)+scard('check',tag('手で確かめる','warn'),rc.check)+scard('ng',tag('送れない','ng'),rc.ng);
@@ -299,7 +301,7 @@ async function loadRes(){const f=$('#files').value;if(!f){$('#res').innerHTML='<
  $('#legend').hidden=!shared.size;$('#legend').innerHTML='<b style="color:var(--ink)">表示の意味</b>'+[...shared.values()].map(v=>`<div>${tag(v.t,v.k)}${esc(v.why)}</div>`).join('');
  $('#res').innerHTML='<tr><th style="width:30%">会社</th><th style="width:30%">状態</th><th style="width:20%">開いて確かめる</th><th style="width:20%">送らない</th></tr>'+(rows.length?rows.map(({r,v},i)=>{const form=r['問い合わせフォームURL 無ければメール']||'',mail=r['メールアドレス']||(form.startsWith('http')?'':form);
   return `<tr><td>${RTAB=='mail'?`<label style="display:flex;gap:6px;align-items:center;font-weight:400"><input type="checkbox" class="mailChk" data-n="${esc(r._key||r['企業名'])}"${MAILSEL.has(r._key||r['企業名'])?' checked':''}>この会社に送る</label>`:''}<b>${esc(r['企業名'])}</b><div class="why">${esc(r['業種'])}</div>${mailCell(r,i)}<details class="dt"><summary>くわしく</summary><div>取得元: ${esc(r['取得元'])}<br>メール: ${esc(mail||'なし')}<br>メモ: ${esc(plain(r['判定メモ']))||'なし'}</div></details></td><td>${tag(v.t,v.k)}${v.why&&wc[v.why]==1?`<div class="why">${esc(v.why)}</div>`:''}</td><td>${lk(r['HP URL'],'ホームページを開く')}<br>${lk(form,'フォームを開く')}</td><td><button class="btn sub sm ngb" data-i="${i}" type="button">送らない</button>${form&&/^https?:/.test(form)?`<br><button class="btn sub sm manb" data-i="${i}" type="button" style="margin-top:6px" title="フォームを開き、入れられる欄だけ自動で入れます。送信ボタンは押しません">フォームで送る(自動挿入)</button><details class="dt manDraft" data-i="${i}"><summary>届く件名と本文を見る</summary><div class="manDraftBody">開くと表示します。</div></details>`:''}</td></tr>`}).join(''):'<tr><td colspan="4">表示できる会社がありません。上の、フォームがある会社だけ表示、を外すと、ほかの会社も見えます。</td></tr>');
- document.querySelectorAll('.manb').forEach(b=>b.onclick=async()=>{const x=rows[+b.dataset.i].r;if(!confirm(x['企業名']+' のフォームを別の画面で開き、入れられる欄だけ自動で入れます。\n送信ボタンは押しません。中身を確かめて、ご自分で送ってください。よろしいですか'))return;MAN={busy:true,name:x['企業名'],i:+b.dataset.i,final:null};manPaint(JOB);let r;try{r=await post('/api/manual',{file:$('#files').value,name:x['企業名']})}catch(e){r={error:'ツールに届きませんでした。ツールが動いているか確かめてください'}}if(r.error){MAN={busy:false,final:{busy:false,kind:'ng',text:r.error}};manPaint(JOB);return resNote(r.error)}if(!r.started){MAN={busy:false};manPaint(JOB);resNote('いまほかの処理が動いています。終わってから押します')}else{wasRun=true;poll()}});manPaint(JOB);
+ document.querySelectorAll('.manb').forEach(b=>b.onclick=async()=>{const x=rows[+b.dataset.i].r;if(!confirm(x['企業名']+' のフォームを別の画面で開き、入れられる欄だけ自動で入れます。\n送信ボタンは押しません。中身を確かめて、ご自分で送ってください。よろしいですか'))return;manStart(x['企業名'],x['問い合わせフォームURL 無ければメール']||'',+b.dataset.i)});manPaint(JOB);
  document.querySelectorAll('.manDraft').forEach(d=>d.ontoggle=async()=>{if(!d.open)return;const box=d.querySelector('.manDraftBody');box.textContent='作っています…';const x=rows[+d.dataset.i].r;let p;try{p=await J('/api/manual_draft?file='+encodeURIComponent($('#files').value)+'&name='+encodeURIComponent(x['企業名']))}catch(e){box.textContent='ツールに届きませんでした。ツールが動いているか確かめてください';return}
   box.innerHTML=p.error?esc(p.error):`${p.adoption_diff?`<div class="why">【採用との違い】${esc(p.adoption_diff)}</div>`:''}<div>件名: ${esc(p.subject)}</div><pre class="fullbox" tabindex="0" aria-label="届く本文の全文" style="white-space:pre-wrap;margin:6px 0">${esc(p.message)}</pre><div class="why">フォームに入る文です。送るのはご自分の手で、確かめてからです。</div>`});
  document.querySelectorAll('.ngb').forEach(b=>b.onclick=async()=>{const x=rows[+b.dataset.i].r;const form=x['問い合わせフォームURL 無ければメール']||'';
@@ -376,12 +378,19 @@ function manView(j,name,pending){const ls=(j&&j.lines||[]).filter(l=>l.trim()&&!
   return{busy:false,kind:'ng',text:who+' のフォームは開けませんでした。'+(last?'理由: '+last:'くわしい経過を見てください。')}}
  return{busy:false,kind:'none',text:''}}
 function manPaint(j){const pend=!!MAN.busy;let v=manView(j,MAN.name,pend);if(j&&j.name=='手動入力'&&j.running)MAN.seen=true;
- if(v.kind=='ok'||v.kind=='ng')MAN={busy:false,name:MAN.name,i:MAN.i,final:v};else if(v.kind=='none'&&MAN.final)v=MAN.final;
- const bx=document.getElementById('manualst');if(bx){bx.hidden=!v.text;bx.textContent=v.text;bx.style.color=v.kind=='ng'?'var(--danger-ink)':''}
- document.querySelectorAll('.manb').forEach(b=>{b.disabled=v.busy;b.textContent=v.busy&&MAN.i===+b.dataset.i?'フォームを開いています…':'フォームで送る(自動挿入)'})}
+ if(v.kind=='ok'||v.kind=='ng')MAN={busy:false,name:MAN.name,form:MAN.form,asked:MAN.asked,started:MAN.started,i:MAN.i,final:v};else if(v.kind=='none'&&MAN.final)v=MAN.final;
+ ['manualst','manualst_d'].forEach(id=>{const bx=document.getElementById(id);if(bx){bx.hidden=!v.text;bx.textContent=v.text;bx.style.color=v.kind=='ng'?'var(--danger-ink)':''}});
+ document.querySelectorAll('.manb,.manrec').forEach(b=>{b.disabled=v.busy;b.textContent=v.busy&&b.classList.contains('manb')&&MAN.i===+b.dataset.i?'フォームを開いています…':'フォームで送る(自動挿入)'});
+ const ask=!!(MAN.final&&MAN.final.kind=='ok'&&MAN.started&&MAN.name&&MAN.form&&!MAN.asked);document.querySelectorAll('.manAsk').forEach(a=>{a.hidden=!ask;const n=a.querySelector('.manAskName');if(n)n.textContent=MAN.name||''})}
+async function manStart(name,form,i){MAN={busy:true,name:name,form:form,i:i,final:null};manPaint(JOB);let r;try{r=await post('/api/manual',{file:$('#files').value,name:name})}catch(e){r={error:'ツールに届きませんでした。ツールが動いているか確かめてください'}}if(r.error){MAN={busy:false,final:{busy:false,kind:'ng',text:r.error}};manPaint(JOB);return resNote(r.error)}if(!r.started){MAN={busy:false};manPaint(JOB);resNote('いまほかの処理が動いています。終わってから押します')}else{MAN.started=true;wasRun=true;poll()}}
+// 手で送る: フォームを開いたあとに「送りましたか」と聞き、送信の記録(送信ログ)に入れる。送ったと答えると、同じ会社には自動で送らない
+async function manAnswer(yes){const n=MAN.name,f=MAN.form||'';MAN.asked=true;manPaint(JOB);if(!yes){HNOTE=n+': 送っていないので、記録は変えていません。';hist();return}
+ const r=await post('/api/manual_sent',{company:n,form:f,how:'フォームを開いたあと、画面で「送りました」と答えた'});if(r.error){HNOTE=n+': '+r.error;MAN.asked=false;manPaint(JOB);return}
+ HNOTE=n+': 手で送ったと記録しました。同じ会社には自動で送りません。';hist()}
+document.querySelectorAll('.manYes').forEach(b=>{b.onclick=()=>manAnswer(true)});document.querySelectorAll('.manNo').forEach(b=>{b.onclick=()=>manAnswer(false)});
 function resNote(t){$('#sumnote').textContent=t;$('#sumnote').style.color='var(--danger-ink)';setTimeout(()=>{$('#sumnote').style.color=''},8000)}
 async function portalList(){const r=await J('/api/portals');if(!r||r.error)return;const box=$('#portalBox');if(!box)return;box.innerHTML=r.length?('<div class="why" style="margin:6px 0 2px">登録済みポータル（使うものにチェックすると、上のURL欄と合わせて集めます）</div>'+r.map(p=>`<label style="display:inline-flex;gap:6px;align-items:center;margin:2px 10px 2px 0;font-weight:400"><input type="checkbox" class="portalChk" value="${esc(p.url)}">${esc(p.name||p.url)}<button class="btn sub sm portalDel" data-u="${esc(p.url)}" type="button">削除</button></label>`).join('')):'';document.querySelectorAll('.portalDel').forEach(b=>b.onclick=async()=>{await post('/api/portals',{delete:1,url:b.dataset.u});portalList()});const add=$('#portalAdd');if(add)add.onclick=async()=>{const r2=await post('/api/portals',{name:$('#portalName').value,url:$('#portalUrl').value});if(r2.error)return alert(r2.error);$('#portalName').value='';$('#portalUrl').value='';portalList()}}
-async function ngList(){const r=await J('/api/ngscreen');if(r.error)return;$('#nglist').innerHTML=r.length?r.map((l,i)=>`<div style="margin:6px 0;color:var(--ink)">${esc(l.split('#')[0].trim().replace(/^@/,''))} <span class="why">${esc(l.split('「送らない」')[1]||'')}</span> <button class="btn sub sm ngu" data-i="${i}" type="button">戻す</button></div>`).join(''):'<div class="why">まだありません</div>';document.querySelectorAll('.ngu').forEach(b=>b.onclick=async()=>{const res=await post('/api/ng/undo',{line:r[+b.dataset.i]});if(res.error)return resNote(res.error);loadRes()})}
+async function ngList(){const r=await J('/api/ngscreen');if(r.error)return;const qr=await J('/api/ngreplies'),qs=Array.isArray(qr)?qr:[];const qh=qs.length?'<div class="why" style="margin:10px 0 2px">返事で「不要」と言われた会社</div>'+qs.map(x=>`<div class="ngrep" style="margin:6px 0;color:var(--ink)">${esc(x.company)} <span class="why">${esc(x.when)} ・ 理由: ${esc(x.reason)} ・ ${x.where?'送らない先: '+esc(x.where)+(x.active?'（登録済み）':'（いまは登録されていません）'):'送らない先: 記録なし'}</span></div>`).join(''):'';$('#nglist').innerHTML=(r.length?r.map((l,i)=>`<div style="margin:6px 0;color:var(--ink)">${esc(l.split('#')[0].trim().replace(/^@/,''))} <span class="why">${esc(l.split('「送らない」')[1]||'')}</span> <button class="btn sub sm ngu" data-i="${i}" type="button">戻す</button></div>`).join(''):(qs.length?'':'<div class="why">まだありません</div>'))+qh;document.querySelectorAll('.ngu').forEach(b=>b.onclick=async()=>{const res=await post('/api/ng/undo',{line:r[+b.dataset.i]});if(res.error)return resNote(res.error);loadRes()})}
 $('#files').onchange=loadRes;$('#onlyOk').onchange=loadRes;$('#dl').onclick=async()=>{const f=$('#files').value;if(!f)return;const r=await fetch('/download?file='+encodeURIComponent(f),{headers:{'X-Token':TOKEN}});const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download=f;a.click()};
 // ---- 送る: 状態はサーバーが返す send_state(s0〜s7)で決め、画面はそれを描くだけ ----
 const S={flash:'',err:'',editSender:false,editMsg:false,msgInd:'default',parts:null,greet:true,opener:true,T:null,tLoading:false,read:false,dirty:'',condOpen:false,wait:'',leave7:false,smaxInit:false};
@@ -423,18 +432,18 @@ function msgSummary(){const s=META.message_summary;if(s&&Array.isArray(s.industr
 function hasOwn(n){const s=META.message_summary;if(s&&Array.isArray(s.industries))return s.industries.includes(n);const mi=META.message_info||{industries:{}};return mi.industries&&mi.industries[n]=='専用'||!!(mi.patterns&&mi.patterns[n])}
 function markSender(){FIELDS.forEach(k=>{const e=$('#e_'+k),f=$('#f_'+k);if(e){e.hidden=true;e.textContent=''}if(f)f.classList.remove('bad')});
  senderProbs().forEach(p=>{const e=$('#e_'+p.field),f=$('#f_'+p.field);if(e){const t=String(p.text||'').replace(/^送信元の「[^」]*」が/,'').replace(/^見本の「[^」]*」のままです$/,'見本のままです');e.hidden=false;e.textContent=(e.textContent?e.textContent+' ':'')+t}if(f)f.classList.add('bad')})}
-function band(html,btns,extra){$('#now_c').innerHTML=html+(S.err?`<p class="berr" role="alert">${S.err}</p>`:'')+(btns?`<div class="nowact">${btns}</div>`:'')+(extra||'')}
+function band(html,btns,extra){$('#now_c').innerHTML=html+(S.err?`<p class="berr" role="alert">${S.err}</p>`:'')+(btns?`<div class="nowact">${btns}</div>`:'')+(extra||'');if(typeof lockApply=='function')lockApply()}
 const B=(id,t,cls)=>`<button class="btn ${cls||'big'}" id="${id}" type="button">${esc(t)}</button>`;
 function on(id,fn){const e=$('#'+id);if(e)e.onclick=fn}
 function renderSend(){if(!$('#now_c'))return;if(!META.send_state){band(NW+'読み込んでいます。少し待ちます。');return}
  const st=sState(),j=JOB,fl=S.flash?esc(S.flash):'';
  const prep=j.running&&j.name=='確認',sending=j.running&&j.name=='本番送信';
  initSmax();$('#now_c').classList.toggle('stick',(st=='s4'||st=='s5')&&!j.running);
- ['#c_cond','#c_sum','#senderEdit','#msgEdit','#c_plan','#c_run','#condMore','#aiOpen','#aiSend'].forEach(x=>show(x,false));show('#senderLine',!S.editSender);show('#msgLine',!S.editMsg);show('#senderClose',!(st=='s1'||st=='s2'&&senderProbs().length));
+ ['#c_cond','#c_sum','#senderEdit','#msgEdit','#c_plan','#c_run','#condMore','#aiSend'].forEach(x=>show(x,false));show('#senderLine',!S.editSender);show('#msgLine',!S.editMsg);show('#senderClose',!(st=='s1'||st=='s2'&&senderProbs().length));
  show('#c_main',st!='s0');
  if(j.running&&!['確認','本番送信','探す'].includes(j.name)){band(`${NW}「${esc(j.name)}」が動いています。終わってから送る準備ができます。`);return}
  if(S.wait){band(NW+esc(S.wait));showCommon(st);return}
- if(st=='s0'){band(NX+'先にリストを作ります。探す画面で探すと、ここで送れるようになります。',B('mainBtn','探すへ'));on('mainBtn',()=>goto('a'));return}
+ if(st=='s0'){band(NX+'リストを作ります。探す画面で探すと、ここで送れるようになります。',B('mainBtn','探すへ'));on('mainBtn',()=>goto('a'));return}
  if(st=='s1'||st=='s2'){const sp=senderProbs(),mp=msgProbs();
   if(sp.length||st=='s1'){S.editSender=true;show('#senderEdit',true);markSender();
    const lead=fl&&/^保存しました/.test(S.flash)?'保存しました。まだ送れません: '+esc((sp[0]||{}).text||''):(st=='s1'&&META.first_time?'最初の1回だけ、送信元（相手に見える名前と連絡先）を入れます。':esc((sp[0]||{}).text||'送信元に足りない欄があります。'));
@@ -444,14 +453,14 @@ function renderSend(){if(!$('#now_c'))return;if(!META.send_state){band(NW+'読�
   if(S.editMsg){show('#msgEdit',true);band(NX+(fl?fl+' ':'')+esc(p.text||'文面に直すところがあります。'),B('mainBtn','この文面を保存'));on('mainBtn',saveMsg)}
   else{band(NX+(fl?fl+' ':'')+esc(p.text||'文面に直すところがあります。'),B('mainBtn','文面を直す'));on('mainBtn',()=>openMsg(p.industry||'default'))}
   return}
- if(st=='s3'){show('#c_cond',!S.editMsg&&!S.editSender);show('#c_sum',true);show('#condMore',true);show('#aiOpen',true);renderCond(st);showEditors();renderSumLines(st);
+ if(st=='s3'){show('#c_cond',!S.editMsg&&!S.editSender);show('#c_sum',true);show('#condMore',true);renderCond(st);showEditors();renderSumLines(st);
   if(prep){band(NW+'送る内容を作っています。少しかかります。まだ送りません。');return}
   const v=smaxCheck();band(NX+(fl?fl+' ':'')+'「送る内容を出す」を押します。まだ送りません。',B('mainBtn',v.ok?(v.n==null?'送る内容を出す（全社）':`送る内容を出す（${v.n}社まで）`):'送る内容を出す'));
   const mb=$('#mainBtn');if(!v.ok)mb.classList.add('wait');mb.onclick=()=>doPreview(false);return}
  if(st=='s4'||st=='s5'){show('#c_cond',true);show('#c_sum',true);show('#msgLine',false);show('#senderLine',!S.editSender);renderCond(st);showEditors();renderSumLines(st);
   if(!S.T){band(NW+'送る内容を読み込んでいます。');loadPlan();return}
   const T=S.T,n=(T.sendable||[]).length,m=(T.skipped||[]).length;show('#c_plan',true);show('#aiSend',n>0);
-  if(!n){band(NX+`送れる会社がありません。${m}社は送りません（理由は下）。`,B('mainBtn','結果を見るで選び直す'));on('mainBtn',()=>goto('b'));return}
+  if(!n){band(NX+`結果を見るで、リストを選び直します。送れる会社がありません（${m}社は送りません。理由は下）。`,B('mainBtn','結果を見るで選び直す'));on('mainBtn',()=>goto('b'));return}
   const head=(fl?fl+' ':'')+(m?`${n}社に送れます。${m}社は送りません（理由は下）。`:`${n}社に送れます。`);
   const how=T.window?`<span class="hint">${esc(T.window)}</span>`:`<span class="hint">下の文を読み、良ければ読みましたにチェックを入れます。</span>`;
   band(NX+head+how+`<label class="check readck"><input type="checkbox" id="readok"${S.read?' checked':''}><span>届く文と、会社ごとに違うところを読みました</span></label>`,B('mainBtn',`この${n}社に送る`));const mb=$('#mainBtn');if(!S.read||T.window)mb.classList.add('wait');mb.onclick=doSend;const rk=$('#readok');if(rk)rk.onchange=()=>{S.read=rk.checked;if(S.read&&S.err)S.err='';renderSend()};return}
@@ -496,7 +505,7 @@ function assemble(){const p=S.parts||{ok:false},b=fromMarks($('#mtext').value).r
 function rawMsg(k){const mi=META.message_info||{};const m=META.messages||{};return m[k]??(mi.pattern_texts&&mi.pattern_texts[k])??m.default??''}
 function renderMsgOptions(){syncExpand();showWhere();const mi=META.message_info||{industries:{},orphans:[]};const orph=(mi.orphans||[]);
  const names=['default',...(META.industries||[]),...orph.map(o=>o.name)];
- $('#mind').innerHTML=names.map(n=>{const o=orph.find(x=>x.name==n);const t=n=='default'?'基本の文面':n+(o?'（古い業種名。いまは使われません）':hasOwn(n)?'（業種ごとの文面）':'（基本の文面を使う）');return `<option value="${esc(n)}">${esc(t)}</option>`}).join('');
+ $('#mind').innerHTML=names.map(n=>{const o=orph.find(x=>x.name==n);const t=n=='default'?'基本の文面':n+(o?(o.to?'（「'+o.to+'」の古い名前。いまは使われません）':'（古い業種名。いまは使われません）'):hasOwn(n)?'（業種ごとの文面）':'（基本の文面を使う）');return `<option value="${esc(n)}">${esc(t)}</option>`}).join('');
  if(names.includes(S.msgInd))$('#mind').value=S.msgInd}
 function showMsg(){const k=S.msgInd=$('#mind').value,mi=META.message_info||{orphans:[]};const o=(mi.orphans||[]).find(x=>x.name==k),own=k!='default'&&hasOwn(k);
  S.parts=splitMsg(rawMsg(k));S.greet=S.parts.greet;S.opener=S.parts.opener;$('#mtext').value=S.parts.body;
@@ -546,10 +555,12 @@ const OPSRC={fallback:'書き出しは自動の下書き(ホームページか�
 async function loadPlan(){if(S.tLoading)return;S.tLoading=true;
  const r=await J('/api/targets?file='+encodeURIComponent($('#sfile').value)+'&max='+encodeURIComponent($('#smax').value)+'&supp='+($('#supp').checked?1:0));S.tLoading=false;
  if(r.error){S.err=errHtml(r);S.T={sendable:[],skipped:[],commons:[]};}else S.T=r;renderPlan();renderSend()}
+function basicNotice(sd){const mi=META.message_info||{};if(!mi.expand_on)return '';const by={};sd.forEach(x=>{if(x.industry&&x.template_label=='標準')by[x.industry]=(by[x.industry]||0)+1});const ks=Object.keys(by);if(!ks.length)return '';
+ return '<p class="hint" id="basicNote" role="status" style="color:#8a5a00">この業種には専用の文面が無いため、基本の文面が届きます: '+ks.map(k=>esc(k)+' '+by[k]+'社').join('、')+'。基本の文面が別の業種向けの内容なら、「文面を直す」で業種ごとの文面を作ってから送ります。</p>'}
 function renderPlan(){const T=S.T||{},sd=T.sendable||[],sk=T.skipped||[],cm=T.commons||[];let h='';
- if(sd.length){h+='<h3 class="eh">届く文</h3><p class="hint">違うのは会社名と書き出しだけです。</p>';
+ if(sd.length){h+='<h3 class="eh">届く文</h3><p class="hint">違うのは会社名と書き出しだけです。</p>'+basicNotice(sd);
   h+=cm.map(c=>`<div class="common"><p class="ch">${esc(c.template_label)}の文面 ${c.count}社</p><p class="hint" style="margin:6px 0 2px">会社ごとの書き出し（この文面の先頭に入ります）</p><ul class="opfirst" style="margin:0 0 8px 1.2em;padding:0">${(()=>{const g=sd.filter(x=>x.template_label==c.template_label);return g.slice(0,1).map(x=>`<li><b>${esc(x.name)}</b>　${esc(x.opener||'（書き出しなし）')}</li>`).join('')+(g.length>1?`<li class="hint">ほか${g.length-1}社は、下の表で見られます。</li>`:'')})()}</ul><div class="msgbody">${chips('件名: '+(c.subject||''))}\n\n${chips(c.text_with_marks||'')}</div></div>`).join('');
-  h+='<h3 class="eh">会社ごとに違うところ</h3><p class="hint">書き出しは、ホームページから作った下書きです。直せます。</p>';
+  h+='<h3 class="eh">会社ごとに違うところ</h3>'+sameOpenerNotice(sd)+'<p class="hint">書き出しは、ホームページから作った下書きです。直せます。</p>';
   h+='<div class="tw"><table class="rt op"><tr><th style="width:20%">会社</th><th style="width:15%">使う文面</th><th>書き出し（直せます）</th><th style="width:12%">全文</th><th style="width:12%">フォーム</th></tr>'+sd.map((x,i)=>`<tr><td><b>${esc(x.name)}</b><div class="why">${esc(x.industry||'業種なし')}</div>${x.adoption_diff?`<div class="why">【採用との違い】${esc(x.adoption_diff)}</div>`:''}</td><td>${esc(x.template_label||'')}</td><td><textarea class="opin" data-i="${i}" data-n="${esc(x.name)}" aria-label="${esc(x.name)}の書き出し">${esc(x.opener||'')}</textarea><div class="why">${esc(x.opener?(OPSRC[x.opener_source]||''):(x.opener_why||''))}</div></td><td><button class="lnk fullbtn" data-i="${i}" type="button">全文を開く</button></td><td>${lk(x.form,'フォームを開く')}</td></tr><tr class="fullrow" id="full${i}" hidden><td colspan="5"><div class="msgbody">${esc('件名: '+(x.subject||'')+'\n\n'+(x.text||''))}</div></td></tr>`).join('')+'</table></div>';
   h+='<div class="actions"><button class="btn sub" id="saveOp" type="button">書き出しを保存</button> <span class="hint" id="opNote"></span></div>'}
  if(sk.length){h+=`<h3 class="eh">送らない会社 ${sk.length}社 <span class="opt">送った会社は自動で外します</span></h3><div class="tw"><table class="rt"><tr><th style="width:30%">会社</th><th>送らない理由</th></tr>`+sk.map(x=>`<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.text||'')}${x.fix=='sender'?' <button class="lnk" data-go="" type="button">送信元を直す</button>':x.fix=='message'?` <button class="lnk" data-gomsg="${esc(x.industry||'')}" type="button">文面を直す</button>`:''}</td></tr>`).join('')+'</table></div>'}
@@ -557,6 +568,9 @@ function renderPlan(){const T=S.T||{},sd=T.sendable||[],sk=T.skipped||[],cm=T.co
  $('#c_plan').innerHTML=h;
  document.querySelectorAll('.fullbtn').forEach(b=>b.onclick=()=>{const r=$('#full'+b.dataset.i);r.hidden=!r.hidden;b.textContent=r.hidden?'全文を開く':'全文を閉じる'});
  on('saveOp',saveOp)}
+function sameOpenerGroup(sd){const g={};sd.forEach(x=>{const k=(x.opener||'').trim();if(k)(g[k]=g[k]||[]).push(x.name)});let best=null;Object.values(g).forEach(a=>{if(!best||a.length>best.length)best=a});return best&&best.length>=2&&(best.length>=3||best.length==sd.length)?best:null}
+function sameOpenerNotice(sd){const b=sameOpenerGroup(sd);if(!b)return '';return `<p class="hint" id="sameOpener" role="status"><b>同じ文の会社 ${b.length}社</b>（全${sd.length}社中）。書き出しが同じ文のままです。<button class="lnk" id="toOpener" type="button">書き出しを直す欄へ</button></p>`}
+document.addEventListener('click',e=>{if(e.target&&e.target.id=='toOpener'){const t=document.querySelector('.opin');if(t){t.scrollIntoView({block:'center'});t.focus()}}});
 async function saveOp(){const T=S.T||{},ops={};let empty=0;document.querySelectorAll('.opin').forEach(t=>{const x=(T.sendable||[])[+t.dataset.i];if(!x)return;const v=t.value.trim();if(v==(x.opener||'').trim())return;if(!v){empty++;return}ops[x.name]=v});
  if(empty){$('#opNote').textContent='書き出しを空にはできません。消した欄に1文入れてから保存します。';return}
  if(!Object.keys(ops).length){$('#opNote').textContent='直した書き出しはありません。';return}
@@ -584,24 +598,70 @@ $('#approve').onclick=async()=>{if(!S.read){$('#aiNote').textContent='先に、�
 function cnt(){const c=META.counts||{};return {total:+c.total||0,done:+c.done||0,sent:+c.sent||0,check:+c.check||0,manual:+c.manual||0,has:!!META.counts}}
 function renderRun(st,sending){const c=cnt(),L=lim()||{},sec=L.sec_per_company||[];const box=$('#c_run');
  if(st=='s6'){const per=sec.length==2?`・1社${sec[0]}〜${sec[1]}秒`:'';
-  band(NW+(c.has&&c.total?`${Math.min(c.done+1,c.total)}社目を送っています（全${c.total}社${per}）。このまま待ちます。`:'送っています。このまま待ちます。'),B('mainBtn','送信の記録を見る'));on('mainBtn',()=>goto('d'));
-  box.innerHTML=c.has&&c.total?`<div class="prog2"><div style="width:${Math.round(100*c.done/c.total)}%"></div></div><p>${c.done}／${c.total}社 終わりました。送れた ${c.sent}社 ／ 送れたか確かめる ${c.check}社 ／ フォームで送る(自動挿入) ${c.manual}社</p><p class="hint">この画面を閉じても、送るのは続きます。</p>`:'<p class="hint">この画面を閉じても、送るのは続きます。</p>';return}
- band(NX+`送り終えました。送れた会社 ${c.sent}社（相手の画面で、送れたことを確かめた会社）。送れたか確かめる会社 ${c.check}社。フォームで送る会社 ${c.manual}社。`,B('mainBtn','送信の記録を見る'));on('mainBtn',()=>goto('d'));
+  const stp=!!META.stopping,aw=META.awake=='on'?'送っている間は、このパソコンが眠らないようにしています。':'このパソコンは自動では眠りを止められません。電源の設定で、眠るまでの時間を長くしておきます。';
+  band(NW+(c.has&&c.total?`${Math.min(c.done+1,c.total)}社目を送っています（全${c.total}社${per}）。このまま待ちます。`:'送っています。このまま待ちます。')+`<b id="pwrWarn" class="hint" style="display:block;color:inherit">電源を切らないでください。</b>`,B('mainBtn','送信の記録を見る')+' '+(stp?'<span class="hint" id="stopNote">止める指示を出しました。いまの1社が終わったら止まります。</span>':B('stopBtn','ここで止める','sub')));on('mainBtn',()=>goto('d'));
+  on('stopBtn',async()=>{if(!confirm('ここで止めます。いま送っている1社は最後まで送り、次の会社には進みません。残りの会社は送らないまま残り、あとで「送る内容を出す」から送れます。よろしいですか'))return;const r=await post('/api/send/stop',{});if(r&&r.error){S.err=errHtml(r)}else{META.stopping=!!(r&&r.stopped)}renderSend()});
+  box.innerHTML=c.has&&c.total?`<div class="prog2"><div style="width:${Math.round(100*c.done/c.total)}%"></div></div><p>${c.done}／${c.total}社 終わりました。送れた ${c.sent}社 ／ 送れたか確かめる ${c.check}社 ／ フォームで送る(自動挿入) ${c.manual}社</p><p class="hint">この画面を閉じても、送るのは続きます。${aw}</p>`:`<p class="hint">この画面を閉じても、送るのは続きます。${aw}</p>`;return}
+ const rem=c.has?(+META.counts.remaining||0):0,why=META.counts&&META.counts.interrupted?'前回の送信は、途中で終わっていました。':META.counts&&META.counts.stopped?'止める指示で、途中で止めました。':'送る処理が、途中で終わりました。';
+ band('<b>結果</b>'+(rem>0?`<span id="remainMsg">${why}${rem}社残っています</span>（全${c.total}社のうち${c.done}社を終えました）。残りの会社は送っていません。もう一度「送る内容を出す」を押すと、残りだけが出ます（送った会社には送りません）。`:'送り終えました。')+`送れた会社 ${c.sent}社（相手の画面で、送れたことを確かめた会社）。送れたか確かめる会社 ${c.check}社。フォームで送る会社 ${c.manual}社。`,B('mainBtn','送信の記録を見る'));on('mainBtn',()=>goto('d'));
  box.innerHTML=`<div class="sum"><div><span class="lb">${tag('送れた','ok')}</span><span class="nm"><b>${c.sent}</b>社</span></div><div><span class="lb">${tag('送れたか確かめる','warn')}</span><span class="nm"><b>${c.check}</b>社</span></div><div><span class="lb">${tag('フォームで送る(自動挿入)','warn')}</span><span class="nm"><b>${c.manual}</b>社</span></div></div>`+'<div class="actions">'+(c.manual?'<button class="lnk" id="toManual" type="button">フォームで送る会社の一覧を見る</button>　':'')+'<button class="lnk" id="next7" type="button">次の送る準備へ</button></div>';
  on('toManual',()=>{HF='manual';goto('d')});on('next7',()=>{S.leave7=true;S.smaxInit=false;initSmax();renderSend();window.scrollTo(0,0)})}
 // ---- 送信の記録 ----
-const RES={'送信済み':['送れた','ok'],'不明(要確認)':['送れたか確かめる','warn'],'入力エラー(要確認)':['送れたか確かめる（入力エラーの表示あり）','warn'],'送信試行':['送れたか確かめる（結果が分からない）','warn'],'要手動':['フォームで送る(自動挿入)','warn'],'お断り表示(送らない)':['お断りの表示があり、送らない','ng'],'試走OK':['送っていない記録','gray'],'1社目の確認で止めた':['1社目の確認で止めた（送っていない）','gray']};
-let HF='';
+const RES={'送信済み':['送れた','ok'],'不明(要確認)':['送れたか確かめる','warn'],'入力エラー(要確認)':['送れたか確かめる（入力エラーの表示あり）','warn'],'送信試行':['送れたか確かめる（結果が分からない）','warn'],'要手動':['フォームで送る(自動挿入)','warn'],'お断り表示(送らない)':['お断りの表示があり、送らない','ng'],'試走OK':['送っていない記録','gray'],'1社目の確認で止めた':['1社目の確認で止めた（送っていない）','gray'],'届いた(本人確認)':['届いた（本人が確かめた）','ok'],'届いていない(本人確認)':['届いていない（本人が確かめた）','ng'],'手で送信済み':['手で送った','ok']};
+let HF='',HNOTE='',AFTER={replies:[],action_needed:[],followups:[],summary:null},OPENS_T=0;
+const RKINDS=['興味あり','資料がほしい','金額を知りたい','時期未定','担当違い','その他','商談した','契約した'];
 function hcls(r){const k=r['結果']||'',m=r['メモ']||'';if(k=='送信済み')return 'sent';if(['不明(要確認)','入力エラー(要確認)','送信試行'].includes(k))return 'check';if(k=='要手動')return /差し込みの取り残し/.test(m)?'msg':'manual';return 'other'}
-async function hist(){const rows0=await J('/api/log');if(rows0.error)return;const lastOf={};rows0.forEach(r=>{lastOf[(r['企業名']||'')+'\u0001'+(r['フォームURL']||'')]=r});const rows=rows0.filter(r=>lastOf[(r['企業名']||'')+'\u0001'+(r['フォームURL']||'')]===r||r['結果']!='送信試行');const c={sent:0,check:0,manual:0};Object.values(lastOf).forEach(r=>{const k=hcls(r);if(k in c)c[k]++});
- const card=(t,k,n)=>`<div><span class="lb">${tag(t,k)}</span><span class="nm"><b>${n}</b>社</span></div>`;$('#hsum').innerHTML=card('送れた','ok',c.sent)+card('送れたか確かめる','warn',c.check)+card('フォームで送る(自動挿入)','warn',c.manual);
- const nd=$('#now_d');if(c.manual){nd.innerHTML=NX+`フォームで送る会社 ${c.manual}社を、フォームを開いて送ります。<div class="nowact">${B('hBtn','フォームで送る会社を見る')}</div><details class="dt"><summary>フォームで送る、送れたか確かめる、の意味</summary><div>${DMEAN}</div></details>`;on('hBtn',()=>{HF='manual';hist()})}
- else if(c.check){nd.innerHTML=NX+`送れたか確かめる会社 ${c.check}社を、フォームを開いて確かめます。<div class="nowact">${B('hBtn','確かめる会社を見る')}</div><details class="dt"><summary>フォームで送る、送れたか確かめる、の意味</summary><div>${DMEAN}</div></details>`;on('hBtn',()=>{HF='check';hist()})}
- else{nd.innerHTML=NX+'次の送る準備に進めます。'+`<div class="nowact">${B('hBtn','次の送る準備へ')}</div>`;on('hBtn',()=>{S.leave7=true;goto('c')})}
- const list=rows.slice().reverse().filter(r=>!HF||hcls(r)==HF);
- $('#hfnote').innerHTML=HF?`${HF=='manual'?'フォームで送る(自動挿入)':'送れたか確かめる'}会社だけを出しています。 <button class="lnk" id="hAll" type="button">全部の記録を見る</button>`:'';on('hAll',()=>{HF='';hist()});
- $('#hist').innerHTML=list.length?'<tr><th style="width:15%">日時</th><th style="width:22%">会社</th><th style="width:22%">結果</th><th>わけ・次にすること</th><th style="width:12%"></th></tr>'+list.map(r=>{const k=hcls(r);const m=k=='msg'?['文面の問題で送らなかった（フォームは開いていません）','gray']:(RES[r['結果']]||[r['結果'],'']);return `<tr><td>${esc((r['日時']||'').slice(5))}</td><td><b>${esc(r['企業名'])}</b></td><td>${tag(m[0],m[1])}</td><td>${esc(plain(r['メモ']))}</td><td>${lk(r['フォームURL'],'フォームを開く')}</td></tr>`}).join(''):'<tr><td>まだ記録がありません</td></tr>'}
-const DMEAN='フォームで送る(自動挿入): フォームを開き、入れられる欄に文面を自動で入れます。内容を確かめて、自分で送信ボタンを押します。<br>送れたか確かめる: 送信ボタンは押しています。相手から自動返信のメールが届いていれば送れています。届かなくても、送れていないとは限りません。送り直す前に、フォームを開いて確かめます。';
+const hkey=r=>(r['企業名']||'')+'\u0001'+(r['フォームURL']||'');
+function recBox(r){return `<details class="dt recbox"><summary>結果を記録</summary><div class="recopts" data-n="${esc(r['企業名'])}" data-f="${esc(r['フォームURL']||'')}"><button class="btn sub sm rec" data-a="delivered" type="button">届いた</button><button class="btn sub sm rec" data-a="notdelivered" type="button">届いていない</button><button class="btn sub sm rec" data-a="manual" type="button">手で送った</button><button class="btn sub sm rec" data-a="reply" type="button">返事があった</button><button class="btn sub sm rec" data-a="unwanted" type="button">不要と言われた</button><div class="recreply" hidden><select class="rkind" aria-label="返事の種類">${RKINDS.map(k=>`<option>${esc(k)}</option>`).join('')}</select><textarea class="rtext" aria-label="返事の原文" placeholder="返事の原文（分かれば）"></textarea><button class="btn sm recgo" type="button">返事を記録する</button></div><p class="hint recnote" role="status"></p></div></details>`}
+async function recDo(b){const bx=b.closest('.recopts'),n=bx.dataset.n,f=bx.dataset.f,note=bx.querySelector('.recnote'),a=b.dataset.a||'replygo';
+ if(a=='reply'){bx.querySelector('.recreply').hidden=false;return}
+ let url,d,msg='';
+ if(a=='delivered'||a=='notdelivered'){url='/api/outcome';d={company:n,form:f,delivered:a=='delivered',how:'画面から記録'};msg=a=='delivered'?'届いたと記録しました。':'届いていないと記録しました。自動では送り直しません。'}
+ else if(a=='manual'){url='/api/manual_sent';d={company:n,form:f,how:'画面から記録'};msg='手で送ったと記録しました。同じ会社には自動で送りません。'}
+ else if(a=='unwanted'){url='/api/reply';d={company:n,form:f,kind:'不要',text:'',memo:'画面から記録'}}
+ else{url='/api/reply';d={company:n,form:f,kind:bx.querySelector('.rkind').value,text:bx.querySelector('.rtext').value,memo:'画面から記録'}}
+ note.textContent='記録しています…';const r=await post(url,d);if(r.error){note.textContent=r.error;return}
+ if(a=='unwanted')msg=r.ng_added?'不要と記録し、送らない会社に入れました。次の対象から外れます。一覧は「2 結果を見る」の「送らない会社に入れたもの」で確かめられます。':'不要と記録しました。'+(r.note||'');
+ else if(a=='replygo')msg='返事を記録しました。次にすること: '+(r.next||'');
+ HNOTE=n+': '+msg;await hist();ngList()}
+async function paintOpens(){try{if(Date.now()-OPENS_T>60000){const o=await J('/api/opens');OPENS={};(o&&o.companies||[]).forEach(c=>{OPENS[c.company]=c.status});OPENS_T=Date.now()}
+ document.querySelectorAll('.opn').forEach(e=>{const s=OPENS[e.dataset.n]||'';e.innerHTML=s.startsWith('開いた合図')?tag('資料を開いた','ok'):(s.startsWith('開いた(')||s.startsWith('触れ'))?tag('資料に触れた（自動確認の可能性）','gray'):''})}catch(e){}}
+let OPENS={};
+async function hist(){const [rows0,aft]=await Promise.all([J('/api/log'),J('/api/aftercare')]);if(rows0.error)return;AFTER=aft&&!aft.error?aft:{replies:[],action_needed:[],followups:[],summary:null};
+ const lastOf={};rows0.forEach(r=>{lastOf[hkey(r)]=r});const rows=rows0.filter(r=>lastOf[hkey(r)]===r||r['結果']!='送信試行');const c={sent:0,check:0,manual:0};Object.values(lastOf).forEach(r=>{const k=hcls(r);if(k in c)c[k]++});
+ // 3つのカードの数と、押したときの絞り込みは、同じ集合(会社×フォームの鍵)から作る
+ const names=new Set(Object.values(lastOf).map(r=>r['企業名']||'')),rn=new Set((AFTER.action_needed||[]).filter(n=>names.has(n))),fk=new Set((AFTER.followups||[]).map(f=>(f.company||'')+'\u0001'+(f.form||'')));
+ const ST={reply:new Set(),follow:new Set(),verify:new Set()};Object.entries(lastOf).forEach(([k,r])=>{if(rn.has(r['企業名']||''))ST.reply.add(k);if(fk.has(k))ST.follow.add(k);const h=hcls(r);if(h=='check'||h=='manual')ST.verify.add(k)});
+ const RP={};(AFTER.replies||[]).forEach(x=>{RP[x.company]=x});
+ const card=(k,t,n,sub)=>`<button type="button" class="hsumc${HF==k?' on':''}" data-k="${k}" aria-pressed="${HF==k}"><span class="lb">${esc(t)}</span><span class="nm"><b>${n}</b>社</span><span class="lb">${esc(sub)}</span></button>`;
+ $('#hsum').innerHTML=card('reply','返事に対応する',ST.reply.size,'返事があって、対応がまだの会社')+card('follow','追いかける',ST.follow.size,'14日たっても返事が無い会社')+card('verify','確かめる',ST.verify.size,`送れたか確かめる ${c.check}・フォームで送る ${c.manual}`);
+ document.querySelectorAll('.hsumc').forEach(b=>{b.onclick=()=>{HF=HF==b.dataset.k?'':b.dataset.k;hist()}});
+ const sm=AFTER.summary;let st=`送れた ${c.sent}社（相手の画面で、送れたことを確かめた会社）。`;
+ if(sm){st+=` この${sm.days}日間: ${sm.sent_companies}社に送り、${sm.replied_companies}社から返事`+((sm.meetings||sm.contracts)?`（商談 ${sm.meetings}社・契約 ${sm.contracts}社）`:'')+'。';
+  st+=sm.rate==null?` 割合は、送った会社が${sm.rate_min_sent}社に届くまで出しません。`:` 返事の割合 ${Math.round(sm.rate*100)}%（${sm.replied_companies}／${sm.sent_companies}）。`;
+  const bm=Object.entries(sm.by_message||{});if(bm.length>1||(bm.length==1&&!bm[0][0].startsWith('文面名なし')))st+=' 文面ごと: '+bm.map(([n,m])=>`${n} ${m.sent}社中${m.replied}社`+(m.rate==null?'':`（${Math.round(m.rate*100)}%）`)).join('、')+'。'}
+ $('#hsent').textContent=st;
+ const nd=$('#now_d'),meaning=`<details class="dt"><summary>フォームで送る、送れたか確かめる、の意味</summary><div>${DMEAN}</div></details>`;
+ if(ST.reply.size){nd.innerHTML=NX+`返事があった会社 ${ST.reply.size}社に、対応します。<div class="nowact">${B('hBtn','返事に対応する会社を見る')}</div>`;on('hBtn',()=>{HF='reply';hist()})}
+ else if(ST.follow.size){nd.innerHTML=NX+`14日たっても返事が無い会社 ${ST.follow.size}社に、追いかけを1回だけします。<div class="nowact">${B('hBtn','追いかける会社を見る')}</div>`;on('hBtn',()=>{HF='follow';hist()})}
+ else if(c.manual){nd.innerHTML=NX+`フォームで送る会社 ${c.manual}社を、フォームを開いて送ります。<div class="nowact">${B('hBtn','フォームで送る会社を見る')}</div>${meaning}`;on('hBtn',()=>{HF='manual';hist()})}
+ else if(c.check){nd.innerHTML=NX+`送れたか確かめる会社 ${c.check}社を、フォームを開いて確かめます。<div class="nowact">${B('hBtn','確かめる会社を見る')}</div>${meaning}`;on('hBtn',()=>{HF='check';hist()})}
+ else{nd.innerHTML=NX+'送る準備に進みます。'+`<div class="nowact">${B('hBtn','次の送る準備へ')}</div>`;on('hBtn',()=>{S.leave7=true;goto('c')})}
+ const list=rows.slice().reverse().filter(r=>{if(!HF)return true;const k=hkey(r);if(lastOf[k]!==r)return false;if(HF=='reply')return ST.reply.has(k);if(HF=='follow')return ST.follow.has(k);if(HF=='verify')return ST.verify.has(k);return hcls(r)==HF});
+ const NM={reply:'返事に対応する',follow:'追いかける',verify:'確かめる',manual:'フォームで送る(自動挿入)',check:'送れたか確かめる'};
+ $('#hfnote').innerHTML=(HNOTE?esc(HNOTE)+' ':'')+(HF?`${NM[HF]}会社だけを出しています。 <button class="lnk" id="hAll" type="button">全部の記録を見る</button>`:'');HNOTE='';on('hAll',()=>{HF='';hist()});
+ const row=r=>{const k=hcls(r),key=hkey(r),last=lastOf[key]===r,nm=r['企業名']||'',rp=RP[nm];const m=k=='msg'?['文面の問題で送らなかった（フォームは開いていません）','gray']:(RES[r['結果']]||[r['結果'],'']);
+  let marks='',why=esc(plain(r['メモ']));
+  if(last){if(rp){marks+=' '+tag('返事: '+rp.kind,rp.kind=='不要'?'gray':'ok');why+=(why?'<br>':'')+`返事の記録 ${esc((rp.when||'').slice(5))}: ${esc(rp.kind)}${rp.text?'「'+esc(rp.text.slice(0,60))+'」':''}`}
+   if(ST.follow.has(key)){marks+=' '+tag('追いかける','warn');why+=(why?'<br>':'')+'追いかけは1回までです。文面は全文を読んでから、自分で送ります。'}
+   marks+=` <span class="opn" data-n="${esc(nm)}"></span>`}
+  const ops=lk(r['フォームURL'],'フォームを開く')+(last&&k=='manual'&&/^https?:/i.test(r['フォームURL']||'')?`<br><button class="btn sub sm manrec" data-n="${esc(nm)}" data-f="${esc(r['フォームURL']||'')}" type="button">フォームで送る(自動挿入)</button>`:'')+(last?recBox(r):'');
+  return `<tr><td>${esc((r['日時']||'').slice(5))}</td><td><b>${esc(nm)}</b>${marks}</td><td>${tag(m[0],m[1])}</td><td>${why}</td><td>${ops}</td></tr>`};
+ $('#hist').innerHTML=list.length?'<tr><th style="width:12%">日時</th><th style="width:22%">会社</th><th style="width:18%">結果</th><th>わけ・次にすること</th><th style="width:20%"></th></tr>'+list.map(row).join(''):'<tr><td>'+(HF?'この絞り込みに当たる会社はありません':'まだ記録がありません')+'</td></tr>';
+ document.querySelectorAll('.rec,.recgo').forEach(b=>{b.onclick=()=>recDo(b)});
+ document.querySelectorAll('.manrec').forEach(b=>{b.onclick=()=>{if(!confirm(b.dataset.n+' のフォームを別の画面で開き、入れられる欄だけ自動で入れます。\n送信ボタンは押しません。中身を確かめて、ご自分で送ってください。よろしいですか'))return;manStart(b.dataset.n,b.dataset.f,-1)}});
+ paintOpens()}
+const DMEAN='フォームで送る(自動挿入): フォームを開き、入れられる欄に文面を自動で入れます。内容を確かめて、自分で送信ボタンを押します。<br>送れたか確かめる: 送信ボタンは押しています。相手から自動返信のメールが届いていれば送れています。届かなくても、送れていないとは限りません。送り直す前に、会社のフォームを開いて確かめます。分からなければ、送り直さずに返事を待ちます。';
 $('#reload').onclick=hist;
 // ---- 探す(画面の動きは変えない) ----
 $('#go').onclick=async()=>{const r=await post('/api/search',{area:$('#area').value,limit:$('#limit').value,fetch_limit:$('#fetchLimit').value,include_large:$('#large').checked,restart_search:$('#restartSearch').checked,resume_checks:!$('#resumeChecks')||$('#resumeChecks').checked,official_research:!$('#officialResearch')||$('#officialResearch').checked,portal:$('#portal').value,portals:[...document.querySelectorAll('.portalChk:checked')].map(x=>x.value),ng:$('#ng').value,keywords:$('#kw').value,sources:[...document.querySelectorAll('#srcs input:checked')].map(x=>x.value),industries:[...document.querySelectorAll('#inds input:checked')].map(x=>x.value)});
@@ -635,15 +695,14 @@ async function poll(){clearInterval(timer);const t=async()=>{const j=await J('/a
   if(wasRun&&sj){S.T=null;if(/出し直しています。$/.test(S.flash))S.flash='書き出しを直して、送る内容を出し直しました。';await refreshMeta(true)}
   wasRun=false;banners();if(fin){loadFunnel();goto('b')}if(j.other&&j.other.name=='探す'){wasRun=true;setTimeout(poll,300)}}};t();timer=setInterval(t,1500)}
 $('#restart').onclick=async()=>{if(!confirm('ツールを再起動します。数秒で戻ります。よろしいですか'))return;try{const r=await post('/api/restart',{});if(r&&r.error){alert(r.error);return}}catch(e){}
- document.body.innerHTML='<p style="padding:40px">再起動しています。数秒で自動で戻ります。</p>';
+ document.body.innerHTML='<p style="padding:40px">再起動しています。数秒から20秒ほどで自動で戻ります。この画面は閉じずに待ってください。</p>';
  for(let i=0;i<150;i++){await new Promise(x=>setTimeout(x,1000));try{const w=await (await fetch("/api/whoami")).json();if(w.tool==="formlist"&&i>=2){location.reload();return}}catch(e){}}
- document.body.innerHTML='<p style="padding:40px">戻るまで時間がかかっています。デスクトップの「AIまるなげ営業」を押してください。</p>'};
+ document.body.innerHTML='<p style="padding:40px">戻るまで時間がかかっています。この画面は閉じずに、そのまま待ってください。戻ったら自動で開き直します。</p>';
+ for(let i=0;i<400;i++){await new Promise(x=>setTimeout(x,3000));try{const w=await (await fetch("/api/whoami")).json();if(w.tool==="formlist"){location.reload();return}}catch(e){}}
+ document.body.innerHTML='<p style="padding:40px">20分待っても戻りませんでした。この表示を、そのままコピーして担当者に送ってください。（再起動の待ち時間切れ）</p>'};
 async function showVer(){try{const w=await (await fetch('/api/whoami')).json();$('#ver').textContent='版 '+(w.build||'').slice(0,8)+(w.version?' / '+w.version.slice(0,6):'')+(w.dev?' / 開発用':'');if(w.dev&&!document.getElementById('devBar')){const b=document.createElement('div');b.id='devBar';b.textContent='開発用の画面です(お客様に渡す版ではありません。お客様版は 127.0.0.1:8780)';b.style.cssText='background:#b3261e;color:#fff;padding:6px 12px;text-align:center;font-weight:700';document.body.prepend(b);document.title='【開発用】'+document.title}}catch(e){}}
 showVer();
 $('#quit').onclick=async()=>{if(!confirm('ツールを終了します。送信などの処理が動いている場合は止まります。よろしいですか'))return;try{await post('/api/quit',{})}catch(e){}document.body.innerHTML='<p style="padding:40px">終了しました。このタブは閉じてください。再び使うときは、デスクトップの「AIまるなげ営業」を押します。</p>'};
-// 狭い画面では「ツールを終了する」をタブより上ではなく、画面の一番下へ移す
-const MQ=matchMedia('(max-width:640px)');function placeQuit(){const t=MQ.matches?$('#foot'):$('.hd');t.appendChild($('#restart'));t.appendChild($('#quit'))}
-placeQuit();if(MQ.addEventListener)MQ.addEventListener('change',placeQuit);
 document.title='AIまるなげ営業'+(location.port&&location.port!='8780'?'（検索'+(parseInt(location.port)-8779)+'）':'');// 別のタブで見分けがつくように
 // 画面を開く・読み込み直すたびに、公開されている最新の版と照合する。古ければ(探す・送る処理が動いていないときだけ)自動で更新して、画面を読み込み直す
 async function checkUpdate(){
@@ -660,10 +719,43 @@ async function checkUpdate(){
   box.textContent='更新のあと、画面が立ち上がるまで時間がかかっています。1分ほど待って、この画面を読み込み直してください。立ち上がらないときは、前の版へ自動で戻します'
  }catch(e){}
 }
+let LIC={denied:false};
+const LICWHY='いま使えません。上の赤い帯で、鍵を入れて確かめます。';
+function lockApply(){const L=LIC.denied;
+ ['#go','#mailSend','#approve'].forEach(q=>{const e=$(q);if(!e)return;if(L){e.disabled=true;e.title=LICWHY;e.dataset.lic='1'}else if(e.dataset.lic){delete e.dataset.lic;e.title='';e.disabled=q=='#mailSend'?!($('#mailRead')&&$('#mailRead').checked):false}});
+ const mb=$('#mainBtn');if(!mb)return;const run=/^(この\d+社に送る|送る内容を出す)/.test(mb.textContent);
+ if(L&&run){mb.disabled=true;mb.title=LICWHY;mb.dataset.lic='1';if(!$('#licWhy')){const h=document.createElement('span');h.className='hint';h.id='licWhy';h.textContent=LICWHY;mb.parentNode.appendChild(h)}}
+ else if(mb.dataset.lic){delete mb.dataset.lic;mb.disabled=false;mb.title='';const h=$('#licWhy');if(h)h.remove()}}
+function keyShow(r){const s=$('#keyState');if(!s||!r||typeof r.key_set!=='boolean')return;
+ s.innerHTML='許可キー: <b>'+(r.key_set?'設定済み':'まだ入っていません')+'</b>';$('#keyOpen').textContent=r.key_set?'変える':'設定する'}
+$('#keyOpen').onclick=()=>{$('#keyEdit').hidden=false;$('#keyMsg').textContent='';$('#keyIn').focus()};
+$('#keyCancel').onclick=()=>{$('#keyEdit').hidden=true;$('#keyIn').value='';$('#keyNote').textContent=''};
+$('#keySave').onclick=async()=>{const n=$('#keyNote'),k=$('#keyIn').value.trim();
+ if(!k){n.textContent='入力が空なので、いまの許可キーはそのままです。';return}
+ n.textContent='確かめています。';const a=await post('/api/sender',{'計測キー':k});if(a.error){n.textContent=a.error;return}
+ $('#keyIn').value='';keyShow({key_set:true});const r=await post('/api/license/recheck',{});if(r.error){n.textContent='保存しました。ただし、確かめることができませんでした。'+r.error;return}
+ licShow(r);$('#keyEdit').hidden=true;n.textContent='';
+ $('#keyMsg').textContent=r.allowed===false?'保存しました。ただし、まだ使えません。鍵が合っているか、担当者に確かめます。':'保存して、確かめました。探す・送るが使えます。'}
+function licShow(r){keyShow(r);const b=$('#lic');if(!b)return;
+ if(r&&r.allowed===false){LIC.denied=true;LIC.report=r.report||'';
+  if(b.dataset.msg!==String(r.message)){b.dataset.msg=String(r.message);
+   b.innerHTML='<div>探す・送るは、いま使えません。'+esc(r.message)+'（できたリストの閲覧と書き出しは使えます）</div><div style="margin-top:6px">許可キー（担当者から届いた鍵。設定の「計測キー」と同じものです）: <input type="password" id="licKey" autocomplete="off" size="40"> <button class="btn sub sm" id="licGo" type="button">鍵を入れて確かめる</button> <button class="btn sub sm" id="licCopy" type="button">担当者へ送る文をコピー</button></div><p class="hint" id="licNote" role="status"></p>';
+   $('#licGo').onclick=licTry;$('#licCopy').onclick=licCopy}
+  b.hidden=false}
+ else{LIC.denied=false;b.hidden=true;b.dataset.msg=''}
+ lockApply()}
+async function licTry(){const n=$('#licNote'),k=$('#licKey').value.trim();if(!k){n.textContent='鍵を入れてから押します。';return}
+ n.textContent='確かめています。';const a=await post('/api/sender',{'計測キー':k});if(a.error){n.textContent=a.error;return}
+ $('#licKey').value='';const r=await post('/api/license/recheck',{});if(r.error){n.textContent=r.error;return}
+ if(r.allowed===false){b_msg_reset();licShow(r);$('#licNote').textContent='まだ使えません。鍵が合っているか、担当者に確かめます。'}else{licShow(r);S.flash='鍵を確かめました。探す・送るが使えます。';renderSend()}}
+function b_msg_reset(){const b=$('#lic');if(b)b.dataset.msg=''}
+async function copyText(t,note){let ok=false;try{await navigator.clipboard.writeText(t);ok=true}catch(e){const ta=document.createElement('textarea');ta.value=t;document.body.appendChild(ta);ta.select();try{ok=document.execCommand('copy')}catch(e2){}ta.remove()}
+ note.textContent=ok?'コピーしました。担当者への連絡に貼り付けます（鍵の値は入っていません）。':'コピーできませんでした。次の文を選んで担当者へ送ります: '+t}
+async function licCopy(){copyText(LIC.report||'AIまるなげ営業の利用の確認ができません。',$('#licNote'))}
+$('#supCopy').onclick=async()=>{const r=await J('/api/support_report');copyText((r&&r.report)||'AIまるなげ営業の困りごとについて。版 '+($('#ver').textContent||'')+'。',$('#supNote'))};
 async function checkLicense(){
  try{
-  const r=await J('/api/license');const b=$('#lic');if(!b)return;
-  if(r&&r.allowed===false){b.textContent='探す・送るは、いま使えません。'+r.message+'（できたリストの閲覧と書き出しは使えます）';b.hidden=false}else{b.hidden=true}
+  const r=await J('/api/license');licShow(r)
  }catch(e){}
 }
 async function init(){META=await J('/api/meta');if(META.error){$('#now_c').textContent=META.error;return}

@@ -4,7 +4,9 @@
 陰性対照(大手にしない): 「グランドール美容室」「Hair salon JR前」「京急蒲田のサロン」のように、施設名・駅名を店名に含むだけの小さな店。
 同じ店が町名ごとの検索に何回出ても、呼び出し側(formlist.dedupe_places)が先に1件にまとめるので「同じHPが3件」には数えない"""
 import re
+import unicodedata
 from collections import Counter
+from urllib.parse import urlparse
 
 import ng_list
 
@@ -21,6 +23,12 @@ BIG_NAMES = re.compile(
     "ドコモ|ソフトバンク|au |ａｕ|積水ハウス|大和ハウス|住友林業|旭化成ホームズ|ミサワホーム|パナソニック ホームズ|セキスイ|"
     "ゼクシィ|ツルハ|マツモトキヨシ|ウエルシア|サンドラッグ|スギ薬局|ココカラ|しまむら|ワークマン|ライフ |サミット|西友|"
     "ベルーナ|ナチュラルローソン|ファミリーマート|ローソン|セブン.イレブン|スターバックス|マクドナルド|ドトール")
+# 英字の表記(QB HOUSE・Starbucks など)。大文字小文字・全角半角は区別しない。前後が英字のときは数えない(Hair QBhouse2 のような別の名前を避けるため単語の境目を見る)
+BIG_NAMES_EN = re.compile(
+    r"(?<![a-z])(?:QB ?HOUSE|UNIQLO|MUJI|STARBUCKS|AEON|LAWSON|FAMILY ?MART|MCDONALD'?S|DOUTOR|DAISO|NITORI|HILTON|MARRIOTT|HYATT|TOYOKO ?INN|APA ?HOTEL|MATSUMOTO ?KIYOSHI|SUGI ?DRUG|CURVES|ANYTIME ?FITNESS)(?![a-z])",
+    re.I)
+# 店舗ごとのページが並ぶ形のURL(/salon/1234・/shop/s012・/stores/tokyo-12)。数字を含む名前が続くときだけ数える(/shop/ だけのネットショップ等は数えない)
+STORE_URL = re.compile(r"/(?:salons?|shops?|stores?|tenpo|branch(?:es)?)/[A-Za-z0-9_-]*\d[A-Za-z0-9_-]*/?(?:$|[?#])", re.I)
 # 名前に含まれると大型施設とみなす語
 # 「グランド」「タワー」「ステーション」「ラグジュアリー」は小さな店の名前にも使われる(グランドール美容室・ネイルステーション)。
 # 施設の種類が続く形(グランドホテル・ステーションビル)か、名前の最後がタワーのときだけ数える
@@ -50,9 +58,15 @@ def judge(row, tags=None, same_domain=1):
     m = BIG_NAMES.search(name)
     if m:
         return "大手・チェーン", f"全国チェーン・大手の名前（{m.group().strip()}）"
+    m = BIG_NAMES_EN.search(unicodedata.normalize("NFKC", name))
+    if m:
+        return "大手・チェーン", f"全国チェーン・大手の名前（{m.group().strip()}）"
     m = BIG_FACILITY.search(name)
     if m:
         return "大手・チェーン", f"大型施設の名前（{m.group()}）"
+    m = STORE_URL.search(urlparse(unicodedata.normalize("NFKC", str(row.get("url", "") or ""))).path + ("?" if row.get("url") else ""))
+    if m:
+        return "大手・チェーン", f"店舗ごとのページが並ぶ形のホームページ（{m.group().strip('?')}）"
     if same_domain >= 3:
         return "大手・チェーン", f"同じホームページの店・施設が{same_domain}件ある"
     return "中小(推定)", ""

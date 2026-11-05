@@ -91,7 +91,7 @@ def opener_source(row):
     return _SOURCE_OF.get((row.get(OPENER_COL) or "").strip(), "")
 
 
-APPROVED = {"key": None}  # 画面で人が「この全文で送ることを承認する」を押した印。AI(MCP)からの本番送信に要る
+APPROVED = {"key": None}  # 画面で人が「この内容で送ることを承認する」を押した印。AI(MCP)からの本番送信に要る
 PREVIEW = {"key": None, "names": [], "parts": {}}  # 本番の前に「送る内容を出す」を済ませた印と、その確認に出た会社名・変わったものを言うための材料。本番を始めたら消す
 SEND_INFO = {"total": 0, "started": "", "dismissed": True}  # 直近の本番の社数と始めた時刻(送っている・送り終えたの数を出す)。dismissed=送り終えた表示を閉じた
 LOCK = threading.Lock()
@@ -147,6 +147,7 @@ def start_peer():
         if st != "free":
             continue
         OUT.mkdir(exist_ok=True)
+        cap_log(OUT / "app_起動ログ.txt")
         with open(OUT / "app_起動ログ.txt", "ab") as log:
             subprocess.Popen([_pythonw(), "-X", "utf8", str(HERE / "app.py")], cwd=HERE,
                              env=dict(os.environ, FORMLIST_NO_BROWSER="1", FORMLIST_PORT=str(pt), PYTHONIOENCODING="utf-8"),
@@ -166,21 +167,110 @@ def start_peer():
     return None, "別の画面を立てる番号（" + "・".join(str(x) for x in ports.POOL) + "）が、ほかのアプリに使われています。使っているアプリを閉じるか、パソコンを再起動してから、もう一度お試しください"
 
 
+def send_stop_flag():
+    """送信中の「ここで止める」の印。送る処理(autosend)が1社ごとに見て、あれば次の会社に進まない"""
+    return OUT / f"送信_止める_{PORT}.flag"
+
+
+def _rm(p):
+    try:
+        Path(p).unlink()
+    except OSError:
+        pass
+
+
+SEND_MARK = f"送信中_記録_{PORT}.json"  # 本番を始めたときに書き、終わったら消す。番号ごとの別ファイル(別の番号の送信の記録を上書きしない)。残っていれば、前回は途中で落ちた(次の起動で知らせる)
+SEND_MARK_GLOB = "送信中_記録*.json"  # 古い名前(番号なし)の記録も拾う
+
+
+def _pid_alive(pid):
+    """そのプロセスが今も動いているか。Windows の os.kill(pid, 0) は相手を終わらせてしまうので使わない"""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        if not h:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            return bool(ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code))) and code.value == 259
+        finally:
+            ctypes.windll.kernel32.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _rm_own_mark():
+    """送信中_記録.json を消す。自分(この番号・このプロセス)が書いた記録だけ。別のサーバーが書いた記録は、そのサーバーが終えるまで残す"""
+    f = OUT / SEND_MARK
+    try:
+        d = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if isinstance(d, dict) and d.get("port") == PORT and d.get("pid") == os.getpid():
+        _rm(f)
+
+
+def keep_awake_start():
+    """送信の間、パソコンが眠らないようにする(外部の部品なし)。Windows は SetThreadExecutionState、Mac は caffeinate。
+    戻り: (止めるときに呼ぶ関数, "on" か "none")。取れなくても送信は止めない(画面で案内だけ出す)。
+    Windows の指定は、呼んだスレッドが生きている間だけ効く。run_job の work() は送信が終わるまで生きているので、そこで呼ぶ"""
+    try:
+        if os.name == "nt":
+            import ctypes
+            f = ctypes.windll.kernel32.SetThreadExecutionState
+            if f(0x80000001):  # ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+                return (lambda: f(0x80000000)), "on"
+        elif sys.platform == "darwin" and shutil.which("caffeinate"):
+            c = subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return (lambda: c.terminate()), "on"
+    except Exception:
+        pass
+    return (lambda: None), "none"
+
+
 def run_job(name, args, stdin_text=None, on_ok=None, extra_env=None):
     slot = SJOB if name == "探す" else JOB
     with LOCK:
         if slot["running"]:
             return False
-        slot.update(lines=[], running=True, name=name, code=None, proc=None, fresh=False, started=time.strftime("%Y-%m-%dT%H:%M:%S"))
+        slot.update(lines=[], running=True, name=name, code=None, proc=None, fresh=False, started=time.strftime("%Y-%m-%dT%H:%M:%S"), awake="")
+        if name == "本番送信":
+            _rm(send_stop_flag())  # 前回の止める印を持ち越さない
+            try:
+                OUT.mkdir(exist_ok=True)
+                (OUT / SEND_MARK).write_text(json.dumps({"total": SEND_INFO.get("total", 0), "started": SEND_INFO.get("started", ""), "port": PORT, "pid": os.getpid()}), encoding="utf-8")
+            except OSError:
+                pass
 
     def work():
         code = None
+        release = None
         try:
             env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONWARNINGS="ignore", **(extra_env or {}))
+            if name == "本番送信":
+                env["FORMLIST_SEND_STOP_FLAG"] = str(send_stop_flag())
+                release, slot["awake"] = keep_awake_start()
             p = subprocess.Popen([PY, "-X", "utf8", *args], cwd=HERE, env=env, stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                                  errors="replace", creationflags=NO_WINDOW)
             slot["proc"] = p
+            if name == "本番送信":
+                try:
+                    mf = OUT / SEND_MARK
+                    md = json.loads(mf.read_text(encoding="utf-8"))
+                    md["child"] = p.pid
+                    mf.write_text(json.dumps(md), encoding="utf-8")
+                except (OSError, ValueError):
+                    pass
             if stdin_text is not None:
                 p.stdin.write(stdin_text)
             p.stdin.close()
@@ -191,6 +281,14 @@ def run_job(name, args, stdin_text=None, on_ok=None, extra_env=None):
         except Exception as e:
             slot["lines"].append(f"（処理を始められませんでした: {e!r}）")
         finally:
+            if release:
+                try:
+                    release()
+                except Exception:
+                    pass
+            if name == "本番送信":
+                _rm(send_stop_flag())
+                _rm_own_mark()  # 生きて終えた。画面が「残り」を出せるので、起動時の知らせは要らない(消すのは自分が書いた記録だけ)
             with LOCK:  # 確認の印を立てるのも、動いている印を下ろすのも、同じ排他の内側で行う
                 try:
                     if code == 0 and on_ok:
@@ -400,7 +498,36 @@ def set_ng_store_for_tests(store):
     return old
 
 
+def mailto_address(v):
+    """送信ログのURL欄は mailto:アドレス の形。mailto: と ?以降(件名など)を外してアドレスだけにする(アドレスでなければ、そのまま返す)。
+    アドレスのまま登録すると、gmail.com のような無料メールのドメイン全体が止まらず、そのアドレス1つだけが止まる"""
+    t = str(v or "").strip()
+    if t.lower().startswith("mailto:"):
+        return t[7:].split("?", 1)[0].strip()
+    return t
+
+
+NG_WHERE = "送らない先: "
+
+
+def ng_reply_rows(store=None):
+    """返事で「不要」と言われた会社の一覧(新しい順)。理由・日付・送らない先・いま実際に送らないリストに入っているか。入っているかは送らないリスト本体で確かめる"""
+    out = []
+    for r in reversed(sales_records._read(sales_records.REPLY_LOG)):
+        if r.get("種類") != "不要":
+            continue
+        memo = r.get("メモ", "")
+        where = memo.split(NG_WHERE, 1)[1].strip() if NG_WHERE in memo else ""
+        if where:
+            active = bool(store.is_ng([where])) if store is not None else bool(ng_list.is_ng_email(where) if ng_list.is_email(where) else (ng_list.is_ng(where) or ng_list.is_ng_form(where)))
+        else:
+            active = False
+        out.append({"company": r.get("企業名", ""), "when": r.get("日時", ""), "reason": "返事で不要と言われた", "where": where, "active": active})
+    return out
+
+
 def add_ng_item(item, reason, company="", store=None):
+    item = mailto_address(item)
     if store is None:
         return ng_list.add(item, reason, company) or ng_list.is_ng(item) or ng_list.is_ng_form(item) or ng_list.is_ng_email(item)
     raw = str(item or "").strip()
@@ -618,17 +745,140 @@ def limits():
 SUPPORT_NAME = "サポート記録.txt"
 
 
-def support_error(where):
-    """想定外の失敗。原文(例外の経過)を 出力/サポート記録.txt に受付番号つきで残し、画面には受付番号と次にすることだけを返す(D-11・E-22)"""
-    sid = time.strftime("%m%d-%H%M%S")
+_SID_LAST = {"base": "", "n": 0}
+_SID_LOCK = threading.Lock()
+
+
+def is_disconnect(exc):
+    """相手(ブラウザ)が途中で閉じた・切れた失敗。ツールの不具合ではないので、サポート記録に残さない(導入先の記録64件中64件がこれだった)"""
+    if isinstance(exc, (ConnectionError, BrokenPipeError, TimeoutError)):
+        return True
+    return isinstance(exc, OSError) and getattr(exc, "winerror", None) in (10053, 10054, 10058, 10060)
+
+
+def next_support_id():
+    """受付番号。同じ秒に2件出ても重ならないよう、2件目からは連番を足す(-2, -3 ...)"""
+    base = time.strftime("%m%d-%H%M%S")
+    with _SID_LOCK:
+        if base == _SID_LAST["base"]:
+            _SID_LAST["n"] += 1
+            return f"{base}-{_SID_LAST['n']}"
+        _SID_LAST.update(base=base, n=1)
+        return base
+
+
+def cap_log(path, max_bytes=200_000, keep_bytes=50_000):
+    """記録ファイルの上限。大きくなりすぎたら、末尾の keep_bytes だけ残す(いつも追記され続けるため)。
+    ほかの処理が開いていて置き換えられなければ、何もしない(次の起動でもう一度見る)。戻り: 切り詰めたか"""
     try:
-        OUT.mkdir(exist_ok=True)
-        with open(OUT / SUPPORT_NAME, "a", encoding="utf-8") as f:
-            f.write(f"===== 受付番号 {sid} {time.strftime('%Y-%m-%d %H:%M:%S')} {where}\n{traceback.format_exc()}\n")
+        p = Path(path)
+        if not p.exists() or p.stat().st_size <= max_bytes:
+            return False
+        tail = p.read_bytes()[-keep_bytes:]
+        nl = tail.find(b"\n")
+        tail = "(古い部分は上限のため消しました)\n".encode("utf-8") + (tail[nl + 1:] if nl >= 0 else tail)
+        tmp = p.with_name(p.name + ".tmp")
+        tmp.write_bytes(tail)
+        try:
+            os.replace(tmp, p)
+        except OSError:
+            _rm(tmp)
+            return False
+        return True
+    except OSError:
+        return False
+
+
+def support_error(where):
+    """想定外の失敗。原文(例外の経過)を 出力/サポート記録.txt に受付番号つきで残し、画面には受付番号と次にすることだけを返す(D-11・E-22)。
+    接続が途中で切れただけ(ブラウザを閉じた等)は記録しない"""
+    sid = next_support_id()
+    try:
+        if not is_disconnect(sys.exc_info()[1]):
+            OUT.mkdir(exist_ok=True)
+            cap_log(OUT / SUPPORT_NAME, 300_000, 100_000)
+            with open(OUT / SUPPORT_NAME, "a", encoding="utf-8") as f:
+                f.write(f"===== 受付番号 {sid} {time.strftime('%Y-%m-%d %H:%M:%S')} {where}\n{traceback.format_exc()}\n")
     except OSError:
         pass
-    return {"error": f"ツールの側で問題が起きました(受付番号 {sid})。ツールを終了して、デスクトップの「AIまるなげ営業」から起動し直し、もう一度押します。"
+    return {"error": f"ツールの側で問題が起きました(受付番号 {sid})。少し待って、もう一度押します。直らないときは、この表示と受付番号を担当者に送ってください。"
                      "続くときは、この画面を写して連絡します", "support_id": sid}
+
+
+def last_support_id():
+    try:
+        ids = re.findall(r"===== 受付番号 (\S+)", (OUT / SUPPORT_NAME).read_text(encoding="utf-8", errors="replace")[-20000:])
+        return ids[-1] if ids else ""
+    except OSError:
+        return ""
+
+
+def report_text(subject, symptom):
+    """担当者へそのまま送れる文の部品(拒否の帯のコピーと、サポート用のコピーが同じ部品を使う)。版・受付番号・症状・時刻だけ。許可キーは入れない"""
+    sid = last_support_id()
+    return f"AIまるなげ営業の{subject}について。版 {VERSION}。{symptom}" + (f"最近の受付番号 {sid}。" if sid else "") + f"確認した時刻 {time.strftime('%Y-%m-%d %H:%M')}。"
+
+
+def support_report(symptom=""):
+    """サポート用の「担当者に送る文」。症状は画面の状態から作る(送信の途中・止まった・拒否など)"""
+    parts = []
+    if symptom.strip():
+        parts.append("症状: " + symptom.strip()[:200] + "。")
+    if JOB.get("running"):
+        parts.append(f"いま「{JOB.get('name', '')}」が動いています。")
+    elif JOB.get("name") == "本番送信" and JOB.get("code") is not None and not SEND_INFO.get("dismissed"):
+        c = send_counts(SEND_INFO.get("started"))
+        parts.append(f"直近の送信は全{SEND_INFO.get('total', 0)}社のうち{sum(c.values())}社を終えて止まっています(終了コード{JOB.get('code')})。")
+    try:
+        lic = license_check.status() or {}
+        if lic.get("state") not in (None, "", "許可"):
+            parts.append(f"利用の確認: {lic.get('state')}（{lic.get('reason') or 'なし'}）。")
+    except Exception:
+        pass
+    return report_text("困りごと", "".join(parts) or "症状は画面で確かめます。")
+
+
+def license_report(st):
+    """利用許可の状態に、担当者へそのまま送れる文(report)を足す。鍵の値は入れない(状態・理由・版・受付番号だけ)"""
+    st = dict(st)
+    st["key_set"] = bool(proposal_links.read_key())  # 画面の「許可キー: 設定済み」用。有無だけで、値は返さない(REQ-1001)
+    st["report"] = report_text("利用の確認", f"状態 {st.get('state', '')}（理由 {st.get('reason') or 'なし'}）。画面の文: {st.get('message') or 'なし'}。")
+    return st
+
+
+def restore_interrupted():
+    """前回の送信が途中で終わった(ツールごと落ちた等)なら、起動時に「N社残っています」を出せるよう、送信の状態を戻す。
+    記録(送信中_記録_<番号>.json)は本番の開始時に書き、生きて終えたときに消す。残っていれば、終わりの処理が走らなかった。
+    別の番号のサーバーが生きている間・記録を書いたプロセスか送信の子が動いている間は、その記録に触れない。読めない記録は壊れた名前に退避して無視する"""
+    if JOB["running"]:
+        return False
+    dead = []
+    for f in sorted(OUT.glob(SEND_MARK_GLOB)):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        except ValueError:
+            try:
+                f.rename(f.with_name(f.name + ".壊れ.bak"))  # 壊れた記録が残り続けないように、別名にして残す
+            except OSError:
+                pass
+            continue
+        if not isinstance(d, dict):
+            continue
+        if d.get("port") and d.get("port") != PORT and ports.job(int(d["port"]), timeout=5) is not None:
+            continue  # 記録を書いた番号のサーバーが、まだ生きている(送信の最中かもしれない)。その記録は、そのサーバーのもの
+        if d.get("pid") != os.getpid() and (_pid_alive(d.get("pid")) or _pid_alive(d.get("child"))):
+            continue  # 書いたプロセス、または送信の子が、まだ動いている。送り直しを誘う表示を出さない
+        dead.append((f, d))
+    if not dead:
+        return False
+    d = dead[0][1]
+    SEND_INFO.update(total=int(d.get("total") or 0), started=str(d.get("started") or ""), dismissed=False, interrupted=True)
+    JOB.update(name="本番送信", code=-1, running=False, lines=[], fresh=False)
+    for f, _ in dead:
+        _rm(f)
+    return True
 
 
 def _sha(b):
@@ -743,10 +993,14 @@ def send_state(q, store=None):
     if JOB["running"] and JOB["name"] == "本番送信":
         c = send_counts(SEND_INFO.get("started"), running=True)
         out["counts"] = {"total": SEND_INFO.get("total", 0), "done": sum(c.values()), **c}
-        return dict(out, send_state="s6")
+        return dict(out, send_state="s6", awake=JOB.get("awake", ""), stopping=send_stop_flag().exists())
     if JOB["name"] == "本番送信" and JOB.get("code") is not None and not SEND_INFO.get("dismissed"):
         c = send_counts(SEND_INFO.get("started"))
-        out["counts"] = {"total": SEND_INFO.get("total", 0), "done": sum(c.values()), **c}
+        tot = SEND_INFO.get("total", 0)
+        done = sum(c.values())
+        # 全社数と終えた数を比べる。終わった状態(コード0)でも、止めた・落ちたなら「送り終えました」とは言わない(S3)
+        out["counts"] = {"total": tot, "done": done, "remaining": max(tot - done, 0), "interrupted": bool(SEND_INFO.get("interrupted")),
+                         "stopped": any("止める指示があったため" in str(l) for l in JOB.get("lines", [])), **c}
         return dict(out, send_state="s7")
     files = outputs()
     name = str(q.get("file") or "") or (files[0] if files else "")
@@ -1006,7 +1260,7 @@ class H(BaseHTTPRequestHandler):
         APPROVED["key"] = None
         args += ["--send", "--expect", key[-1]]  # 送る本人が、確認時と同じ会社・全文・送信元かを照合し、違えば送らずに止まる
         token = approval.issue_ticket(key[-1])  # 承認のあとにだけ発行する使い切りの鍵。autosend --send はこれが無いと始まらない
-        SEND_INFO.update(total=total, started=time.strftime("%Y-%m-%d %H:%M"), dismissed=False)
+        SEND_INFO.update(total=total, started=time.strftime("%Y-%m-%d %H:%M"), dismissed=False, interrupted=False)
         started = run_job("本番送信", args, "送信\n", extra_env={approval.TICKET_ENV: token, approval.PORT_ENV: str(PORT), approval.UI_TOKEN_ENV: TOKEN})
         if not started:
             approval.revoke_ticket()
@@ -1116,7 +1370,7 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"industries": list(osm_source.INDUSTRY_TAGS), "sender": sender or {}, "files": outputs(), "messages": msgs,
                                    "message_parts": {k: split_message(v) for k, v in msgs.items()}, "message_info": info,
                                    "send_state": st["send_state"], "problems": st["problems"], "counts": st["counts"], "changed": st["changed"],
-                                   "send_file": st["file"], "first_time": first, "last_max": last_max, "max_kind": max_kind, "limits": limits(),
+                                   "send_file": st["file"], "awake": st.get("awake", ""), "stopping": st.get("stopping", False), "first_time": first, "last_max": last_max, "max_kind": max_kind, "limits": limits(),
                                    "message_summary": {"default": 1, "industries": [n for n, v in info["uses"].items() if v == "業種ごと"]}})
         if u.path == "/api/whoami":
             return self.send(200, {"tool": "formlist", "here": str(HERE), "version": VERSION, "build": BUILD, "port": PORT, "dev": IS_DEV, "running": JOB["running"] or SJOB["running"], "name": JOB["name"] if JOB["running"] else SJOB["name"]})
@@ -1133,8 +1387,10 @@ class H(BaseHTTPRequestHandler):
                 UPDATE_CACHE.update(at=now, result=updater.check())
             busy = JOB["running"] or SJOB["running"] or any((ports.job(p) or {}).get("running") for p in ports.POOL if p != PORT)
             return self.send(200, {**UPDATE_CACHE["result"], "busy": bool(busy), "restart_needed": updater.build() != BUILD, "build": BUILD})
+        if u.path == "/api/support_report":  # 困ったときに担当者へそのまま送れる文(版・受付番号・症状)。許可キーは入れない
+            return self.send(200, {"report": support_report(str(q.get("symptom") or ""))})
         if u.path == "/api/license":  # 利用許可の状態(通信はしない。手元の記録だけから答える)
-            return self.send(200, license_check.status())
+            return self.send(200, license_report(license_check.status()))
         if u.path == "/api/job":
             v, o = job_view()
             if v is JOB and not JOB["running"]:
@@ -1189,6 +1445,10 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/report":
             days = int(q["days"]) if str(q.get("days", "")).isdigit() and 1 <= int(q["days"]) <= 365 else 7
             return self.send(200, sales_records.report(LOG, days))
+        if u.path == "/api/aftercare":  # 送信の記録の画面用: 最後の返事・返事に対応する会社・追いかける会社・「N社に送り、M社から返事」
+            return self.send(200, sales_records.aftercare(LOG))
+        if u.path == "/api/ngreplies":  # 返事で「不要」と言われて送らないリストに入れた会社(理由と日付つき)
+            return self.send(200, ng_reply_rows(ng_store))
         if u.path == "/api/unsure":
             return self.send(200, sales_records.unsure(LOG))
         if u.path == "/api/opens":
@@ -1250,6 +1510,11 @@ class H(BaseHTTPRequestHandler):
             if JOB["name"] == "確認":  # E-18
                 return self.send(409, {"error": "送る内容を出している間は変えられません。数秒で終わります"})
             return self.send(409, {"error": "いま送っている最中は、送信元・文面・送らない会社・書き出しを変えられません。送り終わってから変えます"})
+        if self.path == "/api/license/recheck":  # 拒否の帯から、鍵を入れたあとに照合し直す(許可の判定は license_check のまま。鍵の値は返さない)
+            try:
+                return self.send(200, license_report(license_check.check(VERSION)))
+            except Exception:
+                return self.send(500, support_error("利用の確認"))
         if self.path in ("/api/search", "/api/send", "/api/approve", "/api/manual", "/api/mail/preview", "/api/mail/send"):  # 実行系(探す・送る)。利用許可が無いときは止める。できたリストの閲覧・書き出しは止めない
             allowed, why = license_check.gate(VERSION)
             if not allowed:
@@ -1486,11 +1751,14 @@ class H(BaseHTTPRequestHandler):
                 return self.send(400 if "error" in r else 200, r)
             if self.path == "/api/manual_sent":
                 return self.send(200, sales_records.manual_sent(LOG, name, url, str(d.get("how", ""))[:200]))
-            r = sales_records.add_reply(name, url, str(d.get("kind", "")), str(d.get("text", "")), str(d.get("memo", ""))[:200])
+            where = mailto_address(str(d.get("hp", "")).strip() or url) if d.get("kind") == "不要" else ""  # mailto: はアドレス単位で登録する(無料メールのドメイン全体を止めない)
+            memo = str(d.get("memo", ""))[:200]
+            if where:
+                memo = (memo + " " + NG_WHERE + where).strip()  # 送らない先を返事の記録に残す(送らない会社の一覧で、理由・日付と一緒に出す)
+            r = sales_records.add_reply(name, url, str(d.get("kind", "")), str(d.get("text", "")), memo)
             if "error" in r:
                 return self.send(400, r)
             if d.get("kind") == "不要":  # 送らないでと言われた会社は、記録と同じ操作で送らないリストに入れる(片方だけが抜けないように)
-                where = str(d.get("hp", "")).strip() or url
                 added = (ng_store.add_domain_ng(where, "返事で不要と言われた", name) if ng_store is not None else ng_list.add(where, "返事で不要と言われた", name)) if where else None
                 r["ng_added"] = bool(added)
                 if not where:
@@ -1580,6 +1848,12 @@ class H(BaseHTTPRequestHandler):
             if problem:
                 return self.send(400, {"error": f"「{name}」の「フォームで送る(自動挿入)」は始められません。理由: {problem[0]}。直し方: {problem[1]}", "field": LIST_FIELD, "fix": "list"})
             return self.send(200, {"started": run_job("手動入力", ["autosend.py", str(p), "--sender", str(SENDER), "--message", str(MSG), "--manual-company", name])})
+        if self.path == "/api/send/stop":  # 送信の途中で止める。今の1社は終え、次の会社に進まない。残りは未送信のまま残り、次の「送る内容を出す」に出る(承認・全文確認・確認番号は変えない)
+            if not (JOB["running"] and JOB["name"] == "本番送信"):
+                return self.send(200, {"stopped": False, "note": "止める送信は動いていません"})
+            OUT.mkdir(exist_ok=True)
+            send_stop_flag().write_text(time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
+            return self.send(200, {"stopped": True, "note": "止める指示を出しました。いま送っている1社が終わったら止まります。残りの会社は送っていないまま残ります"})
         if self.path == "/api/send/dismiss":  # 送り終えた表示(s7)を閉じて、次の送る準備(s3)へ。送信の記録は消さない
             SEND_INFO["dismissed"] = True
             return self.send(200, {"ok": True})
@@ -1827,7 +2101,7 @@ def mail_post(handler, d, mx, ng_store):
     APPROVED["key"] = None
     args += ["--send", "--expect", key[-1]]
     token = approval.issue_ticket(key[-1])
-    SEND_INFO.update(total=total, started=time.strftime("%Y-%m-%d %H:%M"), dismissed=False)
+    SEND_INFO.update(total=total, started=time.strftime("%Y-%m-%d %H:%M"), dismissed=False, interrupted=False)
     started = run_job("本番送信", args, "送信\n", extra_env={approval.TICKET_ENV: token, approval.PORT_ENV: str(PORT), approval.UI_TOKEN_ENV: TOKEN})
     if not started:
         approval.revoke_ticket()
@@ -1908,6 +2182,8 @@ def auto_update_loop():
 if __name__ == "__main__":
     NO_BROWSER = bool(os.environ.get("FORMLIST_NO_BROWSER")) or "--no-browser" in sys.argv  # 画面を開かずに起動する(MCP・ログイン時の自動起動)
     OUT.mkdir(exist_ok=True)
+    cap_log(OUT / "app_起動ログ.txt")  # 起動のたびに増える記録に上限を置く
+    cap_log(OUT / SUPPORT_NAME, 300_000, 100_000)
     import socket
     with socket.socket() as s:
         if s.connect_ex(("127.0.0.1", PORT)) == 0:
@@ -1933,6 +2209,7 @@ if __name__ == "__main__":
     license_check.start_background(VERSION)  # 起動時と24時間ごとに利用許可を照合する(失敗してもツールは止めない)
     threading.Thread(target=auto_update_loop, daemon=True).start()  # 画面を開かなくても、起動時と6時間ごとに最新の版へ追従する
     srv = Srv(("127.0.0.1", PORT), H)
+    restore_interrupted()  # 番号が空いていて、自分がサーバーになると決まった後にだけ戻す(使用中の起動で、動いている送信の記録を消さない)
     url = f"http://127.0.0.1:{PORT}/"
     print(f"ブラウザで {url} を開いてください。終わるときはこの黒い画面を閉じます。")
     if not NO_BROWSER:
