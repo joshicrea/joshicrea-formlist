@@ -51,8 +51,26 @@ def save(out_dir, key, entry):
     with filelock.locked(path):
         data = _read_all(out_dir)
         groups = data.get("groups") if isinstance(data.get("groups"), dict) else {}
+        cur = groups.get(key)
+        if isinstance(cur, dict) and isinstance(cur.get("checked"), dict):
+            # 開始時に読んだ履歴から作った entry をそのまま上書きすると、同じ組を同時に走らせた別の検索(別枠)や、途中の保存が書いた調べ済みが消える。
+            # いま書かれている分と合わせる(調べ済みは和集合・終えた検索の数と回数は大きい方。それ以外は今回の entry)
+            merged = dict(cur["checked"])
+            merged.update(entry.get("checked") or {})
+            entry = {**entry, "checked": merged,
+                     "jobs_done": max(int(cur.get("jobs_done") or 0), int(entry.get("jobs_done") or 0)),
+                     "runs": max(int(cur.get("runs") or 0), int(entry.get("runs") or 0))}
         groups[key] = entry
         filelock.atomic_write(path, json.dumps({"version": VERSION, "groups": groups}, ensure_ascii=False, indent=1))
+
+
+def why_no_history(out_dir, key):
+    """この組の履歴が使えない(最初から集める)とき、画面・ログに出す理由の1行。履歴があるときは呼ばない"""
+    area_key = key.split("|", 1)[0]
+    groups = _read_all(out_dir).get("groups")
+    if isinstance(groups, dict) and any(k != key and k.split("|", 1)[0] == area_key for k in groups):
+        return "同じ場所の前回の記録はありますが、業種・キーワードの組み合わせが違うため、最初から集めます(組み合わせが前回と同じときだけ、続きから集めます)"
+    return "この条件の前回の記録は無いため、最初から集めます"
 
 
 def forget(out_dir, key):

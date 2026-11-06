@@ -173,9 +173,13 @@ def check(version="", now=None, post=None, retries=0, sleep=time.sleep):
     now = time.time() if now is None else now
     post = post or requests.post
     key = proposal_links.read_key()
-    headers = {"Content-Type": "application/json", "X-Install-Id": install_id()}
-    if key:
-        headers["X-License-Key"] = key
+    if not key:
+        # 鍵が無いときは台帳を呼ばない。呼んでも台帳は unknown_key を返すだけで、台帳のアクセス記録に拒否が毎回1件残り、運用側の失敗検知(夜間検査)が毎晩鳴る(2026-11-05 実測・Q671)。
+        # 端末側で拒否(reason=no_key)として記録し、画面には次の一歩を具体的に出す。鍵が入ったあとは、画面の保存の直後の再照合(/api/license/recheck)が台帳を呼ぶ
+        _record({"last_result": "denied", "denied": {"reason": "no_key", "message": "許可キーがまだ入っていません。画面の上の「許可キー」の行から入れてください", "expires_on": None, "at": now},
+                 "not_deployed": False, "sig": None, "nonce": None, "checked_at": None, "last_ok_at": None}, now)
+        return status(now)
+    headers = {"Content-Type": "application/json", "X-Install-Id": install_id(), "X-License-Key": key}
     nonce = secrets.token_urlsafe(24)  # 毎回新しく作る(32文字・英数字と _ -)。応答の署名に含まれ、古い応答の使い回しを防ぐ
     body_out = {"service_id": SERVICE_ID, "version": PRODUCT_VERSION, "build": str(version)[:40], "nonce": nonce}
     r = None

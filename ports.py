@@ -8,6 +8,7 @@ import urllib.request
 
 POOL = [8780, 8781, 8782]
 MAIN = POOL[0]
+PER_SERVER_MAX = 3  # 1つのサーバーが同時に動かす地図の取得の本数の上限。同時に取る総量は 台数(POOL) × この値 = 9本まで。どちらも定数で、画面や設定からは変えられない
 _OPEN = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # 127.0.0.1 宛ての通信を、会社のプロキシに回さない
 
 

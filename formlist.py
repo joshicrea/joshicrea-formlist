@@ -1384,6 +1384,19 @@ def history_company_key(r):
     return repr(k) if k else "name|" + str(r.get("name", "")) + "|" + str(r.get("url", ""))
 
 
+HIST_RAW_KEY = "_hist_raw_key"
+
+
+def history_keys(r):
+    """調べ済みとして保存する鍵(1つ以上)。調べ終えた行の鍵に加えて、取得した直後の行の鍵(HIST_RAW_KEY)も入れる。
+    照合(前回分を除く)は取得直後の行の鍵で行うため、公式HPの探し直しで URL・電話・住所が変わって鍵が変わっても、次回に当たる"""
+    ks = [history_company_key(r)]
+    raw = r.get(HIST_RAW_KEY)
+    if raw and raw not in ks:
+        ks.append(raw)
+    return ks
+
+
 def _main(budget=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--area")
@@ -1502,6 +1515,15 @@ def _main(budget=None):
         if hist_plan["note"]:
             log(f"[続き] {hist_plan['note']}")
             RUN_STATS["resumed_from_history"] = True
+            RUN_STATS["history_note"] = hist_plan["note"]
+        elif hist_key and not a.restart_search:  # 履歴が当たらなかった理由を、無言にしない(外したのに最初からになった、と見えないように)
+            RUN_STATS["history_note"] = search_history.why_no_history(OUT_DIR, hist_key)
+            log(f"[続き] {RUN_STATS['history_note']}")
+        elif hist_key:
+            RUN_STATS["history_note"] = "「最初からやり直す」を選んだため、前回の記録は使わず、最初から集めました"
+        elif "google" not in (a.source or ["google"]):
+            RUN_STATS["history_note"] = "Googleマップを使わない探し方では、前回の続きは使えません。いつも最初から集めます"
+            log(f"[続き] {RUN_STATS['history_note']}")
         if hist_plan["carry"]:
             hist_carry = hist_plan["carry"]
             a.limit = max(1, a.limit - hist_carry)  # 前回の分と合わせて目標に届く(今回の目標=残り)
@@ -1597,6 +1619,9 @@ def _main(budget=None):
                 round_start = pos
                 pos += rp["searches"]
             got_rows = collect(pre, rnd)
+            if hist_key:
+                for r in got_rows:
+                    r.setdefault(HIST_RAW_KEY, history_company_key(r))  # 取得直後の鍵。調べる途中で URL などが変わっても、保存時にこの鍵も残す
             if hist_plan["skip"]:  # 前回までに調べた会社(出した会社も対象外になった会社も)は、もう一度調べない
                 kept_rows = [r for r in got_rows if history_company_key(r) not in hist_plan["skip"]]
                 if len(kept_rows) != len(got_rows):
@@ -1607,6 +1632,17 @@ def _main(budget=None):
             rnd += 1
             sendable, _left = check_step(rows, a, ng_store, budget, cache)
             hist_state.update(pos=pos, left=_left, round_start=round_start, n_all=n_all)
+            if hist_key:
+                # 小分けの保存: 回ごとに「対象外と分かった会社」だけを残す。終えた検索の数は進めない(リストを出す前に止まったら、送れる会社を取り逃がすため)。
+                # 途中で止まっても、次回は対象外の会社をもう一度調べずに済む
+                try:
+                    part = {k: "excluded" for c in cache.values() if not is_sendable_row(c, ng_store) and c.get("verdict") != "取得失敗" for k in history_keys(c)}  # 取得の失敗は対象外ではない(途中で落ちた回の失敗を、次回以降も外し続けない)
+                    if part:
+                        p0 = hist_prev or {}
+                        search_history.save(OUT_DIR, hist_key, search_history.make_entry(
+                            hist_prev, p0.get("jobs_done", 0), n_all, part, p0.get("sendable_prev", 0), bool(p0.get("goal_reached"))))
+                except Exception as e:
+                    log(f"（探索履歴の途中保存ができませんでした: {e!r}）")
             if (sendable >= a.limit or not use_google or "google" in blocked or stop_requested() or pos >= n_all
                     or state_g.get("auto_stop") or state_g.get("budget_stop")):
                 break
@@ -1711,8 +1747,8 @@ def _main(budget=None):
         log(f"\n送れる会社は{reached}社で、目標の{a.limit}社には届きませんでした（{why}）。検索する数の上限を増やすか、場所・業種を広げて探し直してください")
     if hist_key and hist_state:  # 探索履歴を保存する。調べ済み=出力した会社+対象外になった会社(目標数で切り捨てた送れる会社は次回に拾えるよう入れない)
         try:
-            newly = {history_company_key(c): "excluded" for c in cache.values() if not is_sendable_row(c, ng_store)}
-            newly.update({history_company_key(r): "sendable" for r in checked if is_sendable_row(r, ng_store)})
+            newly = {k: "excluded" for c in cache.values() if not is_sendable_row(c, ng_store) for k in history_keys(c)}
+            newly.update({k: "sendable" for r in checked if is_sendable_row(r, ng_store) for k in history_keys(r)})
             jobs_done = hist_state["round_start"] if hist_state["left"] > 0 else hist_state["pos"]  # 調べ残しがあれば、その回の検索をもう一度やる
             search_history.save(OUT_DIR, hist_key, search_history.make_entry(
                 hist_prev, jobs_done, hist_state["n_all"], newly, hist_carry + reached, reached >= a.limit))
@@ -1723,6 +1759,7 @@ def _main(budget=None):
     write_run_summary(outcome, area=a.area, fetched=fetched, checked=len(checked), no_url=len(no_url),
                       dropped_other_company=len(dropped), refused=len(refused), blocked=sorted(blocked), list_file=Path(c).name,
                       not_checked_stopped=RUN_STATS.get("not_checked_stopped", 0),
+                      history_note=RUN_STATS.get("history_note", ""),
                       history_resumed=bool(RUN_STATS.get("resumed_from_history")), history_skipped=RUN_STATS.get("history_skipped", 0),
                       history_prev_checked=len((hist_prev or {}).get("checked") or {}), history_carry=hist_carry,
                       funnel=build_funnel(fetched, no_url_first, len(deduped_before_limit), large_excluded, cut, len(targets), len(dropped), len(refused), checked))

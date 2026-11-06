@@ -127,7 +127,11 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
   <details class="dt"><summary>キーワードの使い方</summary><div>地図に載っている店名・施設名に含まれる語で探します。事業内容では探せません。スペースか「、」で区切ると、いくつでも入れられます。業種を選ばず、キーワードだけでも探せます。業種とキーワードを両方入れると、両方で探します。キーワードは最大3つずつ同時に探します（同時に探しすぎるとGoogleマップに止められやすいため）。</div></details>
   <div class="row"><div><label for="limit">4. 出力する会社の数（送れる会社の目標）</label><input id="limit" type="number" placeholder="10" min="1"><p class="hint">問い合わせフォームかメールアドレスが見つかった会社を、この数そろえるまで、探す・調べるを続けます。空欄なら、右の「検索する数の上限」に合わせます（両方空欄なら10）。</p><p class="hint" id="est"></p></div><div><label for="fetchLimit">5. 検索する数の上限（候補を集めて調べる総量）</label><input id="fetchLimit" type="number" min="1" placeholder="10"><p class="hint">候補を集めて調べる総量の上限です（安全弁）。出力する会社の数がそろわなくても、この数まで調べたら止めます。出力する数より小さいときは、出力する数に合わせて始めます。空欄なら出力する数に合わせます。</p></div></div>
   <label class="check"><input type="checkbox" id="large" checked><span>大手・チェーンの会社も含める<span class="hint d">ふつうは入れたままにします。一人サロンや小さな会社だけにしたいときに外します。自動車販売店・保険代理店・ホテルなど、チェーンの多い業種は、外すと全部が除かれることがあります。</span></span></label>
-  <label class="check"><input type="checkbox" id="restartSearch"><span>最初からやり直す<span class="hint d">続きから探したいときは、チェックを入れません。Googleマップで同じ地域・業種をもう一度探すと、前回の続きから集めます(前回リストに出した会社と、対象外になった会社は、もう一度調べません)。最初から集め直したいときだけ、チェックを入れます。</span></span></label>
+  <fieldset id="resumeChoice" style="border:0;padding:0;margin:0 0 8px"><legend>同じ場所・業種をもう一度探すとき</legend>
+   <label class="check"><input type="radio" name="resumeMode" id="modeResume" checked><span>前回の続きから探す<span class="hint d">前回リストに出した会社と、対象外になった会社は、もう一度調べません。ふつうはこちらです。</span></span></label>
+   <label class="check"><input type="radio" name="resumeMode" id="modeRestart"><span>最初からやり直す<span class="hint d">前回の記録を使わず、最初から集め直します。前回調べた会社も、もう一度調べます。</span></span></label>
+   <p class="hint" id="resumeStatus"></p>
+  </fieldset>
   <details class="more"><summary>くわしい設定（最初は開かなくて大丈夫です）</summary>
    <label class="check"><input type="checkbox" id="resumeChecks" checked><span>途中で止まっても確認済みの行を再利用する</span></label>
    <label class="check"><input type="checkbox" id="officialResearch" checked><span>SNSやポータルサイトしか見つからない会社は、公式ホームページを探し直して、連絡先を確かめ直す</span></label>
@@ -140,6 +144,7 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
    <label for="ng">送らない会社を先に入れる（ホームページのドメイン、メールアドレス、または問い合わせフォームのURL（行の先頭に @ を付ける）を、1行に1つ。手動で送った会社もここへ）</label><textarea id="ng" placeholder="example.com / info@example.com / @https://example.com/contact/"></textarea>
    <p class="hint">探したあとで、結果の画面の「送らない」を押して入れることもできます。</p></details>
   <p class="hint" id="plan"></p>
+  <div class="hint" id="peerbar" hidden></div>
   <div class="actions"><button class="btn big" id="go">探しはじめる</button> <button class="btn sub" id="newtab" type="button">別のタブで、別の条件の検索を始める</button> <button class="btn danger" id="stop" type="button" hidden>ここで止める</button>
   <p class="hint">探している間に、別の場所・別のキーワードで同時に探したいときは「別のタブで…」を押します（同時に3つまで）。止めたいときは「ここで止める」を押すと、調べ終えた分でリストを作って終わります。0件が続いたときは、自動で止まります。</p></div></div>
  <div class="card"><h2>進み具合</h2><p class="st" id="st_a"></p><details class="dt"><summary>くわしい経過（黒い画面）を見る</summary><pre id="log">まだ何も動いていません</pre></details></div>
@@ -282,7 +287,7 @@ async function loadFunnel(){
   const m=s.map||{};
   const rows=(s.funnel||[]).map(f=>`<tr><td>${esc(f.label)}</td><td style="text-align:right;white-space:nowrap"><b>${f.n}</b>件</td><td class="hint">${esc(f.note||'')}</td></tr>`).join('');
   const maprows=m.searches?[['Googleマップの検索',m.searches+'回'],['うち、結果が0件だった検索',(m.empty||0)+'回'],['うち、取得に失敗した検索',(s.fetch_failed||0)+'回'],['読めなかった店・施設ページ',(m.unreadable||0)+'件']].map(r=>`<tr><td>${r[0]}</td><td style="text-align:right;white-space:nowrap"><b>${r[1]}</b></td><td></td></tr>`).join(''):'';
-  box.innerHTML=`<p>${esc(s.message||'')}</p>`+(s.area?`<p class="hint">探した場所: ${esc(s.area)}</p>`:'')+((rows||maprows)?`<div class="tw"><table class="rt"><tbody>${maprows}${rows}</tbody></table></div><p class="hint">各行は別々に数えた件数です。足し引きで合わないことがあります（同じ店が複数の理由で外れるため）。</p>`:'');
+  box.innerHTML=`<p>${esc(s.message||'')}</p>`+(s.area?`<p class="hint">探した場所: ${esc(s.area)}</p>`:'')+(s.history_note?`<p class="hint">前回の記録: ${esc(s.history_note)}${s.history_skipped?`（前回までに調べた${s.history_skipped}社は除きました）`:''}</p>`:'')+((rows||maprows)?`<div class="tw"><table class="rt"><tbody>${maprows}${rows}</tbody></table></div><p class="hint">各行は別々に数えた件数です。足し引きで合わないことがあります（同じ店が複数の理由で外れるため）。</p>`:'');
   $('#funnelBox').hidden=false
  }catch(e){}
 }
@@ -664,8 +669,15 @@ async function hist(){const [rows0,aft]=await Promise.all([J('/api/log'),J('/api
 const DMEAN='フォームで送る(自動挿入): フォームを開き、入れられる欄に文面を自動で入れます。内容を確かめて、自分で送信ボタンを押します。<br>送れたか確かめる: 送信ボタンは押しています。相手から自動返信のメールが届いていれば送れています。届かなくても、送れていないとは限りません。送り直す前に、会社のフォームを開いて確かめます。分からなければ、送り直さずに返事を待ちます。';
 $('#reload').onclick=hist;
 // ---- 探す(画面の動きは変えない) ----
-$('#go').onclick=async()=>{const r=await post('/api/search',{area:$('#area').value,limit:$('#limit').value,fetch_limit:$('#fetchLimit').value,include_large:$('#large').checked,restart_search:$('#restartSearch').checked,resume_checks:!$('#resumeChecks')||$('#resumeChecks').checked,official_research:!$('#officialResearch')||$('#officialResearch').checked,portal:$('#portal').value,portals:[...document.querySelectorAll('.portalChk:checked')].map(x=>x.value),ng:$('#ng').value,keywords:$('#kw').value,sources:[...document.querySelectorAll('#srcs input:checked')].map(x=>x.value),industries:[...document.querySelectorAll('#inds input:checked')].map(x=>x.value)});
- if(r.error)return alert(r.error);if(!r.started)alert('この画面では、ほかの処理が動いています。別の条件で同時に探すときは、「別のタブで、別の条件の検索を始める」を押してください');else wasRun=true;poll()};
+const collectSearch=()=>({area:$('#area').value,limit:$('#limit').value,fetch_limit:$('#fetchLimit').value,include_large:$('#large').checked,restart_search:$('#modeRestart').checked,resume_search:$('#modeResume').checked,resume_checks:!$('#resumeChecks')||$('#resumeChecks').checked,official_research:!$('#officialResearch')||$('#officialResearch').checked,portal:$('#portal').value,portals:[...document.querySelectorAll('.portalChk:checked')].map(x=>x.value),ng:$('#ng').value,keywords:$('#kw').value,sources:[...document.querySelectorAll('#srcs input:checked')].map(x=>x.value),industries:[...document.querySelectorAll('#inds input:checked')].map(x=>x.value)});
+const openPeer=p=>{const w=window.open(p.url,'_blank');const bar=$('#peerbar');bar.hidden=false;bar.textContent='いま探している検索はそのまま続きます。この条件は、別の枠（検索'+p.slot+'）の新しいタブで始めます。';if(!w){bar.append(' タブが開かないときは、ここを押してください: ');const a=document.createElement('a');a.href=p.url;a.target='_blank';a.rel='noopener';a.textContent='検索'+p.slot+'の画面を開く';bar.append(a)}};
+let HISTN=0;
+const refreshHist=async()=>{const r=await post('/api/history_status',collectSearch());const el=$('#resumeStatus');if(!el)return;if(r.error){el.textContent='';HISTN=0;return}HISTN=r.state=='match'?(r.checked||0):0;el.textContent=r.text||''};
+let histTimer=null;const histLater=()=>{clearTimeout(histTimer);histTimer=setTimeout(refreshHist,500)};
+document.addEventListener('input',e=>{if(e.target.closest&&e.target.closest('#area,#kw,#inds,#srcs'))histLater()});
+document.addEventListener('change',e=>{if(e.target.closest&&e.target.closest('#area,#kw,#inds,#srcs,#resumeChoice'))histLater()});
+const startSearch=async d=>{if(d.restart_search&&HISTN&&!confirm('「最初からやり直す」を選んでいます。前回までに調べた'+HISTN+'社も、もう一度調べます。よろしいですか'))return;const r=await post('/api/search',d);if(r.error)return alert(r.error);if(r.peer)return openPeer(r.peer);if(!r.started)return alert('この画面では、ほかの処理が動いています。少し待ってから、もう一度押してください');wasRun=true;poll()};
+$('#go').onclick=()=>startSearch(collectSearch());
 const stopNow=async()=>{if(!confirm('ここで止めます。調べ終えた分でリストを作って終わります（数十秒かかります）。よろしいですか'))return;const r=await post('/api/stop',{});if(r.error)return alert(r.error);alert(r.note)};
 $('#stop').onclick=stopNow;$('#stop2').onclick=stopNow;
 $('#newtab').onclick=async()=>{const w=window.open('about:blank','_blank');const r=await post('/api/newtab',{});if(r.error||!r.url){if(w)w.close();return alert(r.error||'別の画面を開けませんでした')}if(w)w.location=r.url;else alert('ブラウザが新しいタブを止めました。次のアドレスを開いてください: '+r.url)};
@@ -701,7 +713,13 @@ $('#restart').onclick=async()=>{if(!confirm('ツールを再起動します。�
  for(let i=0;i<400;i++){await new Promise(x=>setTimeout(x,3000));try{const w=await (await fetch("/api/whoami")).json();if(w.tool==="formlist"){location.reload();return}}catch(e){}}
  document.body.innerHTML='<p style="padding:40px">20分待っても戻りませんでした。この表示を、そのままコピーして担当者に送ってください。（再起動の待ち時間切れ）</p>'};
 async function showVer(){try{const w=await (await fetch('/api/whoami')).json();$('#ver').textContent='版 '+(w.build||'').slice(0,8)+(w.version?' / '+w.version.slice(0,6):'')+(w.dev?' / 開発用':'');if(w.dev&&!document.getElementById('devBar')){const b=document.createElement('div');b.id='devBar';b.textContent='開発用の画面です(お客様に渡す版ではありません。お客様版は 127.0.0.1:8780)';b.style.cssText='background:#b3261e;color:#fff;padding:6px 12px;text-align:center;font-weight:700';document.body.prepend(b);document.title='【開発用】'+document.title}}catch(e){}}
-showVer();
+showVer();setTimeout(histLater,1500);
+(async()=>{// 別枠の画面として開かれたとき(別のタブで始めるボタン・自動の振り分け): 元の画面から渡された検索条件を1回だけ受け取って始める
+ const h=new URLSearchParams(location.search).get('handoff');if(!h)return;history.replaceState(null,'',location.pathname+'?peer=1');
+ const r=await J('/api/handoff?id='+encodeURIComponent(h));
+ if(!r.req)return alert('元の画面から渡された検索条件が見つかりませんでした。元の画面で、もう一度「探しはじめる」を押してください');
+ if($('#area'))$('#area').value=r.req.area||'';if($('#kw'))$('#kw').value=r.req.keywords||'';
+ startSearch(r.req)})();
 $('#quit').onclick=async()=>{if(!confirm('ツールを終了します。送信などの処理が動いている場合は止まります。よろしいですか'))return;try{await post('/api/quit',{})}catch(e){}document.body.innerHTML='<p style="padding:40px">終了しました。このタブは閉じてください。再び使うときは、デスクトップの「AIまるなげ営業」を押します。</p>'};
 document.title='AIまるなげ営業'+(location.port&&location.port!='8780'?'（検索'+(parseInt(location.port)-8779)+'）':'');// 別のタブで見分けがつくように
 // 画面を開く・読み込み直すたびに、公開されている最新の版と照合する。古ければ(探す・送る処理が動いていないときだけ)自動で更新して、画面を読み込み直す

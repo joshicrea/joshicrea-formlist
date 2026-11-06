@@ -135,9 +135,26 @@ def replace_other_copy(port):
     return False
 
 
+def peer_log(msg):
+    """同時検索の振り分け・断りを1行ずつ残す(何が起きたか後から追えるように。出力フォルダの app_起動ログ.txt)"""
+    try:
+        OUT.mkdir(exist_ok=True)
+        cap_log(OUT / "app_起動ログ.txt")
+        with open(OUT / "app_起動ログ.txt", "ab") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 同時検索 port={PORT} {msg}\n".encode("utf-8"))
+    except OSError:
+        pass
+
+
 def start_peer():
     """別の条件で同時に探すために、もう1つ画面のサーバーを別の番号で立てる。(番号, None) か (None, 理由) を返す。
     先に空いている番号に立てる。空きが無ければ、何も動いていない自分のサーバーを使う。3つとも動いていれば断る"""
+    pt, why, _ = start_peer_kind()
+    return pt, why
+
+
+def start_peer_kind():
+    """start_peer と同じ。失敗のときは (None, 理由, 種類) を返す。種類: start_failed(立ち上げ待ち切れ) / all_busy(3つとも使用中) / other_copy(別の場所の同じツールが番号を使用) / port_taken(別のアプリが番号を使用)"""
     here = str(HERE)
     seen = {}
     for pt in ports.POOL:
@@ -156,15 +173,136 @@ def start_peer():
         for _ in range(40):
             time.sleep(0.5)
             if ports.state(pt, here) == "ours":
-                return pt, None
-        return None, f"{pt}番の画面を立ち上げられませんでした。出力フォルダの app_起動ログ.txt の末尾を確かめてください"
+                return pt, None, ""
+        return None, f"{pt}番の画面を立ち上げられませんでした。少し待ってからもう一度押してください(遅いパソコンでは、立ち上がりが遅れることがあります)。何度やっても同じなら、出力フォルダの app_起動ログ.txt の末尾を担当者に送ってください", "start_failed"
     for pt, st in seen.items():
         j = ports.job(pt) if st == "ours" else None
         if j is not None and not j.get("running"):
-            return pt, None
+            return pt, None, ""
     if any(st == "ours" for st in seen.values()):
-        return None, f"同時に探せるのは{len(ports.POOL)}つまでです（パソコンが重くなり、Googleにも止められやすくなるため）。どれかが終わってから、もう一度押してください"
-    return None, "別の画面を立てる番号（" + "・".join(str(x) for x in ports.POOL) + "）が、ほかのアプリに使われています。使っているアプリを閉じるか、パソコンを再起動してから、もう一度お試しください"
+        return None, f"同時に探せるのは{len(ports.POOL)}つまでです（パソコンが重くなり、Googleにも止められやすくなるため）。どれかが終わってから、もう一度押してください", "all_busy"
+    if any(st == "other_copy" for st in seen.values()):
+        return None, "別の場所に入っている、このツールの別のコピーが、同時検索用の番号を使っています。その画面を閉じてから、もう一度お試しください。どの画面か分からないときは、パソコンを再起動してください", "other_copy"
+    return None, "別の画面を立てる番号（" + "・".join(str(x) for x in ports.POOL) + "）が、ほかのアプリに使われています。使っているアプリを閉じるか、パソコンを再起動してから、もう一度お試しください", "port_taken"
+
+
+HANDOFF_KEEP_SEC = 600
+HANDOFF_ID = re.compile(r"^[0-9a-f]{16}$")
+
+
+def handoff_sweep():
+    """受け取られないまま10分たった受け渡しを消す(検索条件にはNGリストなどが入る)"""
+    now = time.time()
+    for f in OUT.glob("peer_handoff_*"):
+        try:
+            if now - f.stat().st_mtime > HANDOFF_KEEP_SEC:
+                f.unlink()
+        except OSError:
+            pass
+
+
+def handoff_write(d):
+    """別枠の画面へ渡す検索条件を、出力フォルダ(全サーバー共通)へ一時保存して受け渡し番号を返す。
+    ポートをまたぐ直接の呼び出しは、宛先のトークン検査(guard)で必ず断られるため、この方式にしている。10分たったものは消す"""
+    OUT.mkdir(exist_ok=True)
+    handoff_sweep()
+    hid = secrets.token_hex(8)
+    (OUT / f"peer_handoff_{hid}.json").write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    return hid
+
+
+def handoff_take(hid):
+    """受け渡し番号から検索条件を1回だけ取り出す(取り出したら消す)。無い・古い・形が違うときは None"""
+    if not HANDOFF_ID.match(str(hid or "")):
+        return None
+    handoff_sweep()
+    f = OUT / f"peer_handoff_{hid}.json"
+    claim = OUT / f"peer_handoff_{hid}.claim"
+    try:
+        os.close(os.open(str(claim), os.O_CREAT | os.O_EXCL | os.O_WRONLY))  # 取り出す権利を1つのタブだけに与える(ファイル名の排他的な作成は、同時でも勝者が1つに決まる。os.replace は同時だと両方成功に見えた)
+    except OSError:
+        return None
+    try:
+        if time.time() - f.stat().st_mtime > HANDOFF_KEEP_SEC:
+            f.unlink()
+            return None
+        d = json.loads(f.read_text(encoding="utf-8-sig"))
+        f.unlink()
+        return d if isinstance(d, dict) else None
+    except (OSError, ValueError):
+        return None
+    finally:
+        try:
+            claim.unlink()
+        except OSError:
+            pass
+
+
+def google_block_until():
+    """Googleに止められた印(formlist.py が書く 出力/google_止められた.json)がまだ有効なら、終わる時刻('YYYY-MM-DDTHH:MM:SS')。無ければ空"""
+    import datetime as dt
+    try:
+        until = json.loads((OUT / "google_止められた.json").read_text(encoding="utf-8-sig"))["until"]
+        return until if dt.datetime.fromisoformat(until) > dt.datetime.now() else ""
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
+
+
+def google_block_message(until):
+    return f"Googleに止められたため、{until[11:16]}ごろまで、Googleマップを使う新しい検索は始められません。終わった検索の結果は、そのまま見られます。時間がたってから、もう一度押してください"
+
+
+def history_status(d):
+    """この検索条件に、前回の続き(探索履歴)があるか。formlist.py が履歴の組を作るときと同じ作り方(業種の正規化・キーワードの分け方)で鍵を作る。
+    戻り: state(match=続きあり / none=記録なし / similar=同じ場所で別の組み合わせ / not_google=Googleマップを使わない / empty=条件がまだ足りない) と、画面に出す1行(text)"""
+    import industries
+    import search_history
+    if "google" not in (d.get("sources") or ["google"]):
+        return {"state": "not_google", "text": "Googleマップを使わない探し方では、前回の続きは使えません。いつも最初から集めます"}
+    area = str(d.get("area") or "").strip()
+    inds = list(dict.fromkeys(industries.canonical(i) for i in (d.get("industries") or []) if not industries.retired_reason(i)))
+    kws = [k for k in re.split(r"[\s、,，]+", str(d.get("keywords") or "")) if k]
+    if not area or not (inds or kws):
+        return {"state": "empty", "text": ""}
+    key = search_history.group_key(area, inds, kws)
+    e = search_history.load(OUT, key)
+    if e:
+        n, done, total = len(e.get("checked") or {}), int(e.get("jobs_done") or 0), int(e.get("n_all") or 0)
+        return {"state": "match", "checked": n, "jobs_done": done, "n_all": total, "updated": e.get("updated", ""),
+                "text": f"前回の続きから集めます(前回までに {n}社を調べ済み・検索は全{total}件のうち{done}件まで終えています)"}
+    why = search_history.why_no_history(OUT, key)
+    return {"state": "similar" if why.startswith("同じ場所") else "none", "checked": 0, "text": why}
+
+
+SEARCH_COND = {}
+
+
+def cond_key(d):
+    """動いている検索の条件の鍵(履歴の組と同じ作り)。場所と、業種・キーワードが同じなら同じ検索とみなす"""
+    import industries
+    import search_history
+    inds = list(dict.fromkeys(industries.canonical(i) for i in (d.get("industries") or []) if not industries.retired_reason(i)))
+    kws = [k for k in re.split(r"[\s、,，]+", str(d.get("keywords") or "")) if k]
+    area = str(d.get("area") or "").strip()
+    return search_history.group_key(area, inds, kws) if area and (inds or kws) else ""
+
+
+def busy_reply(d):
+    """この画面の「探す」が動いているときの返事。空いている別枠を用意して、その画面へ検索条件を渡す(利用者は「探しはじめる」を押すだけでよい)。
+    別枠を用意できなければ、理由ごとの断り文(kind つき)を返す"""
+    mine = cond_key(d)
+    for pt0 in [PORT] + [x for x in ports.POOL if x != PORT]:  # 二度押し対策: 動いている検索(この画面・別枠)と同じ条件なら、別枠で並べて走らせない(重複・Googleへのアクセス倍増・履歴の競合のため)
+        w = {"cond": SEARCH_COND.get("key", "") if SJOB["running"] else ""} if pt0 == PORT else (ports.job(pt0) or {})
+        if mine and w.get("cond") == mine:
+            peer_log(f"search 断り 種類=same_condition 枠={pt0}")
+            return {"started": False, "kind": "same_condition", "error": f"この条件の検索は、すでに{'この画面' if pt0 == PORT else '検索' + str(ports.POOL.index(pt0) + 1)}で動いています。終わるまで待つか、別の条件にしてから押してください"}
+    pt, why, kind = start_peer_kind()
+    if pt is None:
+        peer_log(f"search 断り 種類={kind}")
+        return {"started": False, "error": why, "kind": kind}
+    hid = handoff_write(d)
+    peer_log(f"search 別枠へ振り分け 枠={pt}")
+    return {"started": False, "peer": {"url": f"http://127.0.0.1:{pt}/?peer=1&handoff={hid}", "port": pt, "slot": ports.POOL.index(pt) + 1}}
 
 
 def send_stop_flag():
@@ -1348,7 +1486,8 @@ class H(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         ng_store = _NG_STORE
         if u.path == "/":
-            if not IS_DEV and PORT != ports.MAIN and self.headers.get("Sec-Fetch-Mode") == "navigate" and ports.job(ports.MAIN, timeout=1):  # 開発用(8785)はお客様版の入口へ案内しない
+            # 別枠の画面(ボタン・自動振り分けで開いたもの=URLに peer= が付く)と、探す・送るの最中の画面は、入口へ戻さない(戻すと別枠の検索が始められず、動いている検索の画面も消える)
+            if not IS_DEV and PORT != ports.MAIN and "peer" not in q and not (JOB["running"] or SJOB["running"]) and self.headers.get("Sec-Fetch-Mode") == "navigate" and ports.job(ports.MAIN, timeout=1):  # 開発用(8785)はお客様版の入口へ案内しない
                 # 画面のURLは常に入口の番号(8780)に固定する。8781・8782 をブックマークしていても、動いている入口へ案内する(古い画面のまま使わせない)
                 self.send_response(302)
                 self.send_header("Location", f"http://127.0.0.1:{ports.MAIN}/")
@@ -1372,8 +1511,12 @@ class H(BaseHTTPRequestHandler):
                                    "send_state": st["send_state"], "problems": st["problems"], "counts": st["counts"], "changed": st["changed"],
                                    "send_file": st["file"], "awake": st.get("awake", ""), "stopping": st.get("stopping", False), "first_time": first, "last_max": last_max, "max_kind": max_kind, "limits": limits(),
                                    "message_summary": {"default": 1, "industries": [n for n, v in info["uses"].items() if v == "業種ごと"]}})
+        if u.path == "/api/handoff":
+            # 別枠の画面が開いた直後に、元の画面から渡された検索条件を1回だけ受け取る
+            d = handoff_take(q.get("id"))
+            return self.send(200, {"req": d} if d else {"req": None})
         if u.path == "/api/whoami":
-            return self.send(200, {"tool": "formlist", "here": str(HERE), "version": VERSION, "build": BUILD, "port": PORT, "dev": IS_DEV, "running": JOB["running"] or SJOB["running"], "name": JOB["name"] if JOB["running"] else SJOB["name"]})
+            return self.send(200, {"tool": "formlist", "here": str(HERE), "version": VERSION, "build": BUILD, "port": PORT, "dev": IS_DEV, "running": JOB["running"] or SJOB["running"], "name": JOB["name"] if JOB["running"] else SJOB["name"], "cond": SEARCH_COND.get("key", "") if SJOB["running"] else ""})
         if u.path == "/api/summary":
             # この画面(番号)の、最後の探索の内訳(段階別の件数・結果・理由)。画面の「結果を見る」が読む
             try:
@@ -1495,7 +1638,7 @@ class H(BaseHTTPRequestHandler):
             assert isinstance(d, dict)
             lim_in = count(d.get("limit"), None, 1, 1000)  # 出力する会社の数 = 送れる会社の目標数。空欄は None(下で検索する数の上限に合わせる。両方空欄なら10)
             mx = count(d.get("max"), None, 1, None)
-            par = count(d.get("parallel"), 3, 1, 5)
+            par = min(count(d.get("parallel"), 3, 1, 5), ports.PER_SERVER_MAX)  # 同時に動く検索の総量(サーバー数×1台あたり)は定数で決まる。画面・API から上げられない(4以上を指定されても3にする)
             flim_in = count(d.get("fetch_limit"), None, 0, 100000)  # 検索する数の上限 = 候補を集めて調べる総量の上限。0・空欄は未指定(出力する数に合わせる)
             import plan
             lim, flim, count_note = plan.normalize_counts(lim_in, flim_in)
@@ -1526,6 +1669,8 @@ class H(BaseHTTPRequestHandler):
                 args += ["--ng-state-db", str(ng_store.db_path)]
             if d.get("resume_checks"):
                 args.append("--resume-checks")
+            if d.get("resume_search") and d.get("restart_search"):  # 画面の二者択一「前回の続きから探す / 最初からやり直す」。両方が来たら、どちらの意味か決められないので断る
+                return self.send(400, {"error": "「前回の続きから探す」と「最初からやり直す」は、同時には選べません。どちらか一方を選んでください"})
             if d.get("restart_search"):  # 画面の「最初からやり直す」。付けなければ、同じエリア・業種は前回の続きから集める(探索履歴)
                 args.append("--restart-search")
             if d.get("official_research"):
@@ -1564,8 +1709,15 @@ class H(BaseHTTPRequestHandler):
                 OUT.mkdir(exist_ok=True)
                 ng.write_text(d["ng"], encoding="utf-8")
                 args += ["--ng", str(ng)]
+            blocked = google_block_until() if "google" in (d.get("sources") or ["google"]) else ""
+            if blocked:  # 止められている間は、別枠も含めて始めない(formlist.py も同じ印を見て止まる)。先に理由を返す
+                peer_log("search 断り 種類=google_blocked")
+                return self.send(200, {"started": False, "error": google_block_message(blocked), "kind": "google_blocked"})
             ok = run_job("探す", args)
-            return self.send(200, {"started": ok} if ok else {"started": False, "error": "いま「探す」が動いています。終わってから押します"})
+            if ok:
+                SEARCH_COND["key"] = cond_key(d)
+                return self.send(200, {"started": True})
+            return self.send(200, busy_reply(d))
         if self.path == "/api/stop":
             # 手で止める。「探す」だけ止める(印のファイルを置くと、探す処理が次の区切り(検索1回・会社1社)で止まり、調べ終えた分でリストを作る)。送信は止めない
             if not SJOB["running"]:
@@ -1578,11 +1730,16 @@ class H(BaseHTTPRequestHandler):
             import plan
             kws = [k for k in re.split(r"[\s、,，]+", d.get("keywords", "")) if k]
             return self.send(200, plan.plan_searches(str(d.get("area", "")).strip(), d.get("industries") or [], kws, lim))
+        if self.path == "/api/history_status":
+            # 「探しはじめる」を押す前に、この条件に前回の続きがあるかを返す(画面の「前回の続きから探す」の下に出す)
+            return self.send(200, history_status(d))
         if self.path == "/api/newtab":
-            pt, why = start_peer()
+            pt, why, kind = start_peer_kind()
             if pt is None:
-                return self.send(409, {"error": why})
-            return self.send(200, {"url": f"http://127.0.0.1:{pt}/", "port": pt})
+                peer_log(f"newtab 失敗 種類={kind}")
+                return self.send(409, {"error": why, "kind": kind})
+            peer_log(f"newtab 成功 枠={pt}")
+            return self.send(200, {"url": f"http://127.0.0.1:{pt}/?peer=1", "port": pt})
         if self.path == "/api/update":
             # 最新版へ入れ替えて、起動し直す。探す・送るの最中(どのサーバーでも)は断る。入れ替えは、検査に全部通ったときだけ(updater.py)
             if JOB["running"] or SJOB["running"] or any((ports.job(p) or {}).get("running") for p in ports.POOL if p != PORT):
