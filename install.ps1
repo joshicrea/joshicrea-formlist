@@ -239,6 +239,14 @@ function Find-ProfileSource {
             if (Get-ChildItem -LiteralPath $f.FullName -Filter "sender.json" -File -Recurse -Depth 1 -ErrorAction SilentlyContinue) { $hits += $f }
         }
     }
+    # 撤去したときに本人の設定を写してあるフォルダ(撤去前の設定と出力_日時)。入れ直しで本人が直した送信元・文面・計測キーを戻せるように、取り込み元に含める(Q899)
+    if (Test-Path -LiteralPath $Root) {
+        foreach ($f in @(Get-ChildItem -LiteralPath $Root -Filter "撤去前の設定と出力_*" -Directory -ErrorAction SilentlyContinue)) {
+            $kept = [IO.Path]::Combine($f.FullName, "sender.json")
+            # 見本のままの送信元しか無い撤去前フォルダは、取り込み元にしない(最新だからと選ぶと、ダウンロードにある有効な設定zipを押しのけて見本が入る)
+            if ((Test-Path -LiteralPath $kept) -and -not (Test-SampleSender $kept)) { $hits += $f }
+        }
+    }
     if ($hits.Count -eq 0) { return "" }
     return ($hits | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
 }
@@ -431,6 +439,13 @@ try {
             $dest = [IO.Path]::Combine($AppDir, $it.Name)
             if ($it.Name -eq "sender.json" -and -not $it.PSIsContainer) {
                 if (Test-SampleSender $dest) { Copy-Item -LiteralPath $it.FullName -Destination $dest -Force; $added++ }
+            } elseif ($it.Name -eq "計測キー.txt" -and -not $it.PSIsContainer) {
+                # 撤去前のフォルダにだけある。いまの鍵があれば上書きしない。画面の保存と同じ形(英数字と - _ の32〜128文字)でなければ戻さない
+                $keyText = ""
+                try { $keyText = (Get-Content -LiteralPath $it.FullName -Raw -Encoding UTF8).Trim() } catch {}
+                if ($keyText -match '^[A-Za-z0-9_-]{32,128}$') {
+                    if (-not (Test-Path $dest)) { Copy-Item -LiteralPath $it.FullName -Destination $dest; $added++ }
+                } else { $skipped += "計測キー.txt(形が違うので戻していません)" }
             } elseif ($it.Name -eq "message_adoptions.json" -and -not $it.PSIsContainer) {
                 if (-not (Test-Path $dest)) { Copy-Item -LiteralPath $it.FullName -Destination $dest; $added++ }
             } elseif ($it.Name -eq "文面" -and $it.PSIsContainer) {

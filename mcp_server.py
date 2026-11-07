@@ -507,12 +507,18 @@ def formlist_sender_get() -> dict:
 
 
 @mcp.tool()
-def formlist_sender_set(fields: dict) -> dict:
-    """送信元の項目を更新する（渡した項目だけ変わる）。使える項目: 会社名 氏名 フリガナ メール 電話 郵便番号 住所 件名 署名 資料URL（文面の {資料URL} に入る。https:// で始まるURL。費用を載せた資料は置かない）と 計測キー（資料URLの {識別} 用。担当者から届いた設定の文に書いてあるものを、そのまま渡す。保存して、画面にも応答にも出さない。先に渡してから資料URLを渡す）。
+def formlist_sender_set(fields: dict, overwrite: bool = False) -> dict:
+    """送信元の項目を更新する（渡した項目だけ変わる）。既定(overwrite=False)では、見本のまま・空の項目にだけ入れ、利用者が自分で直した項目は上書きしない。
+    上書きしなかった項目は返り値の skipped に入る(項目・いまの値・届いた値・差分)。skipped があれば、差分を利用者に見せて、「上書きして」と言われた項目だけ overwrite=True で渡し直す(勝手に True にしない)。
+    どちらの場合も、変わる前の送信元は出力/設定の控え に自動で控える(返り値の backup)。使える項目: 会社名 氏名 フリガナ メール 電話 郵便番号 住所 件名 署名 資料URL（文面の {資料URL} に入る。https:// で始まるURL。費用を載せた資料は置かない）と 計測キー（資料URLの {識別} 用。担当者から届いた設定の文に書いてあるものを、そのまま渡す。保存して、画面にも応答にも出さない。先に渡してから資料URLを渡す）。
     署名は顧客に届く。変更内容の全文をユーザーに見せ、承認を得てから保存する。署名には連絡先と配信停止の案内を含める。
     保存すると確認済みの印は無効になり、formlist_preview からやり直しになる。それ以外の項目名は断る。
     返り値の problems に、保存したあとも送る前に直すところ(欄の名前つき)が入る。空でなければ、まだ送れないことを利用者に伝える。"""
-    code, d = api("POST", "/api/sender", fields)
+    body = dict(fields)
+    body.pop("_fill_only", None)
+    if not overwrite:
+        body["_fill_only"] = True
+    code, d = api("POST", "/api/sender", body)
     return d if code == 200 else {"error": d.get("error")}
 
 
@@ -546,10 +552,15 @@ def formlist_message_get(name: str = "default") -> dict:
 
 
 @mcp.tool()
-def formlist_message_set(name: str, text: str) -> dict:
+def formlist_message_set(name: str, text: str, overwrite: bool = False) -> dict:
     """送る文面を保存する。顧客に届く文面なので、ユーザーに全文を見せて承認を得てから保存する。保存すると確認済みの印は無効になる。
+    既定(overwrite=False)では、無い文面・ひな形のままの文面にだけ入れ、利用者が自分で直した文面は上書きしない。上書きしなかったときは返り値の skipped に(文面・いまの値・届いた値・差分)が入る。
+    skipped があれば、差分を利用者に見せ、「上書きして」と言われたときだけ overwrite=True で渡し直す(勝手に True にしない)。上書きするときも、変わる前の文面は出力/設定の控え に自動で控える(返り値の backup)。
     返り値の problems に、見本の文字(例: 見本の「拠点エリア」)が残っている箇所が入る。保存はできるが、残っているあいだは送る内容を出せない。"""
-    code, d = api("POST", "/api/message", {name: text})
+    body = {name: text}
+    if not overwrite:
+        body["_fill_only"] = True
+    code, d = api("POST", "/api/message", body)
     return d if code == 200 else {"error": d.get("error")}
 
 

@@ -1,7 +1,7 @@
 {
- "version": "c7c044869feb",
+ "version": "5bf2240f685d",
  "files": {
-  "app.py": "af0b5840a4630f596df17eaa53508358f833704707ecdf5edb63c5c9434a9ad9",
+  "app.py": "eed9a8a0a376677e8827361ef7c3239a7eb7ddaebfc95573127d40f24f0a4ce1",
   "ui.html": "bf62d6a66a25779cf7d19d6cbe996e92fc121b802f07e6fdb88cc203891842d4",
   "approval.py": "0b4a4908efedd041f50655ccc209f8fc0f433bd3c8c51788928fb0bcd0b07f2a",
   "autosend.py": "a68728b75dc4db40a5b891e4cc940702c924aa77bd6df719e353f7f549526427",
@@ -17,7 +17,7 @@
   "limited_http_budget.py": "229b0b36fcec3af27c287f405b79ece1ca4a912b35b936467e5ede6d0e87e0f3",
   "mail_channel.py": "2c933418cc2162c0903a00d8d29916749f49bcd92a95d4423f65e88d859950a3",
   "map_browser_source.py": "d5237ebc58ea8c05d004f2c0656fa358d25554ebbee8076c84c0f9dc604baeb5",
-  "mcp_server.py": "31da6914f9c121a61aeea42cba32d1f6e9fc93e894629ad04dbb2d9bf86b58bf",
+  "mcp_server.py": "74308919e966fef225b5ac6156449fbaaa1dacba65a0f681a6df8294f39cb31e",
   "mcp_register.py": "5de5a19bc3cfaae46ce8296bd48571182a2f72710751e07bd244090be8a4fddc",
   "message_adoption.py": "502dd4c6ac1f68f969e272728be73b1d022f76dfc66d1973f8e94189cc03e9fe",
   "netguard.py": "980fd728eb766e268fbe16b82d5fc3df38ceddb68c4526102d17d631e1e27798",
@@ -38,6 +38,7 @@
   "sales_records.py": "2f23bb2a420857139a6eac34d6878fa66e62267bf128344cc783cc32251fe4f5",
   "search_history.py": "9754cf2ba97a88f8d3e297955051771552454b9c0d01769b45b9816205f5c0a2",
   "send_rules.py": "2ff11a85f19f8ff29ffce238523e3fa79278b8541071aa794172df0d27488ec5",
+  "settings_guard.py": "2afb3aebd9247080c67f7ea4c1bfbb6379c6a8fa8bacb4cc2098d8128cb06ebf",
   "site_checker.py": "7542efbf1d588f106525bcbd9bc941d907f9929e1a7f46cef8ea5a69cb3fcbc4",
   "size_guess.py": "47a0424801749a600c950ec960c0a09f774f8b946f7946e7bd050c663801c3bb",
   "state.py": "bc44d9b678828b172cc49eb08be8ef33768c3f484ff26f51a2d1ada85ff480a4",

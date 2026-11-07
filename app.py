@@ -36,6 +36,7 @@ import send_rules
 import osm_source
 import philosophy
 import ports
+import settings_guard
 import state
 import updater
 from ng_state_store import NgStateStore
@@ -1833,10 +1834,18 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/api/sender":
             old = json.loads(SENDER.read_text(encoding="utf-8-sig")) if SENDER.exists() else {}
             keep = ("会社名", "氏名", "フリガナ", "メール", "電話", "郵便番号", "住所", "件名", "署名", "資料URL", "計測キー")
+            fill_only = bool(d.pop("_fill_only", False))  # 設定の文の適用(MCP の既定): 見本のまま・空の項目にだけ入れ、本人が直した項目は上書きしない(Q899)
             bad = [k for k in d if k not in keep]
             if bad:
                 return self.send(400, {"error": "送信元にない項目です: " + "、".join(bad[:5])})
             new_key = d.pop("計測キー", None)  # 鍵は sender.json に入れず、応答にも出さない。ほかの検査が全部通ってから保存する
+            skipped = []
+            if fill_only:
+                for k in list(d):
+                    cur = str(old.get(k, ""))
+                    if str(d[k]) != cur and not settings_guard.sender_fillable(cur, k):
+                        skipped.append({"項目": k, "いまの値": cur, "届いた値": str(d[k]), "差分": settings_guard.diff_text(cur, str(d[k]))})
+                        del d[k]
             if new_key is not None and not proposal_links.KEY_OK.fullmatch(str(new_key).strip()):
                 return self.send(400, {"error": "計測キーは、英数字と - _ だけの32〜128文字です。設定の文のとおりに貼ってください"})
             url = str(d.get("資料URL", "")).strip()
@@ -1850,14 +1859,18 @@ class H(BaseHTTPRequestHandler):
             if new_key is not None:
                 proposal_links.save_key(new_key)
             old.update({k: str(v) for k, v in d.items()})  # 画面に出ない項目を消さず、決めた項目だけ文字で受ける
-            SENDER.write_text(json.dumps(old, ensure_ascii=False, indent=1), encoding="utf-8")
+            new_text = json.dumps(old, ensure_ascii=False, indent=1)
+            kept = None
+            if SENDER.exists() and SENDER.read_text(encoding="utf-8-sig").strip() != new_text.strip():
+                kept = settings_guard.backup(SENDER.parent, [SENDER])  # 変わる前の送信元を控える(上書きしても戻せる)
+            SENDER.write_text(new_text, encoding="utf-8")
             # 保存した結果と、まだ送れない理由を同じ応答で返す(「保存しました」と「足りません」を別々に出さない。S2)
             files = outputs()
             try:
                 tpl = templates_for(safe_out(files[0])) if files else templates_for(None)
             except OSError:
                 tpl = templates_for(None)
-            return self.send(200, {"ok": True, "problems": send_rules.sender_problems(old, list(tpl.values()))})
+            return self.send(200, {"ok": True, "problems": send_rules.sender_problems(old, list(tpl.values())), "skipped": skipped, "backup": str(kept) if kept else None})
         if self.path == "/api/openings":
             f = safe_out(str(d.get("file", "")))
             ops = d.get("openings")
@@ -1954,16 +1967,31 @@ class H(BaseHTTPRequestHandler):
                 return self.send(400, {"error": str(e)})
         if self.path == "/api/message":
             MSG.mkdir(exist_ok=True)
+            fill_only = bool(d.pop("_fill_only", False))  # 設定の文の適用(MCP の既定): 見本のまま・無い文面にだけ入れ、本人が直した文面は上書きしない(Q899)
             # 値は文面ファイルの本文(文字。MCP・以前の画面)か、画面の部分 {greeting, opener, body, signature}(D-10。保存のときに組み立てる)
             bad = [k for k in d if not (k.replace("・", "").replace("_", "").isalnum() or k == "default")]
             if bad or not all(isinstance(v, str) or (isinstance(v, dict) and isinstance(v.get("body", ""), str)) for v in d.values()):
                 return self.send(400, {"error": "保存できない名前か中身です: " + "、".join(bad[:5])})
             saved = {k: (join_message(v) if isinstance(v, dict) else v) for k, v in d.items()}
+            skipped = []
+            if fill_only:
+                for k, v in list(saved.items()):
+                    p = MSG / f"{k}.txt"
+                    if not p.exists():
+                        continue
+                    cur = p.read_text(encoding="utf-8-sig")
+                    tpl_p = HERE / "文面ひな形" / f"{k}.txt"
+                    tpl = tpl_p.read_text(encoding="utf-8-sig") if tpl_p.exists() else None
+                    if settings_guard._norm(cur) != settings_guard._norm(v) and not settings_guard.message_fillable(cur, tpl):
+                        skipped.append({"文面": k, "いまの値": cur, "届いた値": v, "差分": settings_guard.diff_text(cur, v)})
+                        del saved[k]
+            kept = settings_guard.backup(MSG.parent, [MSG / f"{k}.txt" for k, v in saved.items()
+                                                       if (MSG / f"{k}.txt").exists() and settings_guard._norm((MSG / f"{k}.txt").read_text(encoding="utf-8-sig")) != settings_guard._norm(v)])  # 変わる文面だけ、変わる前を控える
             for k, v in saved.items():
                 (MSG / f"{k}.txt").write_text(v, encoding="utf-8")
             # 見本の文字が残っていても保存はできる(途中で保存したい人のため)。送る内容を出すところで止まる。ここでは何が残っているかを返す
             probs = message_problems({("標準" if k == "default" else k): v for k, v in saved.items()})
-            return self.send(200, {"ok": True, "problems": probs, "parts": {k: split_message(v) for k, v in saved.items()}})
+            return self.send(200, {"ok": True, "problems": probs, "parts": {k: split_message(v) for k, v in saved.items()}, "skipped": skipped, "backup": str(kept) if kept else None})
         if self.path == "/api/message/subject":
             # 業種の型(パターン)ごとの件名を、文面と同じ画面で直す: {"industry": 業種名, "subject": 件名(空なら初期値に戻す)}
             import patterns
