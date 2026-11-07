@@ -220,7 +220,16 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
 </section>
 <section id="d"><div class="now" id="now_d"></div><div class="card"><div class="toolbar"><h2 style="flex:1">送信の記録</h2><button class="btn sub sm" id="reload" type="button">更新</button></div><div class="sum" id="hsum"></div><p class="hint" id="hsent" style="margin:8px 0 0"></p><p class="hint" id="hfnote"></p><div id="manualst_d" role="status" aria-live="polite" hidden style="margin:8px 0;padding:10px 12px;border:1px solid var(--ac);border-radius:6px;font-size:15px;line-height:1.6;white-space:pre-line"></div><div class="manAsk edit" hidden><b class="manAskName"></b> のフォームから、送りましたか。 <button class="btn sm manYes" type="button">送りました</button> <button class="btn sub sm manNo" type="button">送っていません</button></div><div class="tw"><table class="rt" id="hist"></table></div></div></section>
 </main>
-<div class="wrap"><details class="dt" id="supBox" style="margin-bottom:32px"><summary>サポート用（再起動・終了・版）</summary><div><p class="hint" style="margin:6px 0">困ったときに担当者から言われたときだけ使います。</p><button type="button" id="restart" class="btn sub sm">再起動する</button> <button type="button" id="quit" class="btn sub sm">ツールを終了する</button> <button type="button" id="supCopy" class="btn sub sm">担当者に送る文をコピー</button> <span class="hint" id="supNote" role="status"></span><p id="ver" style="color:var(--mut);font-size:14px;margin:8px 0 0"></p></div></details></div>
+<div class="wrap"><details class="dt" id="supBox" style="margin-bottom:32px"><summary>サポート用（再起動・終了・版）</summary><div><p class="hint" style="margin:6px 0">再起動と終了は、担当者から言われたときだけ使います。不具合の連絡は、下の「不具合を送る」から出します。</p><button type="button" id="restart" class="btn sub sm">再起動する</button> <button type="button" id="quit" class="btn sub sm">ツールを終了する</button> <button type="button" id="supCopy" class="btn sub sm">担当者に送る文をコピー</button> <span class="hint" id="supNote" role="status"></span><p id="ver" style="color:var(--mut);font-size:14px;margin:8px 0 0"></p></div></details>
+<details class="dt" id="bugBox" style="margin-bottom:32px"><summary>不具合を送る</summary><div><p class="hint" style="margin:6px 0">うまく動かないときに、ここから開発者へ届けます。受付番号つきのメールが届き、直って公開されたら完了のメールが届きます。許可キーと版は自動で付くので、入れる必要はありません。</p>
+<p style="margin:6px 0">版 <span id="bugVer"></span>・許可キー <span id="bugKey"></span></p>
+<p style="margin:6px 0"><label>件名(60字まで・必須)<br><input type="text" id="bugSummary" maxlength="60" style="width:100%"></label></p>
+<p style="margin:6px 0"><label>内容(800字まで。何をしたら、どうなったか)<br><textarea id="bugDetail" maxlength="800" rows="5" style="width:100%"></textarea></label></p>
+<p style="margin:6px 0"><label>連絡先メールアドレス(受付と完了の連絡にだけ使います。対応が終わって90日で消えます)<br><input type="email" id="bugContact" maxlength="100" style="width:100%"></label></p>
+<button type="button" id="bugSend" class="btn sm">送る</button> <span class="hint" id="bugNote" role="status"></span>
+<p style="margin:14px 0 4px">送った内容と連絡先を、いますぐ消したいとき: 受付番号を入れて削除します。</p>
+<input type="text" id="bugReceipt" maxlength="24" placeholder="BR-20261107-AB12"> <button type="button" id="bugDel" class="btn sub sm">この受付を削除する</button> <span class="hint" id="bugDelNote" role="status"></span>
+</div></details></div>
 <script>
 const TOKEN='__TOKEN__';const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -771,11 +780,13 @@ async function copyText(t,note){let ok=false;try{await navigator.clipboard.write
  note.textContent=ok?'コピーしました。担当者への連絡に貼り付けます（鍵の値は入っていません）。':'コピーできませんでした。次の文を選んで担当者へ送ります: '+t}
 async function licCopy(){copyText(LIC.report||'AIまるなげ営業の利用の確認ができません。',$('#licNote'))}
 $('#supCopy').onclick=async()=>{const r=await J('/api/support_report');copyText((r&&r.report)||'AIまるなげ営業の困りごとについて。版 '+($('#ver').textContent||'')+'。',$('#supNote'))};
-async function checkLicense(){
- try{
-  const r=await J('/api/license');licShow(r)
- }catch(e){}
-}
+$('#bugBox').addEventListener('toggle',async()=>{if(!$('#bugBox').open)return;const r=await J('/api/bug_report/info');if(r&&!r.error){$('#bugVer').textContent=r.version||'';$('#bugKey').textContent=r.key_set?'設定済み':'未設定(設定の「計測キー」に入れます)'}});
+$('#bugSend').onclick=async()=>{const n=$('#bugNote');n.textContent='送っています。';$('#bugSend').disabled=true;
+ const r=await post('/api/bug_report',{summary:$('#bugSummary').value,detail:$('#bugDetail').value,contact:$('#bugContact').value});$('#bugSend').disabled=false;
+ if(r.error){n.textContent=r.error;return}
+ n.textContent=r.message;if(r.receipt)$('#bugReceipt').value=r.receipt;$('#bugSummary').value='';$('#bugDetail').value=''};
+$('#bugDel').onclick=async()=>{const n=$('#bugDelNote');n.textContent='削除しています。';const r=await post('/api/bug_report/delete',{receipt:$('#bugReceipt').value});n.textContent=r.error||r.message;if(r.ok)$('#bugReceipt').value=''};
+async function checkLicense(){try{licShow(await J('/api/license'))}catch(e){}}
 async function init(){META=await J('/api/meta');if(META.error){$('#now_c').textContent=META.error;return}
  $('#inds').innerHTML=(META.industries||[]).map(i=>`<label class="chip"><input type="checkbox" value="${esc(i)}"><span>${esc(i)}</span></label>`).join('');
  $('#inds').onchange=()=>{const n=document.querySelectorAll('#inds input:checked').length;$('#indcnt').textContent=n?`${n}つ選んでいます`:'';refreshPlan()};

@@ -29,6 +29,7 @@ import approval
 import channel_choice
 import message_adoption
 import license_check
+import bug_report
 import proposal_links
 import sales_records
 import send_rules
@@ -976,6 +977,12 @@ def support_report(symptom=""):
     return report_text("困りごと", "".join(parts) or "症状は画面で確かめます。")
 
 
+def bug_cfg():
+    """不具合の提出(bug_report.py)の設定。許可キー・導入ID・版は利用許可の照合と同じものが自動で付く(利用者は入力しない)"""
+    url = license_check._url().rsplit("/", 1)[0] + "/report.php"
+    return bug_report.Config(license_check.SERVICE_ID, license_check.PRODUCT_VERSION, url, proposal_links.read_key, license_check.install_id)
+
+
 def license_report(st):
     """利用許可の状態に、担当者へそのまま送れる文(report)を足す。鍵の値は入れない(状態・理由・版・受付番号だけ)"""
     st = dict(st)
@@ -1532,6 +1539,8 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {**UPDATE_CACHE["result"], "busy": bool(busy), "restart_needed": updater.build() != BUILD, "build": BUILD})
         if u.path == "/api/support_report":  # 困ったときに担当者へそのまま送れる文(版・受付番号・症状)。許可キーは入れない
             return self.send(200, {"report": support_report(str(q.get("symptom") or ""))})
+        if u.path == "/api/bug_report/info":  # 不具合フォームを開いたとき: 版と、許可キーの有無だけ(鍵の値は返さない)
+            return self.send(200, {"version": license_check.PRODUCT_VERSION, "key_set": bool(proposal_links.read_key())})
         if u.path == "/api/license":  # 利用許可の状態(通信はしない。手元の記録だけから答える)
             return self.send(200, license_report(license_check.status()))
         if u.path == "/api/job":
@@ -1653,6 +1662,15 @@ class H(BaseHTTPRequestHandler):
             if JOB["name"] == "確認":  # E-18
                 return self.send(409, {"error": "送る内容を出している間は変えられません。数秒で終わります"})
             return self.send(409, {"error": "いま送っている最中は、送信元・文面・送らない会社・書き出しを変えられません。送り終わってから変えます"})
+        if self.path in ("/api/bug_report", "/api/bug_report/delete"):  # 不具合の提出と、本人の削除依頼(台帳サーバーへ。許可キー・版は自動で付く)
+            try:
+                if self.path == "/api/bug_report":
+                    r = bug_report.submit(bug_cfg(), str(d.get("summary") or ""), str(d.get("detail") or ""), str(d.get("contact") or ""))
+                else:
+                    r = bug_report.delete(bug_cfg(), str(d.get("receipt") or ""))
+                return self.send(200 if r.get("ok") else 400, r)
+            except Exception:
+                return self.send(500, support_error("不具合の提出"))
         if self.path == "/api/license/recheck":  # 拒否の帯から、鍵を入れたあとに照合し直す(許可の判定は license_check のまま。鍵の値は返さない)
             try:
                 return self.send(200, license_report(license_check.check(VERSION)))

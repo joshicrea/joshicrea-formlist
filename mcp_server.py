@@ -517,6 +517,22 @@ def formlist_sender_set(fields: dict) -> dict:
 
 
 @mcp.tool()
+def formlist_bug_report(summary: str, detail: str, contact: str) -> dict:
+    """利用者の不具合を開発者へ届ける。許可キーと版は自動で付く(聞かない)。件名(60字まで)・内容(800字まで・何をしたらどうなったか)・連絡先メールを利用者に確かめ、
+    送る内容の全文を見せて、利用者が「送って」と言ってから呼ぶ。送ると受付番号つきのメールが連絡先へ届き、直って公開されたら完了のメールが届く。
+    連絡先は受付と完了の連絡にだけ使われ、対応が終わって90日で消える。返り値の message をそのまま伝え、receipt(受付番号)を控えるよう案内する。"""
+    code, d = api("POST", "/api/bug_report", {"summary": summary, "detail": detail, "contact": contact})
+    return d if code == 200 else {"error": d.get("error")}
+
+
+@mcp.tool()
+def formlist_bug_report_delete(receipt: str) -> dict:
+    """送った不具合の提出を、連絡先ごとその場で消す。利用者が受付番号(例 BR-20261107-AB12)を言って、消してほしいと頼んだときだけ呼ぶ。"""
+    code, d = api("POST", "/api/bug_report/delete", {"receipt": receipt})
+    return d if code == 200 else {"error": d.get("error")}
+
+
+@mcp.tool()
 def formlist_message_get(name: str = "default") -> dict:
     """送る文面を読む。name は default（標準）か業種名（業種の一覧は formlist_status ではなく、返り値の by_industry）。{企業名}{書き出し}{署名} は送るとき自動で置き換わる。
     by_industry は、業種ごとに「専用」(その業種専用の文面がある)か「標準」(専用が無く、標準の文面が使われる)。
