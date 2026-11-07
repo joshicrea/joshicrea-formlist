@@ -32,6 +32,7 @@ ITEMS = ("sender.json", "message_adoptions.json", "計測キー.txt")  # 設定�
 DIRS = ("文面",)  # 設定のフォルダ(中のパターンも含め、ファイル単位で写す)
 RECORD = "移行の記録.json"
 MARKER = ".移行済み.json"  # 移行を済ませたコピー(フォルダ)の一覧
+STALE_SECONDS = 2  # 本体のファイルが置き場より「この秒数を超えて新しい」ときだけ、移行後の保存とみなす(コピー時刻の丸め・同期の揺れを誤報しない)
 
 
 def _user_root(env=None):
@@ -101,8 +102,6 @@ def migrate(here, root, now=None):
         done = done if isinstance(done, list) else []
     except (OSError, ValueError):
         done = []
-    if str(here.resolve()) in done:
-        return res
     srcs = []
     for n in ITEMS:
         if (here / n).is_file():
@@ -114,6 +113,16 @@ def migrate(here, root, now=None):
                 rel = f.relative_to(here)
                 if f.is_file() and "_削除済み" not in rel.parts and ".." not in rel.parts:
                     srcs.append(rel)
+    if str(here.resolve()) in done:
+        # 移行済みでも、置き場が使えず本体のフォルダで動いた間の保存は、置き場より新しい。見せないと、直した文面が黙って古い置き場の内容に戻って見える
+        for rel in srcs:
+            s, d = here / rel, root / rel
+            try:
+                if d.is_file() and s.stat().st_mtime > d.stat().st_mtime + STALE_SECONDS and not _same(s, d):
+                    res["conflicts"].append(rel.as_posix())
+            except OSError:
+                pass
+        return res
     for rel in srcs:
         s, d = here / rel, root / rel
         try:
@@ -125,6 +134,19 @@ def migrate(here, root, now=None):
                 res["conflicts"].append(rel.as_posix())
         except OSError as e:
             res["errors"].append(f"{rel.as_posix()}: {type(e).__name__}")
+    # 第1段の控え(本体の 出力/設定の控え)を、置き場の控えへ写す。写さないと、版の履歴に第1段の控えが出ない(上書き前の文面を戻せない)
+    old_base = here / "出力" / "設定の控え"
+    if old_base.is_dir():
+        for v in sorted(p for p in old_base.iterdir() if p.is_dir() and not p.is_symlink()):
+            to = root / "出力" / "設定の控え" / v.name
+            if to.exists():
+                continue
+            try:
+                shutil.copytree(v, to, symlinks=False)
+                res["copied"].append(f"出力/設定の控え/{v.name}")
+            except (OSError, shutil.Error) as e:
+                shutil.rmtree(to, ignore_errors=True)  # 途中までの写しを残さない(残すと次の起動で「ある」とみなして、欠けた控えのままになる)
+                res["errors"].append(f"出力/設定の控え/{v.name}: {type(e).__name__}")
     if not res["errors"]:  # 1つでも失敗したら済みにしない(次の起動でやり直す)
         try:
             marker.write_text(json.dumps(done + [str(here.resolve())], ensure_ascii=False), encoding="utf-8")

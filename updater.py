@@ -107,6 +107,13 @@ def _can_verify_signature():
         return False
 
 
+def _key_differs(want):
+    try:
+        return sha((HERE / PUBKEY_FILE).read_bytes()) != want
+    except OSError:
+        return True
+
+
 def fetch_manifest():
     """公開の manifest.json。取れない・形が違うときは None(「最新」とは言わない)"""
     try:
@@ -120,9 +127,12 @@ def fetch_manifest():
         if any(not isinstance(k, str) or not isinstance(v, str) or not re.fullmatch(r"[0-9a-f]{64}", v) for k, v in files.items()):
             return None
         keep = {k: v for k, v in files.items() if name_ok(k)}
+        key_skipped = False
         if PUBKEY_FILE in keep and not _can_verify_signature():
+            if _key_differs(keep[PUBKEY_FILE]):
+                key_skipped = True  # 鍵が変わっているのに入れられない。画面に出す(無言にしない)
             keep.pop(PUBKEY_FILE)  # 暗号の部品が無い導入へ鍵を入れると、どの署名も合わず止まり続ける(更新では部品を入れられない)。鍵を入れず、今までの動きのまま
-        return {"version": str(m.get("version", ""))[:40], "files": keep}
+        return {"version": str(m.get("version", ""))[:40], "files": keep, "key_skipped": key_skipped}
     except Exception:
         return None
 
@@ -139,11 +149,68 @@ def changed_files(m):
     return out
 
 
-def skipped_version():
+SKIP_FILE = "更新_戻した版.txt"
+MAX_TRIES = 5  # 同じ版を、更新後に画面が立たず戻した回数の上限。超えたら、次の版が公開されるまで入れ直さず「失敗」を画面に出す
+RETRY_COOLDOWN_SEC = 600  # 戻した直後に同じ版を入れ直さない時間(戻した版が立ち上がる前に再挑戦して、無限に戻し続けるのを防ぐ。定期の確認は30分ごとなので、次の確認で再挑戦する)
+
+
+def skip_info():
+    """戻した版の記録 {"version","count","last"}。無ければ None。古い形式(版の文字だけ)は、1回戻した・ファイルの更新時刻を最後の時刻として読む"""
+    p = HERE / "出力" / SKIP_FILE
     try:
-        return (HERE / "出力" / "更新_戻した版.txt").read_text(encoding="utf-8").strip()
+        raw = p.read_text(encoding="utf-8").strip()
     except OSError:
-        return ""
+        return None
+    if not raw:
+        return None
+    try:
+        j = json.loads(raw)
+        if isinstance(j, dict) and j.get("version"):
+            return {"version": str(j["version"]), "count": int(j.get("count", 1)), "last": float(j.get("last", 0))}
+    except (ValueError, TypeError):
+        pass
+    try:
+        return {"version": raw.splitlines()[0], "count": 1, "last": p.stat().st_mtime}
+    except OSError:
+        return None
+
+
+def skipped_version():
+    i = skip_info()
+    return i["version"] if i else ""
+
+
+def skip_decision(remote_version):
+    """公開されている版が、前に戻した版と同じときの扱い: "none"(同じ版ではない) / "retry"(再挑戦してよい) / "wait"(戻した直後・少し待つ) / "failed"(上限回数戻した)"""
+    i = skip_info()
+    if not i or not remote_version or i["version"] != remote_version:
+        return "none"
+    if i["count"] >= MAX_TRIES:
+        return "failed"
+    return "retry" if time.time() - i["last"] >= RETRY_COOLDOWN_SEC else "wait"
+
+
+STATUS_FILE = "更新の状態.json"
+
+
+def write_status(state, message):
+    """直近の更新の確認・試みの結果を、出力/ に残す(画面が読む)。常駐の自動更新の失敗が、無言にならないように"""
+    try:
+        p = HERE / "出力" / STATUS_FILE
+        p.parent.mkdir(exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"state": state, "message": message, "at": time.strftime("%Y-%m-%d %H:%M:%S")}, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, p)
+    except OSError:
+        pass
+
+
+def read_status():
+    try:
+        j = json.loads((HERE / "出力" / STATUS_FILE).read_text(encoding="utf-8"))
+        return j if isinstance(j, dict) else None
+    except (OSError, ValueError):
+        return None
 
 
 def check():
@@ -153,11 +220,21 @@ def check():
     if m is None:
         return {"state": "未確認", "files": [], "message": "公開されている最新の版と照合できませんでした(通信できない・社内ネットワークで止められた等)。最新かどうかは分かりません。ツールはこのまま使えます"}
     ch = changed_files(m)
-    if ch and m["version"] and m["version"] == skipped_version():
-        return {"state": "見送り", "files": ch, "remote_version": m["version"], "message": "公開されている新しい版は、前に更新したあと画面が立ち上がらなかったため、前の版へ戻しました。次の版が公開されるまで、更新しません"}
-    if ch:
-        return {"state": "古い", "files": ch, "remote_version": m["version"], "message": f"新しい版があります（更新するファイル {len(ch)}個）"}
-    return {"state": "最新", "files": [], "remote_version": m["version"], "message": "公開されている最新の版と同じです"}
+    out = {"files": ch, "remote_version": m["version"]}
+    if m.get("key_skipped"):
+        out["key_skipped"] = True
+        out["key_message"] = "利用許可の公開鍵が新しくなっていますが、このパソコンには署名を確かめる部品(cryptography)が入っていないため、鍵を更新していません。利用許可の確認が通らないときは、担当者に連絡してください"
+    dec = skip_decision(m["version"]) if ch else "none"
+    if dec == "failed":
+        i = skip_info()
+        out.update(state="失敗", message=f"公開されている新しい版は、{i['count']}回とも更新のあと画面が立ち上がらず、前の版へ戻しました。前の版のまま使えます。次の版が公開されるまで、更新しません。担当者に連絡してください")
+    elif dec == "wait":
+        out.update(state="見送り", message="公開されている新しい版は、前に更新したあと画面が立ち上がらなかったため、前の版へ戻しました。しばらくしてから、もう一度更新します")
+    elif ch:
+        out.update(state="古い", message=f"新しい版があります（更新するファイル {len(ch)}個）")
+    else:
+        out.update(state="最新", message="公開されている最新の版と同じです")
+    return out
 
 
 def _stage(m, names, stage):
@@ -238,7 +315,7 @@ def _apply(log):
     if m is None:
         raise ValueError("公開されている最新の版の一覧(manifest.json)を取得できませんでした。通信を確かめてください")
     names = changed_files(m)
-    if not names or (m["version"] and m["version"] == skipped_version()):
+    if not names or skip_decision(m["version"]) in ("wait", "failed"):  # 再挑戦してよい(retry)ときは入れ替える
         return {"updated": [], "backup": "", "version": m["version"]}
     ts = time.strftime("%Y%m%d_%H%M%S")
     stage = HERE / "出力" / ".更新中" / ts
@@ -296,12 +373,15 @@ def restore(backup, names=None):
 
 
 # 起動し直しを受け持つ小さなプログラム。画面のサーバーが終わったあとに、新しい版で起動し直す。
-# 20秒待っても画面が応答しなければ、前の版に戻して、もう一度起動し直す(更新で画面が立たなくなるのを防ぐ)
-_RELAUNCH = r'''
+# 新しい版が wait 秒たっても応答しない、または途中で終了したときは、前の版に戻して、もう一度起動し直す(更新で画面が立たなくなるのを防ぐ)。
+# 戻した版は、回数と時刻を出力/更新_戻した版.txt に残す(次の確認で再挑戦する。上限回数で「失敗」として画面に出す)。立ち上がったら、その記録は消す
+_RELAUNCH = r"""
 import os, sys, time, json, shutil, subprocess, urllib.request
 here, port, backup, exe = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 version = sys.argv[5] if len(sys.argv) > 5 else ""
+wait = float(sys.argv[6]) if len(sys.argv) > 6 else 120.0
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+skip = os.path.join(here, "出力", "更新_戻した版.txt")
 def up():
     try:
         with opener.open("http://127.0.0.1:%s/api/whoami" % port, timeout=2) as r:
@@ -318,13 +398,23 @@ for _ in range(60):
         break
     time.sleep(0.5)
 proc = start()
-for _ in range(40):
+deadline = time.time() + wait
+while time.time() < deadline:
     time.sleep(0.5)
     if up():
+        if version:
+            try:
+                j = json.load(open(skip, encoding="utf-8"))
+                if isinstance(j, dict) and j.get("version") == version:
+                    os.remove(skip)
+            except Exception:
+                pass
         sys.exit(0)
+    if proc.poll() is not None:
+        break
 if not (backup and os.path.isdir(backup)):
     sys.exit(1)
-try:  # 立ち上がりが遅いだけの画面が、戻したあとに古い中身の上で動き出さないよう、先に止める
+try:
     proc.kill()
     proc.wait(timeout=10)
 except Exception:
@@ -341,13 +431,30 @@ try:
             os.remove(p)
 except OSError:
     pass
+count = 1
+try:
+    j = json.load(open(skip, encoding="utf-8"))
+    if isinstance(j, dict) and j.get("version") == version:
+        count = int(j.get("count", 0)) + 1
+except Exception:
+    pass
 with open(os.path.join(here, "出力", "更新の記録.txt"), "a", encoding="utf-8") as f:
-    f.write(time.strftime("%Y-%m-%d %H:%M:%S") + " 更新後に画面が立たなかったため、前の版に戻しました\n")
-if version:  # この版は、次の版が出るまで入れ直さない
-    with open(os.path.join(here, "出力", "更新_戻した版.txt"), "w", encoding="utf-8") as f:
-        f.write(version)
+    f.write(time.strftime("%Y-%m-%d %H:%M:%S") + " 更新後に画面が立たなかったため、前の版に戻しました(%s秒待った・この版で%s回目)\n" % (int(wait), count))
+if version:
+    with open(skip, "w", encoding="utf-8") as f:
+        json.dump({"version": version, "count": count, "last": time.time()}, f)
 start()
-'''
+"""
+
+
+RELAUNCH_WAIT_S = 180  # 新しい版が応答するまで待つ秒数。実測して決めた(報告参照)。起動の途中で終了したときは、待たずに戻す
+
+
+def relaunch_wait():
+    try:
+        return float(os.environ.get("FORMLIST_RELAUNCH_WAIT") or RELAUNCH_WAIT_S)
+    except ValueError:
+        return float(RELAUNCH_WAIT_S)
 
 
 def relaunch(port, backup, exe=None, version=""):
@@ -356,6 +463,6 @@ def relaunch(port, backup, exe=None, version=""):
     if exe.lower().endswith("python.exe"):
         w = exe[:-len("python.exe")] + "pythonw.exe"
         exe = w if os.path.exists(w) else exe
-    subprocess.Popen([exe, "-X", "utf8", "-c", _RELAUNCH, str(HERE), str(port), str(backup), exe, str(version)],
+    subprocess.Popen([exe, "-X", "utf8", "-c", _RELAUNCH, str(HERE), str(port), str(backup), exe, str(version), str(relaunch_wait())],
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW,
                      start_new_session=(os.name != "nt"))  # Mac/Linux: 親(画面のサーバー)が終わっても、この小さなプログラムは生きて起動し直す

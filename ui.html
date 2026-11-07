@@ -737,8 +737,14 @@ document.title='AIまるなげ営業'+(location.port&&location.port!='8780'?'（
 async function checkUpdate(){
  try{
   const r=await J('/api/update');
-  if(!r||r.error||(r.state!=='古い'&&!r.restart_needed))return;
-  const box=$('#upd');box.hidden=false;
+  if(!r||r.error)return;
+  const box=$('#upd');
+  const notes=[];
+  if(r.state==='未確認'||r.state==='見送り'||r.state==='失敗')notes.push(r.message||'');
+  if(r.key_message)notes.push(r.key_message);
+  if(r.state==='古い'&&r.auto&&r.auto.state==='失敗'&&r.auto.message)notes.push(r.auto.message+'（'+(r.auto.at||'')+'）');
+  if(r.state!=='古い'&&!r.restart_needed){if(notes.length){box.hidden=false;box.textContent=notes.join(' / ')}return}
+  box.hidden=false;
   if(r.busy){updWait=true;box.textContent='新しい版があります。探す・送る処理が終わると、自動で更新されます';return}
   box.textContent='新しい版に更新しています（数秒かかります）。終わると、この画面が自動で読み込み直されます';
   const old=r.build;const u=await post('/api/update',{});

@@ -1564,7 +1564,7 @@ class H(BaseHTTPRequestHandler):
             if not UPDATE_CACHE or now - UPDATE_CACHE["at"] > 300 or q.get("force"):
                 UPDATE_CACHE.update(at=now, result=updater.check())
             busy = JOB["running"] or SJOB["running"] or any((ports.job(p) or {}).get("running") for p in ports.POOL if p != PORT)
-            return self.send(200, {**UPDATE_CACHE["result"], "busy": bool(busy), "restart_needed": updater.build() != BUILD, "build": BUILD})
+            return self.send(200, {**UPDATE_CACHE["result"], "busy": bool(busy), "restart_needed": updater.build() != BUILD, "build": BUILD, "auto": updater.read_status()})
         if u.path == "/api/support_report":  # 困ったときに担当者へそのまま送れる文(版・受付番号・症状)。許可キーは入れない
             return self.send(200, {"report": support_report(str(q.get("symptom") or ""))})
         if u.path == "/api/bug_report/info":  # 不具合フォームを開いたとき: 版と、許可キーの有無だけ(鍵の値は返さない)
@@ -1796,8 +1796,10 @@ class H(BaseHTTPRequestHandler):
                 try:
                     r = updater.apply()
                 except ValueError as e:
+                    updater.write_status("失敗", f"更新できませんでした（前の版のまま）: {e}")
                     return self.send(200, {"updated": [], "error": str(e)})
                 except Exception as e:
+                    updater.write_status("失敗", f"更新に失敗しました（{type(e).__name__}: {e}）。前の版のまま")
                     return self.send(500, {"updated": [], "error": f"更新に失敗しました（{type(e).__name__}: {e}）。前の版のまま使えます"})
                 UPDATE_CACHE.clear()
                 if not r["updated"] and updater.build() == BUILD:
@@ -2365,6 +2367,8 @@ def auto_update_once(why):
         return False
     r = updater.check()
     UPDATE_CACHE.update(at=time.time(), result=r)
+    if r.get("state") in ("未確認", "見送り", "失敗", "最新"):
+        updater.write_status(r["state"], r.get("message", ""))  # 常駐の確認の結果を残す(未確認・見送りが無言にならない)
     if r.get("state") != "古い":
         return False
     if not UPDATE_BUSY.acquire(blocking=False):
@@ -2374,7 +2378,8 @@ def auto_update_once(why):
             return False
         try:
             res = updater.apply()
-        except Exception:
+        except Exception as e:
+            updater.write_status("失敗", f"自動更新に失敗しました（{type(e).__name__}: {e}）。前の版のまま動いています")
             return False
         UPDATE_CACHE.clear()
         if not res["updated"] and updater.build() == BUILD:
