@@ -962,6 +962,31 @@ def coverage_text():
     return "\n".join("%s ← %s(%s)" % row for row in COVERAGE)
 
 
+def goto_dom(page, url, goto_ms=30000, form_ms=8000):
+    """ページを開く。応答を受けた時点(commit)で進み、入力欄が現れるまでを上限つきで待つ。goto 既定の「load 完了待ち」にしない:
+    終わらない画像・外部スクリプトを抱えるページ(lotus-marriage.com/contact/ など)で、load を待ち続けて項目に進めなかった(Q888)。
+    domcontentloaded でも足りない(末尾の同期スクリプトが応答しないと、そのイベントも来ない)ので、欄の出現を待つ。
+    接続できない・応答が来ないときは従来どおり例外のまま出す(握りつぶさない)。欄が上限までに出なければ、そのまま返し、後段の判定(フォームが見つからない)に任せる"""
+    page.goto(url, timeout=goto_ms, wait_until="commit")
+    try:
+        page.wait_for_selector("input, textarea, select", state="attached", timeout=form_ms)
+    except Exception:
+        pass
+
+
+def settle(page, settle_ms=10000):
+    """読み込みが落ち着くのを、上限つきで待つ。上限までに落ち着かなくても失敗にせず、項目の入力へ進む"""
+    try:
+        page.wait_for_load_state("networkidle", timeout=settle_ms)
+    except Exception:
+        pass
+
+
+def open_page(page, url, goto_ms=30000, settle_ms=10000, form_ms=8000):
+    goto_dom(page, url, goto_ms, form_ms)
+    settle(page, settle_ms)
+
+
 def prefill_manual(url, sender, message):
     """手動経路: ブラウザを開いて入力できる項目を埋めるところまで。送信ボタンは押さない。画面を閉じるまで待つ。
     戻り値: (入力メモ, 未入力の一覧)。実行環境: Windows / Mac / Linux(画面が出る環境)"""
@@ -970,7 +995,7 @@ def prefill_manual(url, sender, message):
         br = p.chromium.launch(headless=False)
         try:
             page = br.new_context().new_page()
-            page.goto(url, timeout=30000)
+            open_page(page, url)
             ok, memo = fill_form(page, sender, message, skipped)
             page.wait_for_event("close", timeout=0)  # 人が内容を確かめて、自分の手で送る。ここでは押さない
         finally:
@@ -1247,9 +1272,9 @@ def send_one(page, name, url, sender, message, do_send, hp=""):
     ok_url, why_url = netguard.check_url(url)
     if not ok_url:
         return "要手動", "宛先が公開サイトではないため開かない: " + why_url
-    page.goto(url, timeout=30000)
+    goto_dom(page, url)
     message_adoption.validate_destination(name, url, page.url)
-    page.wait_for_load_state("networkidle", timeout=20000)
+    settle(page, 20000)  # 落ち着かないページでも上限で進む(以前は時間切れの例外で、その会社が止まった)
     refuse = site_checker.refuse_in(page.inner_text("body"))  # フォーム自体の「営業お断り」。入力より前に見る
     if refuse:
         return "お断り表示(送らない)", refuse.group(0)[:40]
