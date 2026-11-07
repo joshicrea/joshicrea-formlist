@@ -30,11 +30,12 @@ import urllib.request
 from pathlib import Path
 
 import filelock
+import settings_dir
 
 HERE = Path(__file__).resolve().parent
 LINKS = HERE / "出力" / "資料リンク.csv"
 SEND_LOG = HERE / "出力" / "送信ログ.csv"
-KEY_FILE = HERE / "計測キー.txt"  # 保存先。更新(install.ps1)でも消さない。設定の文の「計測キー」から入る
+KEY_FILE = settings_dir.root() / "計測キー.txt"  # 保存先(設定の置き場。更新・入れ直し・撤去でも残る)。設定の文の「計測キー」から入る
 LEGACY_KEY_FILE = Path.home() / ".claude" / "secretary" / "formlist_計測キー.txt"  # 運用者の古い置き場(読むだけ)
 KEY_OK = re.compile(r"[0-9A-Za-z_-]{32,128}")
 COLS = ["企業名", "識別子", "作成日時"]

@@ -16,6 +16,7 @@
 """
 import difflib
 import json
+import re
 import shutil
 import time
 from pathlib import Path
@@ -100,3 +101,67 @@ def prune(base, keep=KEEP):
         return
     for p in dirs[:-keep] if len(dirs) > keep else []:
         shutil.rmtree(p, ignore_errors=True)
+
+
+# ---- 版の履歴(読み取り専用。Q899 第2段) ----
+_VER_RE = re.compile(r"^(?:手動_)?(\d{8})_(\d{6})(?:_\d+)?$")
+
+
+def _versions_dir(root):
+    return Path(root) / "出力" / BACKUP_NAME
+
+
+def _list_files(d):
+    out = []
+    try:
+        for p in sorted(d.rglob("*")):
+            if p.is_file() and not p.is_symlink():
+                out.append(p.relative_to(d).as_posix())
+    except OSError:
+        pass
+    return out
+
+
+def history(root, limit=50):
+    """控えの一覧(新しい順)。{id, at, files, manual}。中身は返さない。フォルダが無い・読めないときは空リスト。"""
+    base = _versions_dir(root)
+    try:
+        dirs = [p for p in base.iterdir() if p.is_dir() and not p.is_symlink()]
+    except OSError:
+        return []
+    rows = []
+    for p in dirs:
+        m = _VER_RE.match(p.name)
+        if m:
+            d, t = m.group(1), m.group(2)
+            at = f"{d[:4]}-{d[4:6]}-{d[6:]} {t[:2]}:{t[2:4]}:{t[4:]}"
+        else:
+            try:
+                at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(p.stat().st_mtime))
+            except OSError:
+                at = ""
+        rows.append({"id": p.name, "at": at, "files": _list_files(p), "manual": p.name.startswith("手動_")})
+    rows.sort(key=lambda r: (r["at"], r["id"]), reverse=True)
+    return rows[:max(0, int(limit))]
+
+
+def history_item(root, version_id, rel):
+    """その版の1ファイルの中身(utf-8-sig)。version_id は history() が返す名前だけ、rel は版フォルダの中に収まる相対パスだけ。外れたら None。"""
+    try:
+        if not isinstance(version_id, str) or not isinstance(rel, str) or not version_id or not rel:
+            return None
+        if version_id not in {r["id"] for r in history(root, limit=10 ** 6)}:
+            return None
+        if "\\" in rel or rel.startswith("/") or re.match(r"^[A-Za-z]:", rel) or ".." in rel.split("/") or "\x00" in rel:
+            return None
+        vdir = (_versions_dir(root) / version_id).resolve()
+        target = (vdir / rel).resolve()
+        if vdir not in target.parents or not target.is_file():
+            return None
+        try:
+            target.relative_to(Path(root).resolve())  # シンボリックリンクで root の外を読ませない
+        except ValueError:
+            return None
+        return target.read_text(encoding="utf-8-sig")
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None

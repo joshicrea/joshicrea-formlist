@@ -28,6 +28,9 @@ $Repo = "joshicrea/joshicrea-formlist"
 $Root = [IO.Path]::Combine($env:USERPROFILE, ".claude", "formlist")
 if ($TargetRoot) { $Root = $TargetRoot }
 $AppDir = [IO.Path]::Combine($Root, "app")
+# 本人の設定(送信元・文面・採用記録・計測キー)の置き場。ツール本体(app)の外に置くので、入れ直し・更新・撤去・コピーが2つあっても1つのまま(Q899 第2段)。
+# app/settings_dir.py の置き場と同じ場所。環境変数 FORMLIST_SETTINGS_DIR があればそちら(試験・運用者の指定)
+$SettingsDir = if ($env:FORMLIST_SETTINGS_DIR) { $env:FORMLIST_SETTINGS_DIR } else { [IO.Path]::Combine($(if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { [IO.Path]::Combine($env:USERPROFILE, "AppData", "Local") }), "FormListTool", "設定") }
 # 更新しても消さないもの（本人の設定と、これまでの結果）
 $KeepNames = @("sender.json", "message_adoptions.json", "出力", "文面", "計測キー.txt")
 $Ports = @(8780, 8781, 8782)
@@ -328,6 +331,7 @@ if ($Uninstall) {
         else { Write-Host "本体を消しました。設定と出力は、ここに残してあります: $keep" }
     }
     Write-Host "送信の記録（送らない会社・送信済みの会社）は、残してあります: $env:LOCALAPPDATA\FormListTool"
+    Write-Host "送信元・文面・計測キーは、消していません。入れ直すと、そのまま使われます: $SettingsDir"
     if ($DryRunRegister) { Write-Host "（試走のため、Claude の登録は外していません）" }
     if ($bad) { Write-Host "撤去の途中で、うまくいかなかったところがあります。上の表示を見てください。$Ask"; exit 1 }
     Write-Host "撤去が終わりました。Claude を完全に終了して開き直すと、AIまるなげ営業が消えています。"
@@ -394,7 +398,22 @@ try {
         } else { Copy-Item -LiteralPath $it.FullName -Destination $dest -Force }
     }
     Set-Content -LiteralPath $old -Value $names -Encoding UTF8
-    $senderPath = [IO.Path]::Combine($AppDir, "sender.json")
+    New-Item -ItemType Directory -Force -Path $SettingsDir | Out-Null
+    # これまで app の中に置かれていた本人の設定を、設定の置き場へ写す(置き場に無いものだけ。元は消さない)。ここで写さないと、下で見本を置いたあとに、本人の設定が「置き場と違う中身」として衝突扱いになる
+    foreach ($n in @("sender.json", "message_adoptions.json", "計測キー.txt")) {
+        $s = [IO.Path]::Combine($AppDir, $n); $d = [IO.Path]::Combine($SettingsDir, $n)
+        if ((Test-Path -LiteralPath $s) -and -not (Test-Path -LiteralPath $d)) { Copy-Item -LiteralPath $s -Destination $d }
+    }
+    $msgOld = [IO.Path]::Combine($AppDir, "文面")
+    if (Test-Path -LiteralPath $msgOld) {
+        foreach ($f in @(Get-ChildItem -LiteralPath $msgOld -Recurse -File -ErrorAction SilentlyContinue)) {
+            $rel = $f.FullName.Substring($msgOld.Length).TrimStart("\", "/")
+            if ($rel -like "_削除済み*") { continue }
+            $d = [IO.Path]::Combine($SettingsDir, "文面", $rel)
+            if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($d)) | Out-Null; Copy-Item -LiteralPath $f.FullName -Destination $d }
+        }
+    }
+    $senderPath = [IO.Path]::Combine($SettingsDir, "sender.json")
     $sample = [IO.Path]::Combine($AppDir, "sender.sample.json")
     if (-not (Test-Path $senderPath) -and (Test-Path $sample)) { Copy-Item $sample $senderPath }  # 最初は、送信元のひな形から始める
     New-Item -ItemType Directory -Force -Path ([IO.Path]::Combine($AppDir, "出力")) | Out-Null
@@ -436,7 +455,7 @@ try {
         $added = 0
         $skipped = @()
         foreach ($it in @(Get-ChildItem -LiteralPath $proot.FullName -Force)) {
-            $dest = [IO.Path]::Combine($AppDir, $it.Name)
+            $dest = [IO.Path]::Combine($(if ($it.Name -eq "出力") { $AppDir } else { $SettingsDir }), $it.Name)  # 出力/NGリスト.txt はツール本体側。送信元・文面・採用記録・計測キーは設定の置き場へ
             if ($it.Name -eq "sender.json" -and -not $it.PSIsContainer) {
                 if (Test-SampleSender $dest) { Copy-Item -LiteralPath $it.FullName -Destination $dest -Force; $added++ }
             } elseif ($it.Name -eq "計測キー.txt" -and -not $it.PSIsContainer) {

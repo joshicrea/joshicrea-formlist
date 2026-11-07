@@ -3,7 +3,9 @@
 import re
 from pathlib import Path
 
-PATTERN_DIR = Path(__file__).resolve().parent / "文面" / "パターン"  # 利用者ごとの設定(宛先の会社名・署名が入るため、公開物には含めない)
+import settings_dir
+
+PATTERN_DIR = settings_dir.root() / "文面" / "パターン"  # 利用者ごとの設定(宛先の会社名・署名が入るため、公開物には含めない)。置き場は settings_dir が決める
 
 # 17業種 → パターン番号。明らかに当てはまるものだけ。飲食・医療・レジャー・生活サービス・農業食品は割り当てなし(標準+人が事前確認)
 INDUSTRY_TO_PATTERN = {

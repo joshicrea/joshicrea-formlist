@@ -507,6 +507,19 @@ def formlist_sender_get() -> dict:
 
 
 @mcp.tool()
+def formlist_settings_history(version: str = "", file: str = "") -> dict:
+    """保存のたびに、変わる前の送信元・文面が控えとして残る。ここで一覧と中身を読める(読み取りだけ。何も変えない)。
+    引数なし: 控えの一覧(新しい順。id・日時・含まれるファイル・手動か)。version と file の両方: その版のその1ファイルの中身。
+    戻すのは、利用者が頼んだときだけ。読んだ中身を formlist_message_set / formlist_sender_set に overwrite=True で渡す(承認が要る)。"""
+    from urllib.parse import quote
+    if version and file:
+        code, d = api("GET", "/api/settings/history?version=" + quote(version, safe="") + "&file=" + quote(file, safe=""))
+    else:
+        code, d = api("GET", "/api/settings/history")
+    return d if code == 200 else {"error": d.get("error") if isinstance(d, dict) else str(d)}
+
+
+@mcp.tool()
 def formlist_sender_set(fields: dict, overwrite: bool = False) -> dict:
     """送信元の項目を更新する（渡した項目だけ変わる）。既定(overwrite=False)では、見本のまま・空の項目にだけ入れ、利用者が自分で直した項目は上書きしない。
     上書きしなかった項目は返り値の skipped に入る(項目・いまの値・届いた値・差分)。skipped があれば、差分を利用者に見せて、「上書きして」と言われた項目だけ overwrite=True で渡し直す(勝手に True にしない)。

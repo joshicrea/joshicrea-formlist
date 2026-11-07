@@ -4,6 +4,8 @@ import hashlib
 import json
 import re
 
+import settings_dir
+
 HERE = Path(__file__).resolve().parent
 
 class AdoptionError(ValueError):
@@ -13,7 +15,7 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
 
 def records():
-    path = HERE / 'message_adoptions.json'
+    path = settings_dir.root() / 'message_adoptions.json'
     if not path.exists():  # 公開版には無い(採用記録は開発側だけが持つ)。無い=採用済みの会社は0社
         return {'cases': []}
     return json.loads(path.read_text(encoding='utf-8'))
@@ -49,7 +51,7 @@ def resolve_row(row, message_path, sender, pick_message):
     filename = case['template_name']
     if Path(filename).name != filename:
         raise AdoptionError('承認テンプレートのパスが不正です')
-    template = (HERE / '文面' / filename).read_text(encoding='utf-8-sig')
+    template = (settings_dir.root() / '文面' / filename).read_text(encoding='utf-8-sig')
     approved_row = (case['display_name'], url, industry, case['opener'], hp)
     return approved_row, template, effective_sender(name, url, sender)
 

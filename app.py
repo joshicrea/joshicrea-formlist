@@ -35,7 +35,9 @@ import sales_records
 import send_rules
 import osm_source
 import philosophy
+import copy_guard
 import ports
+import settings_dir
 import settings_guard
 import state
 import updater
@@ -43,8 +45,9 @@ from ng_state_store import NgStateStore
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "出力"
-MSG = HERE / "文面"
-SENDER = HERE / "sender.json"
+SETTINGS = settings_dir.setup(HERE)  # 設定(送信元・文面・採用記録・計測キー)の置き場を決め、初回だけ本体のフォルダから写す(Q899 第2段)。コピーが何個あっても設定は1つ
+MSG = settings_dir.root() / "文面"
+SENDER = settings_dir.root() / "sender.json"
 LOG = OUT / "送信ログ.csv"
 IS_DEV = (HERE / "開発版_自動更新しない.txt").exists()  # 開発用の作業フォルダの目印(公開物には含めない)。ある場所だけ「開発用」として動く
 DEV_PORT = 8785  # 開発用の既定の番号。お客様版の8780〜8782(更新の確認・同時検索が使う番号)とぶつけない
@@ -763,6 +766,22 @@ def digest(p, supp, mx, store=None):
     LAST_PLAN.clear()
     LAST_PLAN.update(pl)
     return pl["digest"]
+
+
+_COPY = {"at": 0.0, "v": None}
+COPY_TTL = 30  # 秒。画面は /api/meta を頻繁に読むが、他のコピーの有無を確かめる(最大3ポート×0.5秒)のは30秒に1回で足りる
+
+
+def copy_info():
+    """二重コピー・設定の置き場の状態(画面の帯が読む)。結果は30秒使い回す。読み取りだけで、失敗しても画面を止めない。"""
+    now = time.time()
+    if _COPY["v"] is None or now - _COPY["at"] > COPY_TTL:
+        try:
+            _COPY["v"] = copy_guard.status(HERE, SETTINGS, ports.POOL)
+        except Exception:
+            _COPY["v"] = {"here": str(HERE), "settings_dir": str(settings_dir.root()), "warnings": []}
+        _COPY["at"] = now
+    return _COPY["v"]
 
 
 def read_sender():
@@ -1518,7 +1537,15 @@ class H(BaseHTTPRequestHandler):
                                    "message_parts": {k: split_message(v) for k, v in msgs.items()}, "message_info": info,
                                    "send_state": st["send_state"], "problems": st["problems"], "counts": st["counts"], "changed": st["changed"],
                                    "send_file": st["file"], "awake": st.get("awake", ""), "stopping": st.get("stopping", False), "first_time": first, "last_max": last_max, "max_kind": max_kind, "limits": limits(),
-                                   "message_summary": {"default": 1, "industries": [n for n, v in info["uses"].items() if v == "業種ごと"]}})
+                                   "message_summary": {"default": 1, "industries": [n for n, v in info["uses"].items() if v == "業種ごと"]}, "copy": copy_info()})
+        if u.path == "/api/settings/history":
+            # 保存のたびに残る、変わる前の送信元・文面の控え。引数なし=一覧(中身は返さない)。version と file=その1ファイルの中身(計測キーは sender.json に入らない設計)
+            if q.get("version") and q.get("file"):
+                text = settings_guard.history_item(SENDER.parent, q["version"], q["file"])
+                if text is None:
+                    return self.send(404, {"error": "その版・そのファイルはありません"})
+                return self.send(200, {"version": q["version"], "file": q["file"], "text": text})
+            return self.send(200, {"versions": settings_guard.history(SENDER.parent)})
         if u.path == "/api/handoff":
             # 別枠の画面が開いた直後に、元の画面から渡された検索条件を1回だけ受け取る
             d = handoff_take(q.get("id"))

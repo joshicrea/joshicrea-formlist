@@ -201,6 +201,7 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
    <p class="hint" id="mstate"></p><p class="ferr" id="mprob" hidden></p>
    <div id="msubjRow" hidden><label for="msubj">この業種の件名（本文と同じ画面で直せます）</label><input type="text" id="msubj" autocomplete="off"><p class="hint">空にすると、初期の件名に戻ります。相手の会社名は {企業名} の位置に自動で入ります。</p></div>
    <p class="hint" id="mwhere"></p>
+   <div id="mcopy"></div>
    <div class="autobox"><p class="ah">自動で入る部分</p>
     <div class="arow" id="greetRow"><span class="al">宛名</span><span id="greetView"></span> <button class="lnk" id="greetToggle" type="button"></button></div>
     <div class="arow" id="openRow"><span class="al">書き出し</span><span id="openView"></span></div><p class="hint" id="aiOpenHint" style="margin:4px 0 0">書き出しは、Claude に頼むと書き直せます。書き直した書き出しは、送る内容の一覧で読んで直せます。</p></div>
@@ -557,7 +558,8 @@ async function importSettings(file){S.err='';let b;try{b=JSON.parse(await file.t
  $('#importKey').value='';await refreshMeta(true);renderSenderForm();renderMsgOptions();showMsg();S.flash='設定ファイルを読み込みました（送信元と文面'+n+'本）。送る前に、内容をご確認ください。';renderSend()}
 setInterval(async()=>{const a=document.activeElement;if(document.hidden||(a&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)))return;const before=(META.message_info||{}).msg_mtime;await refreshMeta(true);const mi=META.message_info||{};if(mi.msg_mtime!==before&&S.editMsg){renderMsgOptions();showMsg()}else showWhere()},8000);
 $('#importFile').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f)importSettings(f)};
-function showWhere(){const mi=META.message_info||{};const e=$('#mwhere');if(e)e.textContent=mi.msg_dir?('文面の保存先: '+mi.msg_dir+'（更新 '+(mi.msg_mtime||'まだありません')+'）'):''}
+function showWhere(){const mi=META.message_info||{};const e=$('#mwhere');if(e)e.textContent=mi.msg_dir?('文面の保存先: '+mi.msg_dir+'（更新 '+(mi.msg_mtime||'まだありません')+'）'):'';showCopy()}
+function showCopy(){const c=META.copy;const e=$('#mcopy');if(!e)return;if(!c){e.textContent='';return}e.textContent='';const p=document.createElement('p');p.className='hint';p.textContent='動いているフォルダ: '+(c.here||'')+'／設定の保存先: '+(c.settings_dir||'');e.appendChild(p);(c.warnings||[]).forEach(w=>{const d=document.createElement('p');d.className='warn';d.textContent=w;e.appendChild(d)})}
 function syncExpand(){const e=$('#expandOn');if(e)e.checked=((META.message_info||{}).expand_on)!==false}
 $('#expandOn').onchange=async()=>{const r=await post('/api/message/expand',{on:$('#expandOn').checked});if(r.error){S.err=errHtml(r);renderSend();return}await refreshMeta(true);syncExpand();renderMsgOptions();showMsg();renderSend()};
 $('#expandMake').onclick=async()=>{if(!confirm('基本の文面を写して、まだ専用の文面が無い業種すべてに専用の文面を作ります。作ったあと、業種ごとに直せます。すでにある専用の文面は上書きしません。よろしいですか。'))return;const r=await post('/api/message/expand',{make:true,on:true});if(r.error){S.err=errHtml(r);renderSend();return}await refreshMeta(true);syncExpand();renderMsgOptions();showMsg();S.flash=r.made.length+'業種に専用の文面を作りました。';renderSend()};

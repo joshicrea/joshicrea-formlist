@@ -307,7 +307,11 @@ chmod +x "$APP"/*.command "$APP"/install.sh 2>/dev/null   # 配布の経路で�
 [ -f "$APP/sender.json" ] || { [ -f "$APP/sender.sample.json" ] && cp "$APP/sender.sample.json" "$APP/sender.json"; }   # 最初は、送信元のひな形から始める
 mkdir -p "$APP/出力"
 PROFILE_NOTE=""
-if [ ! -f "$APP/sender.json" ] || { [ -f "$APP/sender.sample.json" ] && cmp -s "$APP/sender.json" "$APP/sender.sample.json"; }; then
+# 本人の設定は、初回の起動で「設定の置き場」(app/settings_dir.py と同じ場所)へ移る。移ったあとは、そちらの送信元が本物なので、見本かどうかはそちらを見る
+SET_DIR="${FORMLIST_SETTINGS_DIR:-$HOME/Library/Application Support/FormListTool/設定}"
+SENDER_NOW="$APP/sender.json"
+[ -f "$SET_DIR/sender.json" ] && SENDER_NOW="$SET_DIR/sender.json"
+if [ ! -f "$SENDER_NOW" ] || { [ -f "$APP/sender.sample.json" ] && cmp -s "$SENDER_NOW" "$APP/sender.sample.json"; }; then
   PROFILE_NOTE="送信元はまだ見本のままです。Claude Code に、担当者から届いた「設定の文」を貼って送ると、送信元と文面が入ります（導入と使い方の「2 最初の1回だけ」）。"
 fi
 echo "配置しました: $APP"
