@@ -22,7 +22,7 @@ import proposal_links
 import state
 
 SERVICE_ID = "formlist"
-PRODUCT_VERSION = "1.0.1"  # 製品全体の版(ドット区切りの数字)。台帳の min_version と比べる。手元は 1.0.0 のまま。公開のたびに publish_formlist.py が、公開物だけ上げる(公開中の版の末尾に+1。ビルドの印は build として別に送る)
+PRODUCT_VERSION = "1.0.2"  # 製品全体の版(ドット区切りの数字)。台帳の min_version と比べる。手元は 1.0.0 のまま。公開のたびに publish_formlist.py が、公開物だけ上げる(公開中の版の末尾に+1。ビルドの印は build として別に送る)
 PUBKEY_NAME = "license_sign_pub.pem"  # 配布版に同梱する公開鍵(台帳サーバーの lic_private/sign_pub.pem と同じもの)。無い間は署名を検証しない
 CLOCK_SKEW_SECONDS = 86400  # パソコンの時計とサーバー時刻のずれの許容(これを超えて進んだ・戻った時計は、署名つきの成功で直るまで止める)
 RETRY_WAITS = (2, 4, 8)  # 初回1回のあとの再試行(最大3回)の待機秒。ゆらぎをつける

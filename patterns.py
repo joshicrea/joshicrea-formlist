@@ -1,4 +1,4 @@
-"""業種別メール文面10パターン(利用者が用意する・文面/パターン/)と、17業種からの割り当て。実行環境: Windows / Mac / Linux
+"""業種別メール文面13パターン(利用者が用意する・文面/パターン/)と、17業種からの割り当て。実行環境: Windows / Mac / Linux
 割り当てが無い業種は None を返し、呼び出し側が標準の文面にして人が事前確認する(勝手に近いパターンへ寄せない)。"""
 import re
 from pathlib import Path
@@ -40,8 +40,8 @@ DEFAULT_SUBJECTS = {
     12: "施設利用者様の楽しみや交流につながるハンドメイド体験について",
 }
 SUBJECT_FILE = "件名.json"
-# パターン6(家電量販店)は17業種のどれにも対応しない。業種を問わず、個別に指定したときだけ使う。
-EXPLICIT_ONLY = (6,)
+# パターン6(家電量販店)とパターン13(フォトスタジオ・写真館)は17業種のどれにも対応しない。業種を問わず、個別に指定したときだけ使う。
+EXPLICIT_ONLY = (6, 13)
 
 # パターン10だけ、送り先に合わせて「貴団体」の呼び方を変える
 CALLNAME_10 = {"自治体・公共・団体": "貴自治体", "教育・学習": "貴校", "福祉・介護": "貴施設"}
@@ -105,3 +105,57 @@ def subject_for_industry(industry, directory=None):
     """業種に割り当てたパターンの件名。割り当てが無ければ None(呼び出し側が送り主設定の件名を使う)"""
     n = pattern_for(industry)
     return subject_for_pattern(n, directory) if n else None
+
+# パターン番号ごとの名前(ファイル名の後半)。文面テンプレートの追加・状態の表示に使う
+PATTERN_NAMES = {
+    1: "商業施設・ショッピングモール・百貨店",
+    2: "アパレル・コスメ・美容・生活雑貨",
+    3: "自動車販売店・カーディーラー",
+    4: "住宅メーカー・工務店・不動産会社",
+    5: "保険会社・保険代理店",
+    6: "家電量販店",
+    7: "ホテル・旅館・観光施設・旅行会社",
+    8: "ブライダル・結婚式場・ウェディング関連",
+    9: "一般企業・人事・総務・福利厚生担当",
+    10: "自治体・教育機関・福祉施設・地域団体",
+    11: "教育・学習",
+    12: "福祉・介護",
+    13: "フォトスタジオ・写真館",
+}
+
+
+def pattern_file(number, directory=None):
+    """パターン番号の専用ファイル(パターンNN_名前.txt)。ちょうど1つあるときだけ、その Path。無ければ None"""
+    d = Path(directory) if directory else PATTERN_DIR
+    files = sorted(d.glob("パターン%02d_*.txt" % number)) if d.exists() else []
+    return files[0] if len(files) == 1 else None
+
+
+def save_pattern(number, text, directory=None):
+    """パターン番号の文面をファイルに保存する。すでに同じ番号のファイルがあれば、そのファイルへ書く(2つにしない)。
+    新規は パターンNN_<PATTERN_NAMES の名前>.txt。保存した Path を返す"""
+    if number not in PATTERN_NAMES:
+        raise ValueError("パターン番号は1から13です: %r" % (number,))
+    d = Path(directory) if directory else PATTERN_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    target = pattern_file(number, d) or (d / ("パターン%02d_%s.txt" % (number, PATTERN_NAMES[number])))
+    target.write_text(str(text), encoding="utf-8")
+    return target
+
+
+def pattern_status(directory=None):
+    """パターン番号ごとの状態。present=専用ファイルがあるか / effective=実際に文面が読めるか(11・12は旧パターン10の代用でも可) / fallback=代用で読めているか"""
+    d = Path(directory) if directory else PATTERN_DIR
+    out = {}
+    for n, name in PATTERN_NAMES.items():
+        f = pattern_file(n, d)
+        effective = load_pattern(n, "", d) is not None
+        out[n] = {"name": name, "file": f.name if f else None, "present": f is not None,
+                  "effective": effective, "fallback": effective and f is None}
+    return out
+
+
+def patterns_missing(directory=None):
+    """文面が読めない(欠けている)パターン番号の一覧"""
+    return [n for n, s in pattern_status(directory).items() if not s["effective"]]
+

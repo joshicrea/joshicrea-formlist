@@ -495,6 +495,7 @@ def message_info():
     mt = max([f.stat().st_mtime for f in MSG.glob("*.txt")] or [0]) if MSG.exists() else 0  # 画面が「文面が変わったか」を見分け、保存先と最終更新を利用者に見せる
     return {"msg_dir": str(MSG), "msg_mtime": time.strftime("%m/%d %H:%M:%S", time.localtime(mt)) if mt else "", "expand_on": not (MSG / autosend.EXPAND_OFF).exists(), "industries": {n: ("専用" if n in have else "標準") for n in names}, "uses": uses,
             "patterns": {n: pat[n] for n in texts}, "pattern_texts": texts,
+            "pattern_status": patterns.pattern_status(), "patterns_missing": patterns.patterns_missing(),  # パターン番号ごとの有無(欠けている番号は、画面の保存先の表示で知らせる)
             "subjects": {n: patterns.subject_for_industry(n) for n in names if patterns.subject_for_industry(n)},  # 業種の型ごとの件名(文面の画面で同時に直せる)
             "orphans": [{"name": n, "to": industries.LEGACY.get(n, "")} for n in sorted(have) if n != "default" and n not in names and not n.startswith("承認")]}
 
@@ -1538,6 +1539,11 @@ class H(BaseHTTPRequestHandler):
                                    "send_state": st["send_state"], "problems": st["problems"], "counts": st["counts"], "changed": st["changed"],
                                    "send_file": st["file"], "awake": st.get("awake", ""), "stopping": st.get("stopping", False), "first_time": first, "last_max": last_max, "max_kind": max_kind, "limits": limits(),
                                    "message_summary": {"default": 1, "industries": [n for n, v in info["uses"].items() if v == "業種ごと"]}, "copy": copy_info()})
+        if u.path == "/api/message/patterns":
+            # 業種の型(パターン)ごとの文面テンプレートの状態と中身。文面が読めない(欠けている)番号は patterns_missing に出す
+            import patterns
+            status = patterns.pattern_status()
+            return self.send(200, {"pattern_status": {n: dict(s, text=patterns.load_pattern(n)) for n, s in status.items()}, "patterns_missing": patterns.patterns_missing()})
         if u.path == "/api/settings/history":
             # 保存のたびに残る、変わる前の送信元・文面の控え。引数なし=一覧(中身は返さない)。version と file=その1ファイルの中身(計測キーは sender.json に入らない設計)
             if q.get("version") and q.get("file"):
@@ -2021,6 +2027,27 @@ class H(BaseHTTPRequestHandler):
             # 見本の文字が残っていても保存はできる(途中で保存したい人のため)。送る内容を出すところで止まる。ここでは何が残っているかを返す
             probs = message_problems({("標準" if k == "default" else k): v for k, v in saved.items()})
             return self.send(200, {"ok": True, "problems": probs, "parts": {k: split_message(v) for k, v in saved.items()}, "skipped": skipped, "backup": str(kept) if kept else None})
+        if self.path == "/api/message/pattern":
+            # 業種の型(パターン)ごとの文面テンプレートを1つ保存する: {"number": 番号, "text": 本文}。既定(_fill_only)は、専用ファイルが無い番号にだけ入れる
+            import patterns
+            try:
+                number = int(d.get("number"))
+            except (TypeError, ValueError):
+                number = 0
+            if number not in patterns.PATTERN_NAMES:
+                return self.send(400, {"error": "パターン番号は、1から13で入れてください"})
+            text = d.get("text")
+            if not isinstance(text, str) or not text.strip():
+                return self.send(400, {"error": "文面の本文が空です"})
+            current_file = patterns.pattern_file(number)
+            if current_file is not None and d.get("_fill_only"):
+                cur = current_file.read_text(encoding="utf-8-sig")
+                if settings_guard._norm(cur) != settings_guard._norm(text):
+                    return self.send(200, {"ok": True, "skipped": [{"パターン": number, "いまの値": cur, "届いた値": text, "差分": settings_guard.diff_text(cur, text)}], "backup": None})
+                return self.send(200, {"ok": True, "skipped": [], "backup": None})
+            kept = settings_guard.backup(patterns.PATTERN_DIR.parent.parent, [current_file]) if current_file is not None else None  # 変わる前を、設定の控えへ残す
+            saved = patterns.save_pattern(number, text)
+            return self.send(200, {"ok": True, "file": saved.name, "backup": str(kept) if kept else None, "pattern_status": patterns.pattern_status(), "patterns_missing": patterns.patterns_missing()})
         if self.path == "/api/message/subject":
             # 業種の型(パターン)ごとの件名を、文面と同じ画面で直す: {"industry": 業種名, "subject": 件名(空なら初期値に戻す)}
             import patterns

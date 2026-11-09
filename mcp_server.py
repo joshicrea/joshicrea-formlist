@@ -593,6 +593,34 @@ def formlist_message_unset(name: str) -> dict:
 
 
 @mcp.tool()
+def formlist_pattern_get(number: int = 0) -> dict:
+    """業種の型(パターン)ごとの文面テンプレートを読む。number は1から13(0なら全番号の状態の一覧)。
+    pattern_status は番号ごとに、名前・ファイル名・present(専用ファイルがあるか)・effective(実際に文面が読めるか。11と12は旧パターン10の文面の代用でも可)・fallback(代用で読めているか)・text(文面。読めない番号は空)。
+    patterns_missing は、文面が読めない(欠けている)番号の一覧。欠けている番号のパターンは使えず、その業種は標準の文面になる。"""
+    code, d = api("GET", "/api/message/patterns")
+    if code != 200:
+        return {"error": d.get("error")}
+    if number:
+        s = (d.get("pattern_status") or {}).get(str(number))
+        if s is None:
+            return {"error": "パターン番号は1から13で指定してください"}
+        return {"number": number, **s}
+    return d
+
+
+@mcp.tool()
+def formlist_pattern_set(number: int, text: str, overwrite: bool = False) -> dict:
+    """業種の型(パターン)番号の文面テンプレートを保存する(1番号に1ファイル)。顧客に届く文面なので、ユーザーに全文を見せて承認を得てから保存する。保存すると確認済みの印は無効になる。
+    既定(overwrite=False)では、専用ファイルが無い番号にだけ入れ、すでにある文面は上書きしない(返り値の skipped に、パターン・いまの値・届いた値・差分が入る)。skipped があれば差分を利用者に見せ、「上書きして」と言われたときだけ overwrite=True で渡し直す(勝手に True にしない)。
+    上書きするときは、変わる前の文面を 出力/設定の控え に自動で控える(返り値の backup)。"""
+    body = {"number": number, "text": text}
+    if not overwrite:
+        body["_fill_only"] = True
+    code, d = api("POST", "/api/message/pattern", body)
+    return d if code == 200 else {"error": d.get("error")}
+
+
+@mcp.tool()
 def formlist_message_sample(material: str) -> dict:
     """営業資料の文章から、営業文のたたき台を作る(保存はしない)。見出し・箇条書き・URLを拾う型どおりの文なので、AIが資料を読んで書き直し、ユーザーに全文を見せて承認を得てから formlist_message_set で保存する。"""
     code, d = api("POST", "/api/sample", {"material": material})
