@@ -15,6 +15,7 @@ exit /b 1
 
 :direct
 rem PowerShell could not run (for example, blocked by company settings). Start the screen directly on port 8780.
+rem app.py itself switches to the installed copy (ports.launch_target), so this file keeps no rule of its own.
 where pyw >nul 2>&1 && (start "" pyw -3 -X utf8 app.py & exit /b 0)
 where pythonw >nul 2>&1 && (start "" pythonw -X utf8 app.py & exit /b 0)
 where py >nul 2>&1 && (start "" py -3 -X utf8 app.py & exit /b 0)

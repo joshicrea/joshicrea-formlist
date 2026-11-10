@@ -108,7 +108,7 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
 .tag.gray{background:var(--bg);color:var(--mut)}.nw{display:inline-block;max-width:100%;overflow-wrap:anywhere}
 @media(min-width:641px){#c .now.stick{position:sticky;top:0;z-index:4;box-shadow:0 2px 8px rgba(16,24,40,.12)}}
 @media(max-width:640px){.sumline .k{min-width:0}.al{display:block}.edit{padding:12px}table.op textarea{min-height:96px}}
-</style></head><body>
+#runningCopy{position:fixed;right:8px;bottom:6px;z-index:9999;max-width:60vw;font-size:12px;color:#555;background:rgba(255,255,255,.92);border:1px solid #ccc;border-radius:6px;padding:2px 8px;pointer-events:none;overflow-wrap:anywhere}@media (max-width:600px){#runningCopy{max-width:70vw;font-size:10px;padding:1px 5px;opacity:.9}}</style></head><body><div id="runningCopy" title="いま動いている版とフォルダ"></div>
 <header class="top"><div class="wrap hd"><div><h1><span class="mark" aria-hidden="true"></span>AIまるなげ営業</h1><p>地域と業種から、問い合わせフォームのある会社を探して、営業の文面を送ります。</p></div></div>
 <nav class="wrap" aria-label="画面の切り替え"><button data-t="a" class="on"><span class="n">1</span>探す</button><button data-t="b"><span class="n">2</span>結果を見る</button><button data-t="c"><span class="n">3</span>送る</button><button data-t="d">送信の記録</button></nav></header>
 <div id="upd" role="status" aria-live="polite" hidden style="background:#fff7e0;border-bottom:1px solid #e6c36a;padding:10px 16px;text-align:center"></div>
@@ -833,4 +833,6 @@ async function init(){META=await J('/api/meta');if(META.error){$('#now_c').textC
  $('#inds').onchange=()=>{const n=document.querySelectorAll('#inds input:checked').length;$('#indcnt').textContent=n?`${n}つ選んでいます`:'';refreshPlan()};
  renderSenderForm();opts($('#files'),META.files||[]);opts($('#sfile'),META.files||[]);renderMsgOptions();est();banners()}
 init();poll();checkUpdate();checkLicense();setInterval(checkLicense,600000);loadFunnel();
+async function showRunning(){const e=$('#runningCopy');if(!e)return;if(!e.textContent)e.textContent='版とフォルダを確かめています';try{const r=await fetch('/api/whoami');if(!r.ok)throw new Error(r.status);const w=await r.json();e.textContent='版 '+(w.version||'不明')+' ／ フォルダ '+(w.here||'不明')+(w.dev?' (開発用)':'')+(w.watch&&w.watch.text?' ／ '+w.watch.text:'');e.style.color=(w.watch&&w.watch.warn)?'#b00020':'#555';e.title=e.textContent}catch(x){e.textContent='版とフォルダを読めませんでした(画面のサーバーが止まっている可能性があります)'}}// 画面の隅に、いま動いている版とフォルダを常時出す(詰まったとき画面を見るだけで状態が分かるように)
+showRunning();setInterval(showRunning,60000);
 </script></body></html>

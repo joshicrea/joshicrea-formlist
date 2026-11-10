@@ -48,10 +48,12 @@ OUT = HERE / "出力"
 SETTINGS = settings_dir.setup(HERE)  # 設定(送信元・文面・採用記録・計測キー)の置き場を決め、初回だけ本体のフォルダから写す(Q899 第2段)。コピーが何個あっても設定は1つ
 MSG = settings_dir.root() / "文面"
 SENDER = settings_dir.root() / "sender.json"
+# 先に読み込んだ部品の置き場も、決まった置き場にそろえる(移行の照合に失敗して本体のフォルダで動くとき、計測キー・パターンだけ別の場所を読まない R2)
+proposal_links.KEY_FILE = settings_dir.root() / "計測キー.txt"  # patterns は関数の中で後から読み込むので、決まった置き場をそのまま使う
 LOG = OUT / "送信ログ.csv"
 IS_DEV = (HERE / "開発版_自動更新しない.txt").exists()  # 開発用の作業フォルダの目印(公開物には含めない)。ある場所だけ「開発用」として動く
 DEV_PORT = 8785  # 開発用の既定の番号。お客様版の8780〜8782(更新の確認・同時検索が使う番号)とぶつけない
-PORT = int(os.environ.get("FORMLIST_PORT") or (DEV_PORT if IS_DEV else 8780))  # 複数の検索を同時に走らせるとき、MCP が8781以降で別のサーバーを立てる。画面で使うのは8780(開発用は8785)
+PORT = int(os.environ.get("FORMLIST_PORT") or os.environ.get("FORMLIST_ENTRY_PORT") or (DEV_PORT if IS_DEV else 8780))  # FORMLIST_ENTRY_PORT: 入口の番号だけを変える(試験用。FORMLIST_PORT と違い、導入先への振り向けは止めない)  # 複数の検索を同時に走らせるとき、MCP が8781以降で別のサーバーを立てる。画面で使うのは8780(開発用は8785)
 assert 8780 <= PORT <= 8790, PORT
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 PY = sys.executable[:-len("pythonw.exe")] + "python.exe" if sys.executable.lower().endswith("pythonw.exe") else sys.executable
@@ -111,7 +113,7 @@ GOOGLE_PLACES_TEXT_BLOCK = "Google Places Text Search is not connected. API term
 BUILD = updater.build()  # 読み込んだ時点の、全ファイルの印。ディスクの印と違えば、更新したあとで起動し直していない
 UPDATE_BUSY = threading.Lock()
 UPDATE_CACHE = {}  # {"at": 時刻, "result": 照合の結果}。5分は取り直さない(画面を開くたびに公開側へ問い合わせない)
-VERSION = hashlib.sha256(b"".join((HERE / f).read_bytes() for f in ("app.py", "autosend.py", "ng_list.py", "site_checker.py"))).hexdigest()[:12]  # 古い版が動き続けていないかをMCPが照合する(読み込み済みの部品も含める)
+VERSION = ports.disk_version(HERE) or hashlib.sha256(b"".join((HERE / f).read_bytes() for f in ports.VERSION_FILES)).hexdigest()[:12]  # 見張りも同じ式で比べる(ports.disk_version)。古い版が動き続けていないかをMCPが照合する(読み込み済みの部品も含める)
 
 
 def _pythonw():
@@ -119,8 +121,69 @@ def _pythonw():
     return exe[:-len("python.exe")] + "pythonw.exe" if exe.lower().endswith("python.exe") else exe
 
 
+def installed_dir(environ=None):
+    """導入先のコピーのフォルダ。定義は ports.installed_dir(起動の入口すべてが同じ決め方を使う R26)"""
+    return ports.installed_dir(environ)
+
+
+def launch_target(here=None, environ=None):
+    """起動の入口がどのコピーを起動するか: (導入先 or None, 理由)。定義は ports.launch_target(install.ps1 -Open も同じ関数を呼ぶ R26)"""
+    return ports.launch_target(here or HERE, environ)
+
+
+def launch_notice(msg, show=True):
+    """起動を止めた理由を、黙って終わらせずに残す。出力/app_起動ログ.txt へ1行。画面から起動したとき(show)は、Windows の通知の窓にも出す"""
+    try:
+        OUT.mkdir(exist_ok=True)
+        with open(OUT / "app_起動ログ.txt", "ab") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 起動 port={PORT} {msg}\n".encode("utf-8"))
+    except OSError:
+        pass
+    print(msg)
+    if show and os.name == "nt" and not os.environ.get("FORMLIST_NO_DIALOG"):
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, msg, "AIまるなげ営業", 0x40 | 0x10000)  # 情報の印・最前面
+        except Exception:
+            pass
+
+
+def watch_status():
+    """見張りの状態(画面の隅に出す・R4)。見張りが無い版・読めないときは None"""
+    try:
+        import watchdog
+        return watchdog.status(HERE)
+    except Exception:
+        return None
+
+
+def ensure_watchdog_task():
+    """導入先のコピーとして起動したときだけ、見張りの登録を確かめ、無い・前の版なら登録し直す(自動更新で届いた既存の利用者にも効かせる・R4の自己修復)"""
+    if os.name != "nt" or IS_DEV or os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("FORMLIST_NO_TASK"):
+        return
+    try:
+        if installed_dir().resolve() != HERE.resolve():
+            return
+        import watchdog
+        watchdog.ensure_task(HERE)
+    except Exception as e:
+        launch_notice(f"見張りの登録を確かめられませんでした({type(e).__name__})", show=False)
+
+
+def watchdog_registered():
+    """見張り(5分ごとの確認)がこのPCに登録されているか。確かめられないときは False(約束しない側に倒す)"""
+    try:
+        import watchdog
+        return watchdog.task_has_watchdog()
+    except Exception:
+        return False
+
+
 def replace_other_copy(port):
     """別のフォルダの、このツールの古いコピーを止める(何も動いていないときだけ)。止められたら True"""
+    j = ports.job(port)
+    if j is None or j.get("running") is not False:  # 作業中・作業中か分からない(取得失敗・形が違う・項目が無い)ときは止めない(R1・R10)。古い版は ports.job が /api/job の running を読む
+        return False
     import urllib.request
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
@@ -1571,7 +1634,7 @@ class H(BaseHTTPRequestHandler):
             d = handoff_take(q.get("id"))
             return self.send(200, {"req": d} if d else {"req": None})
         if u.path == "/api/whoami":
-            return self.send(200, {"tool": "formlist", "here": str(HERE), "version": VERSION, "build": BUILD, "port": PORT, "dev": IS_DEV, "running": JOB["running"] or SJOB["running"], "name": JOB["name"] if JOB["running"] else SJOB["name"], "cond": SEARCH_COND.get("key", "") if SJOB["running"] else ""})
+            return self.send(200, {"tool": "formlist", "here": str(HERE), "version": VERSION, "build": BUILD, "port": PORT, "dev": IS_DEV, "running": JOB["running"] or SJOB["running"], "name": JOB["name"] if JOB["running"] else SJOB["name"], "cond": SEARCH_COND.get("key", "") if SJOB["running"] else "", "watch": watch_status()})
         if u.path == "/api/summary":
             # この画面(番号)の、最後の探索の内訳(段階別の件数・結果・理由)。画面の「結果を見る」が読む
             try:
@@ -2460,18 +2523,99 @@ if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
     cap_log(OUT / "app_起動ログ.txt")  # 起動のたびに増える記録に上限を置く
     cap_log(OUT / SUPPORT_NAME, 300_000, 100_000)
+    _target, _why = launch_target()
+    if _why:  # 振り向けなかった理由(導入先が壊れている・古い案内の FORMLIST_PORT が入っている)を、黙らずに出す
+        launch_notice(_why, show=not NO_BROWSER and not os.environ.get("FORMLIST_NO_BROWSER"))
+    if _target is not None:  # 導入先のコピーを起動する(古いフォルダ・別の場所のコピーから起動されても、動くのは導入先の1つ)
+        _args = ["-X", "utf8", str(_target / "app.py")] + (["--no-browser"] if NO_BROWSER else [])
+        # 導入先が起動の途中で落ちたときの原文(黙って消さない)。導入先の側に置く: 起動した導入先は常駐してこのファイルを掴み続けるので、
+        # 呼んだ古いコピーの下に置くと、古いフォルダを消す・移すができなくなる(2026-11-10 破壊検証 3-3)
+        _errf = _target / "出力" / "起動エラー_振り向け.txt"
+        try:
+            _errf.parent.mkdir(parents=True, exist_ok=True)
+            _ef0 = open(_errf, "wb")
+        except OSError:
+            import tempfile
+            _errf = Path(tempfile.gettempdir()) / f"formlist_起動エラー_振り向け_{os.getpid()}.txt"
+            _ef0 = open(_errf, "wb")
+        try:
+            with _ef0 as _ef:
+                _proc = subprocess.Popen([_pythonw()] + _args, cwd=_target, env=dict(os.environ, PYTHONIOENCODING="utf-8"),
+                                         stdin=subprocess.DEVNULL, stdout=_ef, stderr=_ef, creationflags=NO_WINDOW,
+                                         start_new_session=(os.name != "nt"))
+        except OSError as e:
+            _proc = None
+            launch_notice(f"導入先のコピー({_target})を起動できませんでした({type(e).__name__})。このフォルダ({HERE})で起動します", show=not NO_BROWSER)
+        if _proc is not None:
+            # 振り向けた先が、画面の番号で実際に答えるまで待つ(R6: ファイルがそろっていても、起動すると落ちる壊れ方がある)
+            _wait = float(os.environ.get("FORMLIST_REDIRECT_WAIT") or 20)
+            _deadline, _up = time.time() + _wait, False
+            while time.time() < _deadline and not _up:
+                time.sleep(0.5)
+                # 試験の入口の番号(FORMLIST_ENTRY_PORT)のときは、その番号だけを見る(試験が本物の 8780〜8782 に触れない。破壊検証 3-11)
+                for _pt in [PORT] + ([] if os.environ.get("FORMLIST_ENTRY_PORT") else [x for x in ports.POOL if x != PORT]):
+                    _j = ports.job(_pt, timeout=1) or {}
+                    try:
+                        _up = bool(_j.get("here")) and Path(_j["here"]).resolve() == _target.resolve()
+                    except OSError:
+                        _up = False
+                    if _up:
+                        break
+                if not _up and _proc.poll() is not None and _proc.returncode != 0:
+                    break  # 導入先が落ちた。待たずに切り替える
+            if _up:
+                launch_notice(f"このフォルダ({HERE})ではなく、導入先のコピー({_target})を起動しました", show=False)
+                sys.exit(0)
+            _rc = _proc.poll()
+            try:
+                _err = _errf.read_bytes().decode("utf-8", "replace")
+            except OSError:
+                _err = ""
+            # 応答が無いときの分け方(2026-11-10 破壊検証 3-1)。導入先は、別のコピーが作業中なら自分で理由(作業中のため止めていません)を出して
+            # 終了コード1で止まる。それを「落ちた」と読んで「起動しませんでした・導入の1行をもう一度」を重ねて出さない
+            if _rc is None:  # 導入先がまだ動いている(起動に時間がかかっている、または自分で理由の窓を出している)。表示は導入先に任せる
+                launch_notice(f"導入先のコピー({_target})が{int(_wait)}秒たってもまだ起動の途中です。表示は導入先に任せ、このフォルダ({HERE})では起動しません", show=False)
+                sys.exit(0)
+            if _rc == 0:
+                launch_notice(f"導入先のコピー({_target})が理由を残して終了しました。このフォルダ({HERE})では起動しません", show=False)
+                sys.exit(0)
+            if "Traceback" not in _err:  # 落ちたのではなく、導入先が自分で理由を表示して止まった(作業中・別のアプリ等)
+                launch_notice(f"導入先のコピー({_target})が理由を表示して止まりました(終了コード {_rc})。このフォルダ({HERE})では起動しません", show=False)
+                sys.exit(1)
+            _tail = _err.strip().splitlines()[-1:]
+            launch_notice(f"導入先のコピー({_target})が起動の途中で終了しました({_tail[0] if _tail else '原文なし'})。"
+                          f"このフォルダ({HERE})で起動します。導入の1行をもう一度実行すると直ります", show=not NO_BROWSER)
     import socket
     with socket.socket() as s:
         if s.connect_ex(("127.0.0.1", PORT)) == 0:
             st = ports.state(PORT, str(HERE))
+            _occ = (ports.job(PORT) or {}).get("here") if st == "other_copy" else None
+            if st == "other_copy" and _occ and installed_dir().exists() and Path(_occ).resolve() == installed_dir().resolve():
+                # 導入先のコピーが動いている。導入先ではないこのフォルダが、導入先を止めて居座ることはしない(振り向けに失敗したときの逆転を防ぐ)
+                launch_notice(f"{PORT}番では導入先のコピー({_occ})が動いています。そちらの画面を開きます", show=False)
+                if not NO_BROWSER:
+                    webbrowser.open(f"http://127.0.0.1:{PORT}/")
+                sys.exit(0)
             if st == "other_copy":  # 別のフォルダに入れた、このツールの古いコピーが居座っている。何も動いていなければ、止めて入れ替える(番号を変えない=画面のURLを変えない)
                 if replace_other_copy(PORT):
                     st = "free"
+                    launch_notice(f"{PORT}番に居座っていた別のフォルダのコピーを止めて、このフォルダ({HERE})で起動し直します", show=False)
                 else:
-                    print(f"{PORT}番では、別のフォルダのこのツールが動いています。処理の最中の可能性があるため、止めていません。そちらの画面で「ツールを終了する」を押してから、もう一度起動してください")
+                    o = ports.job(PORT)
+                    if o is None or o.get("running") is not False:
+                        what = f"「{o.get('name') or '処理'}」を実行中" if (o or {}).get("running") else "作業中かどうか確かめられない状態"
+                    else:
+                        what = "止める手続きに応じない状態"
+                    then = ("終わったら、見張りが5分ごとに確かめて入れ替えます。" if watchdog_registered() else "")
+                    launch_notice(f"{PORT}番では、別のフォルダ({(o or {}).get('here') or '不明'})のこのツールが{what}のため、止めていません。"
+                                  f"{then}急ぐときは、その画面で「ツールを終了する」を押してから、もう一度起動してください",
+                                  show=not NO_BROWSER)
+                    if not NO_BROWSER:
+                        webbrowser.open(f"http://127.0.0.1:{PORT}/")  # 作業中の画面を開く(そのコピーが今回の版以降なら、画面の隅に版とフォルダが出る。古い版には隅の表示が無い)
                     sys.exit(1)
             if st == "foreign":
-                print(f"{PORT}番は、このツールではない別のアプリが使っています。そのアプリを閉じるか、FORMLIST_PORT に8780〜8790の空いている番号を入れて起動してください")
+                launch_notice(f"{PORT}番は、このツールではない別のアプリ(または応答しない古い版のこのツール)が使っています。止めていません。"
+                              "使っていないアプリを閉じてから、もう一度起動してください", show=not NO_BROWSER)
                 sys.exit(1)
             if st == "ours":
                 if not NO_BROWSER:  # MCP やログイン時の自動起動のときは画面を開かない
@@ -2482,6 +2626,7 @@ if __name__ == "__main__":
     ensure_ng_migrated(_NG_STORE)
     if NG_MIGRATION["error"]:
         print("送らない会社の引っ越しに失敗しました。本番の送信は止まります:", NG_MIGRATION["error"])
+    threading.Thread(target=ensure_watchdog_task, daemon=True).start()  # 見張りの登録の自己修復(R4)
     license_check.start_background(VERSION)  # 起動時と24時間ごとに利用許可を照合する(失敗してもツールは止めない)
     threading.Thread(target=auto_update_loop, daemon=True).start()  # 画面を開かなくても、起動時と6時間ごとに最新の版へ追従する
     srv = Srv(("127.0.0.1", PORT), H)

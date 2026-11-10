@@ -102,18 +102,19 @@ $TaskName = "AIまるなげ営業_画面の常駐"
 function Remove-ResidentTask {
     try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop } catch {}
 }
-# ログオンのたびに画面のサーバーを起動し、止まっていたら5分以内に起動し直す。1つだけ動く(app.py が、すでに動いていれば何もしない)
+# 見張り(watchdog.py)を、ログオン時と5分ごとに動くタスクとして登録する(導入時の標準装備・2026-11-10)。
+# 見張りは 8780番の応答者を確かめ、導入先の最新のコピーでなければ入れ替える(作業中は止めない)。止まっていれば起動する。
+# 試験: FORMLIST_TASK_XML_OUT があれば登録せず、定義(XML)だけをそこへ書く(この PC のタスクを書き換えない)
 function Set-ResidentTask([string]$Exe) {
     $name = if ($env:FORMLIST_TASK_NAME) { $env:FORMLIST_TASK_NAME } else { $TaskName }
     try {
-        $app = [IO.Path]::Combine($AppDir, "app.py")
-        $act = New-ScheduledTaskAction -Execute $Exe -Argument "-X utf8 `"$app`" --no-browser" -WorkingDirectory $AppDir
-        $trg = @((New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME))
-        $rep = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5)
-        $trg += $rep
-        $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-        $pr = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-        Register-ScheduledTask -TaskName $name -Action $act -Trigger $trg -Settings $set -Principal $pr -Description "AIまるなげ営業の画面を、パソコンを開いたときと、止まったときに自動で起動します（動いていれば何もしません）" -Force | Out-Null
+        $wd = [IO.Path]::Combine($AppDir, "watchdog.py")
+        if (-not (Test-Path -LiteralPath $wd)) { throw "見張り(watchdog.py)が本体にありません" }
+        $rest = @("-X", "utf8", $wd, "--install-task", "--task-name", $name, "--exe", $Exe)
+        if ($env:FORMLIST_TASK_XML_OUT) { $rest += @("--xml-out", $env:FORMLIST_TASK_XML_OUT) }
+        $msg = Invoke-Py -Rest $rest
+        if ($LASTEXITCODE -ne 0) { throw "$msg" }
+        Write-Host "$msg"
         return $true
     } catch {
         Write-Host "常駐の登録（タスクスケジューラ）を作れませんでした（$($_.Exception.Message)）。スタートアップのショートカットだけで自動起動します。"
@@ -130,7 +131,7 @@ function Set-Shortcuts {
         if (-not (Test-Path -LiteralPath $exe)) { throw "Python の場所を確かめられませんでした: $exe" }
         $app = [IO.Path]::Combine($AppDir, "app.py")
         New-Lnk ([IO.Path]::Combine($d.Startup, $StartupLnk)) $exe "-X utf8 `"$app`" --no-browser" $AppDir 7 "AIまるなげ営業の画面を、パソコンを開いたときに自動で起動します"
-        $script:ResidentOk = if ($DryRunRegister -and -not $env:FORMLIST_TASK_NAME) { $false } else { Set-ResidentTask $exe }
+        $script:ResidentOk = if ($DryRunRegister -and -not $env:FORMLIST_TASK_NAME -and -not $env:FORMLIST_TASK_XML_OUT) { $false } else { Set-ResidentTask $exe }
         New-Lnk ([IO.Path]::Combine($d.Desktop, $DesktopLnk)) $exe "-X utf8 `"$app`"" $AppDir 7 "AIまるなげ営業の画面を開きます（止まっていれば起動します）"
         return $true
     } catch {
@@ -265,6 +266,17 @@ function Test-SampleSender([string]$Path) {
 # --- 画面を開く (-Open)。終了コード 0=開いた / 3=原因を表示して止まった ---
 if ($Open) {
     $Here = $PSScriptRoot
+    # 起動の入口は、必ず導入先のコピーを起動する(2026-11-10 起動の一発化)。別の場所に置いたコピーの「ブラウザで起動.bat」から呼ばれても、動かすのは導入先の1つ。
+    # 導入先の決め方と振り向けない条件は、app.py と同じ ports.launch_target の1か所で決める(R26)。Python が無いときは呼ばれたフォルダのまま
+    $script:Py = Find-Python
+    $lt = [IO.Path]::Combine($Here, "ports.py")
+    if ($script:Py -and (Test-Path -LiteralPath $lt)) {
+        $ans = @(Invoke-Py -Rest @("-X", "utf8", $lt, "--launch-target", $Here))
+        $tgt = if ($ans.Count -ge 1) { "$($ans[0])".Trim() } else { "" }
+        $why = if ($ans.Count -ge 2) { "$($ans[1])".Trim() } else { "" }
+        if ($why) { Write-Host $why }
+        if ($tgt) { Write-Host "導入先のコピーを起動します: $tgt"; $Here = $tgt }
+    }
     foreach ($p in $Ports) {
         if (Get-ToolState $p $Here) { Write-Host "画面を開きます: http://127.0.0.1:$p/"; Start-Process "http://127.0.0.1:$p/"; exit 0 }
     }
