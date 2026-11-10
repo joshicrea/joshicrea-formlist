@@ -472,6 +472,17 @@ def outputs():
     return [p.name for p in sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)]
 
 
+def sample_rows_for(rows, industry):
+    """見本に使う会社の候補(送るリストの行)。実際に送るとき(autosend.pick_message_source)と同じく、
+    業種は新しい分類の名前にそろえて(canonical)比べる。古い業種名で入ったリストでも、その業種の会社が当たる。
+    その業種の会社がリストに無ければ空を返す(別の業種の会社で見本を作らない)。industry が空・'default' なら全行"""
+    import industries
+    want = industries.canonical(industry) if industry and industry != "default" else ""
+    if not want:
+        return list(rows)
+    return [r for r in rows if industries.canonical(str(r.get("業種") or "")) == want]
+
+
 def messages():
     MSG.mkdir(exist_ok=True)
     if not (MSG / "default.txt").exists():
@@ -1456,7 +1467,10 @@ class H(BaseHTTPRequestHandler):
                 rows = [r for r in read_csv(f) if r.get("企業名")]
             except PermissionError:
                 return self.send(409, excel_error(f))
-            rows = [r for r in rows if not industry or r.get("業種") == industry] or rows
+            cand = sample_rows_for(rows, industry)
+            if not cand and industry and industry != "default":
+                label = f"見本の会社(株式会社サンプル)。送るリストに{industry}の会社が無いので、この名前で作りました"
+            rows = cand
             if rows:
                 # 「送らない」を選んだ会社・送れない会社は見本に使わない。確認・本番と同じ数え方(plan)で、実際に送る会社の中から選ぶ
                 try:
@@ -1471,7 +1485,7 @@ class H(BaseHTTPRequestHandler):
                 if r is not None:
                     name, url = r["企業名"], r.get("問い合わせフォームURL 無ければメール", "")
                     opener = (r.get("書き出し") or "").strip() or opener_draft_for(industry=r.get("業種", ""), basis=r.get(BASIS_COL, ""))[0]
-                    label = f"実際に送る会社の1社目({name})で作りました"
+                    label = f"実際に送る会社の1社目({name}、業種: {r.get('業種', '')})で作りました"
                 else:
                     label = "見本の会社(株式会社サンプル)。送る会社が無いので、この名前で作りました"
         if not opener:

@@ -1,8 +1,8 @@
 {
- "version": "b2d6bc27e710",
+ "version": "06926f15b5ff",
  "files": {
-  "app.py": "9c3aa30299a3dd562434df10a5964f0349dc418ff7cfa65340fa44fdce8ff1cc",
-  "ui.html": "e198c97caa274ac6c8a8e7a464cc8bd5c128ec5f11a4288fb5060a1c9e821e18",
+  "app.py": "2a8f76ae8a28bb6dc5f59332646897464e97ddb4086290d6ee09688fc17c5c00",
+  "ui.html": "c856b4d634b7e00a3a56d6799f5a88963a523930baea8b5bf43332bb578c5ed8",
   "approval.py": "0b4a4908efedd041f50655ccc209f8fc0f433bd3c8c51788928fb0bcd0b07f2a",
   "autosend.py": "a68728b75dc4db40a5b891e4cc940702c924aa77bd6df719e353f7f549526427",
   "channel_choice.py": "be644c15fc234a674c8315f1d191cda50e22c3f2b0e6f63e95c34966b5e70889",
@@ -12,7 +12,7 @@
   "google_places_text_source.py": "54b82a25528d1369f1842956d64b0fd240ed31a544ff991ac6900360aa681b74",
   "hp_finder.py": "e63ea228b10833af90b3207c2185902ab55d1aba76e09d19620fb730dc89ef41",
   "hp_verify.py": "bb9c29303e9821a686610dee648390c624e30d215ad094a406eb37b75aca2b4f",
-  "license_check.py": "ea127e1d860376116a9bfa0539bc10ac16cd165fd05f523444f5dbd2122f4685",
+  "license_check.py": "3b6827b8baa6b6c8c5fe85d7bd139d78f1c466e55c3f15ced63b6f1dcfbaf974",
   "bug_report.py": "eb4f8e1674bf69e14600a824760650ad5492a25ba058904cd2ed4af94fe0f1f8",
   "limited_http_budget.py": "229b0b36fcec3af27c287f405b79ece1ca4a912b35b936467e5ede6d0e87e0f3",
   "mail_channel.py": "2c933418cc2162c0903a00d8d29916749f49bcd92a95d4423f65e88d859950a3",
