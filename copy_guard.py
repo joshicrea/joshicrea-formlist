@@ -56,7 +56,21 @@ def status(here, settings, ports=ports.POOL, whoami=None, install_default=None):
         others.append({"here": there, "port": int(d.get("port") or port), "version": str(d.get("version") or "")})
     conflicts = list(mig.get("conflicts") or [])
     warnings = [f"別のコピー({o['here']})が画面の入口({o['port']}番)を握っています。そちらの設定が表示されている可能性があります" for o in others]
-    if conflicts:
+    try:  # 置き場に残した衝突の記録を読む(移行したのが別のコピー・前の起動でも、画面を出す側の帯に出す。破壊検証3回目 R28)
+        import settings_dir
+        detail = settings_dir.read_conflicts(root)
+    except Exception:
+        detail = []
+    if not detail:
+        detail = [x for x in (mig.get("conflict_detail") or []) if isinstance(x, dict)]
+    winners = {x.get("winner") for x in detail if x.get("winner")}
+    if len(winners) >= 2:  # ファイルごとに勝ち負けを決めたため、置き場の設定が複数のコピー由来になっている(R30)
+        warnings.append("置き場の設定は、複数のコピー由来の内容が混ざっています(" + "・".join(sorted(winners))[:200] + ")。送信元と文面がそろっているか確かめてください")
+    for x in detail[:3]:  # どのコピーの内容を読んでいるか・もう一方はどこに残したかを、ファイルごとに出す(破壊検証2回目 N1)
+        warnings.append(f"設定「{x.get('file')}」は2つのコピーで内容が違いました。読んでいるのは{x.get('reading')}。もう一方の内容は {x.get('other')} に残しています")
+    if len(detail) > 3:
+        warnings.append(f"ほかに{len(detail) - 3}件、内容の違う設定があります。置き場の「衝突の控え」に残しています")
+    if conflicts and not detail:
         warnings.append(f"設定の置き場に、このコピーと違う内容のファイルがあります({len(conflicts)}件)。どちらが新しいか確かめてください")
     if fallback:
         warnings.append(f"設定の保存先を利用者の領域に作れなかったため、ツールのフォルダに保存しています(理由: {fallback})")

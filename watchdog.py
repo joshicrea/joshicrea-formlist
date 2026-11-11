@@ -49,7 +49,9 @@ REPAIR_MAX_PER_DAY = 6
 WHOAMI_TIMEOUT = 2  # R13
 FAIL_FREE = 3  # 続けて失敗してよい回数。超えたら間隔を倍にする(W1)
 ROLLBACK_HOLD = 24 * 3600  # 更新して画面が立たず戻した版を、当て直さない時間(F2)。新しい版が公開されれば、その版はすぐ当てる
-VERSION_WAIT = 200  # 起動し直したあと、新しい版が応答するまで待つ秒数(updater の起動し直しは最大 120秒待ってから戻す)
+START_WAIT = 60  # 起動してから応答を待つ上限(秒)
+APPLY_FAIL_MAX = 3  # 同じ公開側の版を、続けてこの回数当てられなければ、24時間は当て直さない(R27)
+HUMAN_RECENT = 10 * 60  # 画面での操作(保存・開始などの書き込み)がこの秒数以内にあれば、人の操作中とみなして止めない(R1・R12)
 SKIP_NOTICE = 12  # 作業中で見送った回数がこれに達したら(5分ごと×12=1時間)、画面とログで「作業が終わったら再起動」を知らせる(R10)。普通の長さの検索・送信のたびに知らせないよう、1時間にした(暫定値・実測で見直す)
 
 
@@ -126,9 +128,23 @@ def pythonw():
     return exe
 
 
+def _job(port, timeout=None):
+    """その番号の応答。誰も待ち受けていない番号は問い合わせない(Windows では空の番号への接続が1回約2秒かかる。破壊検証2回目 N2)"""
+    if ports.can_bind(port):
+        return None
+    return ports.job(port, timeout=WHOAMI_TIMEOUT if timeout is None else timeout)
+
+
 def busy(j):
     """作業中か。running が明示の false のときだけ「動いていない」。無い・形が違うときは動いているとみなす(R1・R10)"""
-    return not (isinstance(j, dict) and j.get("running") is False)
+    if not (isinstance(j, dict) and j.get("running") is False):
+        return True
+    # 探す・送るが動いていなくても、送信承認の窓を出している・画面で直近に操作した(保存・開始など)ときは人の操作中(R1・R12。破壊検証2回目 N3)。
+    # この2項目を返さない古い版は、従来どおり running だけで判断する
+    if j.get("asking"):
+        return True
+    age = j.get("last_action_age")
+    return isinstance(age, (int, float)) and age < HUMAN_RECENT  # 負(時計の巻き戻し)は不明として操作中とみなす(R28)
 
 
 def quit_idle(port, timeout=3):
@@ -223,26 +239,61 @@ def start_app(here, port):
     with open(od / "app_起動ログ.txt", "ab") as lg:
         kw = dict(cwd=str(here), env=env, stdin=subprocess.DEVNULL, stdout=lg, stderr=lg, start_new_session=(os.name != "nt"))
         try:  # タスクスケジューラの作業の外で動かす(見張りが終わっても画面のサーバーを道連れにしない)
-            subprocess.Popen(cmd, creationflags=flags | 0x01000000, **kw)
+            proc = subprocess.Popen(cmd, creationflags=flags | 0x01000000, **kw)
         except OSError:
-            subprocess.Popen(cmd, creationflags=flags, **kw)
-    for _ in range(120):
+            proc = subprocess.Popen(cmd, creationflags=flags, **kw)
+    end = time.time() + START_WAIT  # 待ちの総時間に上限(タスクの制限 PT10M より十分短く。破壊検証2回目 N2)
+    while time.time() < end:
         time.sleep(0.5)
-        j = ports.job(port, timeout=WHOAMI_TIMEOUT)
+        j = _job(port)
         if j is not None and same(j.get("here"), here):
             return True
+        if proc.poll() is not None and _job(port) is None:  # 起動したプロセスがすぐ落ちた。待たずに打ち切る
+            return False
     return False
+
+
+def version_wait():
+    """更新の起動し直しの後に、新しい版の応答を待つ秒数。updater が新しい版を待つ時間(FORMLIST_RELAUNCH_WAIT・既定180秒)に余裕45秒を足す
+    (固定の200秒では、遅いPCで見張りが「失敗」と書いた後に新しい版が立ち上がりうる。破壊検証2回目 N4)"""
+    try:
+        import updater
+        return float(updater.relaunch_wait()) + 45
+    except Exception:
+        return 225.0
 
 
 def wait_version(port, here, want, secs):
     """その番号で、このフォルダの画面が版 want で応答するまで待つ。want が空なら、このフォルダが応答すれば良い"""
     end = time.time() + secs
     while time.time() < end:
-        j = ports.job(port, timeout=WHOAMI_TIMEOUT)
+        j = _job(port)
         if j is not None and same(j.get("here"), here) and (not want or j.get("version") == want):
             return True
         time.sleep(1)
     return False
+
+
+def need_update(here, apply_failed=None, now=None):
+    """更新が要るかだけを確かめる(ファイルは書き換えない)。返す: (状態の文字, 公開側の版, 要るか)。戻した版の保留(24時間)と、
+    当てられなかった版の保留(同じ版で APPLY_FAIL_MAX 回続けて当てられなければ24時間。破壊検証3回目 R27)も見る"""
+    try:
+        import updater
+        r = updater.check()
+        rv = r.get("remote_version", "")
+        if r.get("state") != "古い":
+            return r.get("state", "未確認"), rv, False
+        if not str(rv or "").strip():  # 版が空・取れない: 保留の鍵が無いので、当てずに見送る(止め直さない。破壊検証4回目 R31)
+            return "公開側の版が取れないため、更新は行いません(止め直しもしません)", "", False
+        info = updater.skip_info()
+        if info and rv and info.get("version") == rv and 0 <= time.time() - float(info.get("last", 0)) < ROLLBACK_HOLD:
+            return f"公開されている版は前に更新して画面が立たなかった版のため、{ROLLBACK_HOLD // 3600}時間は当て直しません", rv, False
+        af = apply_failed if isinstance(apply_failed, dict) else {}
+        if rv and af.get("version") == rv and int(af.get("count", 0) or 0) >= APPLY_FAIL_MAX and 0 <= (time.time() if now is None else now) - float(af.get("last", 0)) < ROLLBACK_HOLD:
+            return f"公開されている版({rv})は{af.get('count')}回続けて当てられなかったため、{ROLLBACK_HOLD // 3600}時間は当て直しません", rv, False
+        return "古い", rv, True
+    except Exception as e:
+        return f"更新を確かめられない({type(e).__name__})", "", False
 
 
 def apply_update(here):
@@ -256,6 +307,8 @@ def apply_update(here):
             return r.get("state", "未確認"), [], None, r.get("remote_version", "")
         info = updater.skip_info()
         rv = r.get("remote_version", "")
+        if not str(rv or "").strip():  # 版が空・取れない: 当てない(R31)
+            return "公開側の版が取れないため、更新は行いません(止め直しもしません)", [], None, ""
         if info and rv and info.get("version") == rv and 0 <= time.time() - float(info.get("last", 0)) < ROLLBACK_HOLD:
             return f"公開されている版は前に更新して画面が立たなかった版のため、{ROLLBACK_HOLD // 3600}時間は当て直しません", [], None, rv
         res = updater.apply()
@@ -314,7 +367,8 @@ def _run(here, port, check_update, now, pool):
     now = time.time() if now is None else now
     prev = read_state(here)
     st = {"port": port, "here": str(here), "at": now, "at_text": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)), "watchdog_version": VERSION,
-          "update_checked": prev.get("update_checked", 0), "repair": prev.get("repair", {}), "skipped": int(prev.get("skipped", 0) or 0)}
+          "update_checked": prev.get("update_checked", 0), "repair": prev.get("repair", {}), "skipped": int(prev.get("skipped", 0) or 0),
+          "apply_failed": prev.get("apply_failed") if isinstance(prev.get("apply_failed"), dict) else {}}
     # この1時間の入れ替えの時刻だけ残す(未来の時刻=時計の巻き戻しは捨てる R25)
     st["replaced_at"] = [t for t in prev.get("replaced_at", []) if _ages([t], now) and _ages([t], now)[0] < LOOP_WINDOW]
 
@@ -349,7 +403,7 @@ def _run(here, port, check_update, now, pool):
         if missing_files(here):
             return done("broken", f"導入先に必要なファイルがありません({', '.join(missing_files(here))})。更新の当て直し({state})でも直りませんでした(今日{rp['count']}回目)")
 
-    found = {p: ports.job(p, timeout=WHOAMI_TIMEOUT) for p in pool}  # 画面の番号(既定 8780〜8782)。8780 以外のポートを指定したとき(試験)は、その番号だけ
+    found = {p: _job(p) for p in pool}  # 画面の番号(既定 8780〜8782)。8780 以外のポートを指定したとき(試験)は、その番号だけ
     for p, j in found.items():
         if j is not None and busy(j):  # どこかで作業中、または作業中か分からない(R1)
             st["skipped"] += 1
@@ -391,31 +445,48 @@ def _run(here, port, check_update, now, pool):
         replaced.append(j.get("here"))
     if replaced:
         st["replaced_at"].append(now)
-    state, files, backup, rver = apply_update(here) if (upd_due or replaced or not ours) else ("確かめていない", [], None, "")
     if upd_due:
         st["update_checked"] = now
-    if ours and ports.job(port, timeout=WHOAMI_TIMEOUT) is not None:
-        if not files and not stale:
+    alive = ours and _job(port) is not None
+    if alive:
+        # 動いている導入先: 更新が要るかを先に確かめるだけにし、ファイルは書き換えない。終了を確かめてから当てる
+        # (先に当ててから終了を断られると、壊れた版がディスクに残ったまま、前の版へ戻す守りなしで次の回が起動する。破壊検証2回目 N1)
+        state, rver, need = need_update(here, prev.get("apply_failed"), now) if upd_due else ("確かめていない", "", False)
+        if not need and not stale:
             return done("replaced" if replaced else "ok", (f"別のフォルダのコピー({', '.join(map(str, replaced))})を止めました。" if replaced else "") + f"導入先のコピーが動いています(最新かの確認: {state})", quiet=not replaced)
-        # 起動し直す: 更新を当てた、または古い版が動いている。先に終了を頼み、終わったのを確かめてから起動する(終了を断られたまま起動し直しを始めると、
-        # 起動し直しが番号を取れずにファイルを前の版へ戻し、画面は古い版のまま記録だけ「更新した」になる。F2)
         st["replaced_at"].append(now)  # 起動し直しも繰り返しの上限(1時間3回)に数える
-        what = f"更新を当てた(ファイル {len(files)}個)" if files else f"古い版({main.get('version')})が動いていた(ディスクの版 {want})"
+        what = "新しい版を当てる" if need else f"古い版({main.get('version')})が動いていた(ディスクの版 {want})"
         if not quit_idle(port) or not wait_free(port, 15):
-            return done("failed", f"導入先の{what}ので起動し直そうとしましたが、動いている画面が終了に応じませんでした。起動し直していません(次の回にもう一度試します)")
+            return done("failed", f"導入先の{what}ため起動し直そうとしましたが、動いている画面が終了に応じませんでした(作業中の可能性)。ファイルは書き換えず、起動し直していません(次の回にもう一度試します)")
+        state, files, backup, _rv = apply_update(here) if need else ("確かめていない", [], None, "")
+        rver = _rv or rver  # 当てられなかったとき apply_update は版を返さない。確かめたときの公開側の版を使う(保留の鍵)
+        apply_miss = need and not files
+        if apply_miss:
+            what = f"新しい版を当てようとしました({state})が当てられなかった"
+            af = prev.get("apply_failed") if isinstance(prev.get("apply_failed"), dict) else {}
+            st["apply_failed"] = {"version": rver, "count": (int(af.get("count", 0) or 0) + 1) if af.get("version") == rver else 1, "last": now}
+        elif files:
+            st["apply_failed"] = {}
         want = ports.disk_version(here)
         if files:
             import updater  # 立ち上がらなければ、起動し直しの小さなプログラムが前の版へ戻し、戻した版を記録する(版を渡す。渡さないと記録されず繰り返す)
             updater.relaunch(port, backup, version=rver)
-            ok = wait_version(port, here, want, VERSION_WAIT)
+            vw = version_wait()
+            ok = wait_version(port, here, want, vw)
         else:
+            vw = 30
             ok = start_app(here, port) and wait_version(port, here, want, 30)
+        if ok and apply_miss:  # 画面は戻したが、更新は当たっていない。成功と書かない(R27)
+            n = st["apply_failed"]["count"]
+            return done("failed", f"更新が当たりません(目標の版 {rver or '不明'}・今の版 {want}・{state})。画面は今の版で起動し直しました。"
+                        + (f"同じ版で{n}回続いたため、{ROLLBACK_HOLD // 3600}時間は当て直しません" if n >= APPLY_FAIL_MAX else f"同じ版で{n}回目です。次の確認でもう一度試します"))
         if ok:
-            return done("updated" if files else "restarted", f"導入先の{what}ので起動し直し、新しい版({want})が応答しました")
+            return done("updated" if files else "restarted", f"導入先の{what}ため起動し直し、新しい版({want})が応答しました")
         j = ports.job(port, timeout=WHOAMI_TIMEOUT)
         now_v = (j or {}).get("version") or "応答なし"
-        return done("failed", f"導入先の{what}ので起動し直しを試みましたが、{VERSION_WAIT if files else 30}秒待っても新しい版({want})が応答しませんでした(今の応答: {now_v})。"
+        return done("failed", f"導入先の{what}ため起動し直しを試みましたが、{vw if files else 30}秒待っても新しい版({want})が応答しませんでした(今の応答: {now_v})。"
                     + ("更新は前の版へ戻されます。同じ版は24時間当て直しません。" if files else "") + "出力/app_起動ログ.txt の末尾を担当者に送ってください")
+    state, files, backup, rver = apply_update(here) if (upd_due or replaced or not ours) else ("確かめていない", [], None, "")
     if start_app(here, port):
         what = f"別のフォルダのコピー({', '.join(map(str, replaced))})を止めて、" if replaced else ""
         return done("replaced" if replaced else "started", f"{what}導入先のコピーを起動しました(最新かの確認: {state}{'・更新したファイル ' + str(len(files)) + '個' if files else ''})")

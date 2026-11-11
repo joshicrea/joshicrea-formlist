@@ -28,7 +28,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 DEV_MARK = "開発版_自動更新しない.txt"
-ITEMS = ("sender.json", "message_adoptions.json", "計測キー.txt")  # 設定のファイル
+ITEMS = ("sender.json", "message_adoptions.json", "計測キー.txt", "AI設定.json")  # 設定のファイル(AI設定.json は使う AI の選択。ai_engine.py)
 DIRS = ("文面",)  # 設定のフォルダ(中のパターンも含め、ファイル単位で写す)
 RECORD = "移行の記録.json"
 MARKER = ".移行済み.json"  # 移行を済ませたコピー(フォルダ)の一覧
@@ -129,6 +129,72 @@ def migrate(here, root, now=None):
         return res
 
 
+STASH = "衝突の控え"
+
+
+def _stash(root, src, relp, label, now=None):
+    """衝突で読まれない側の内容を、置き場/衝突の控え/<日時>_<由来>/<相対パス> に残す(上書きで失わない)。返す: 残した場所"""
+    import re
+    stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(now))
+    label = re.sub(r'[\\/:*?"<>|#]', "_", label)[:60]
+    to = Path(root) / STASH / f"{stamp}_{label}" / relp
+    to.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, to)
+    return to
+
+
+CONFLICTS = "衝突の状態.json"  # 移行で内容が違った設定の一覧。画面を出す側(どのコピーでも)が起動のたびに読んで警告の帯を出す(破壊検証3回目 R28)
+
+
+def _save_conflicts(root, here, detail, now=None):
+    """移行の衝突を置き場のファイルに残す(移行したプロセスの中だけで終わらせない)。同じファイルの前の記録は新しい記録で置き換える"""
+    p = Path(root) / CONFLICTS
+    try:
+        cur = json.loads(p.read_text(encoding="utf-8"))
+        cur = cur if isinstance(cur, dict) else {}
+    except (OSError, ValueError):
+        cur = {}
+    for x in detail:
+        f = Path(root) / x["file"]
+        try:
+            sha = _sha(f) if f.is_file() else ""
+        except OSError:
+            sha = ""
+        winner = str(here) if "このコピー" in x.get("reading", "") else "置き場にあった内容"
+        cur[x["file"]] = dict(x, winner=winner, root_sha=sha, at=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)), copy=str(here))
+    try:
+        p.write_text(json.dumps(cur, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def read_conflicts(root):
+    """まだ解消していない衝突の一覧(読むだけ・書かない)。解消とみなすもの: 控えのファイルが消された / 置き場の内容が控えと同じになった(控えを採用した)
+    / 置き場の内容が記録した後に変わった(本人が直した)。返す: [{file, reading, other, decided, winner, ...}]"""
+    try:
+        cur = json.loads((Path(root) / CONFLICTS).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    out = []
+    for rel, x in (cur.items() if isinstance(cur, dict) else []):
+        if not isinstance(x, dict):
+            continue
+        f, other = Path(root) / rel, Path(x.get("other") or "")
+        try:
+            now_sha = _sha(f) if f.is_file() else ""
+        except OSError:
+            now_sha = ""
+        if now_sha != x.get("root_sha", ""):
+            continue  # 置き場の内容が変わった(本人が直した・選んだ)
+        if x.get("other"):
+            if not other.is_file():
+                continue  # 控えを消した
+            if now_sha and _same(f, other):
+                continue  # 控えと同じ内容になった
+        out.append(dict(x, file=rel))
+    return out
+
+
 def _pending_path(root, here):
     import hashlib
     return Path(root) / PENDING.format(hashlib.sha1(_norm(here).encode("utf-8")).hexdigest()[:12])
@@ -192,7 +258,11 @@ def _migrate_locked(here, root, res, now):
             continue
         d = root / relp
         try:
-            if d.is_file() and _sha(d) == sha:
+            if d.is_file() and _sha(d) == sha and any(_norm(x) != _norm(here) for x in done):
+                # 別のコピーが移行を済ませている: 同じ内容をそのコピーが頼っているかもしれないので消さない(破壊検証2回目 N4)。残したことを見せる
+                res.setdefault("conflict_detail", []).append(
+                    {"file": relp, "reading": "置き場の内容(このコピーでは消したが、別のコピーが移行済みのため残した)", "other": str(here / relp), "decided": "決めていない"})
+            elif d.is_file() and _sha(d) == sha:
                 d.unlink()
                 res["copied"].append(f"{relp}(本体で消えたので置き場からも消した)")
             pending.pop(relp)
@@ -219,7 +289,29 @@ def _migrate_locked(here, root, res, now):
                 os.replace(tmp, d)
                 res["copied"].append(relp)
             elif not _same(s, d):
-                res["conflicts"].append(relp)
+                # 衝突: 更新日時が新しい側を置き場の正にする(場所や起動の順では決めない。2026-11-10 破壊検証2回目 N1)。
+                # 負けた側は上書きで失わず、置き場の 衝突の控え/ に由来つきで残す。元のフォルダのファイルは消さない
+                ms, md = s.stat().st_mtime, d.stat().st_mtime
+                if ms > md + STALE_SECONDS:
+                    keep = _stash(root, d, relp, "置き場にあった", now)
+                    tmp = d.with_name(f"{d.name}.移行中.{os.getpid()}.{uuid.uuid4().hex[:8]}")
+                    shutil.copy2(s, tmp)
+                    sha = _sha(s)
+                    if _sha(tmp) != sha:
+                        tmp.unlink()
+                        raise OSError("複製の中身が元と一致しない")
+                    pending[relp] = sha
+                    save_pending()
+                    os.replace(tmp, d)
+                    res["copied"].append(relp)
+                    res.setdefault("conflict_detail", []).append(
+                        {"file": relp, "reading": f"このコピー({here})の内容(更新日時が新しい)", "other": str(keep), "decided": "新しい方"})
+                else:
+                    keep = _stash(root, s, relp, f"コピー_{here.parent.name}_{here.name}", now)
+                    res["conflicts"].append(relp)
+                    res.setdefault("conflict_detail", []).append(
+                        {"file": relp, "reading": "置き場の内容" + ("(更新日時が新しい)" if md > ms + STALE_SECONDS else "(更新日時で決められないので、先に置き場へ入った方のまま)"),
+                         "other": str(keep), "decided": "新しい方" if md > ms + STALE_SECONDS else "決めていない"})
         except OSError as e:
             res["errors"].append(f"{relp}: {type(e).__name__}")
     # 照合: 元の全ファイルが、置き場に同じ中身であるか(衝突として残したものを除く)。1件でも欠けていれば移行済みにしない(R2)
@@ -254,6 +346,8 @@ def _migrate_locked(here, root, res, now):
                 pend_path.unlink()  # 済んだので、写しかけの記録は要らない(以後は置き場が正)
         except OSError as e:
             res["errors"].append(f"{MARKER}: {type(e).__name__}")
+    if res.get("conflict_detail"):
+        _save_conflicts(root, here, res["conflict_detail"], now)
     if res["copied"] or res["conflicts"] or res["errors"]:
         rec_path = root / RECORD
         try:
@@ -299,18 +393,15 @@ def setup(here=None, environ=None):
     r["here"] = here
     r["migration"] = {"copied": [], "conflicts": [], "errors": []}
     if r["relocated"]:
-        inst = _installed_first(here, environ)
-        if inst:
-            # 導入先のコピー(正規の最新版。MCP も画面も以後はここを使う)の設定を先に写す。古いコピーを先にダブルクリックしても、
-            # 古い設定が置き場を先取りしない(2026-11-10 破壊検証 W1/E4)。導入先が同じ名前で持つものは、後から写すコピーでは「衝突」になる
-            mi = migrate(inst, r["root"])
-            r["migration_installed"] = {"from": str(inst), **mi}
-            r["migration"]["errors"] += [f"導入先 {e}" for e in mi["errors"]]
+        # 導入先を先に写す方式(73bf3ad7)はやめた: 場所で勝ちを決めると、古い導入先が新しい編集に勝つ(破壊検証2回目 N1)。
+        # 衝突は更新日時の新しい側が勝つので、起動の順に依らない。試験で本物の導入先を読みにいく経路(N2)も無くなる
         mh = migrate(here, r["root"])
         for k in ("copied", "conflicts", "errors"):
             r["migration"][k] += mh.get(k, [])
         if "checked" in mh:
             r["migration"]["checked"] = mh["checked"]
+        if mh.get("conflict_detail"):
+            r["migration"]["conflict_detail"] = mh["conflict_detail"]
     if r["relocated"] and r["migration"]["errors"] and _has_settings(here):
         # 複製か照合が1件でも失敗したら、読み先を切り替えない。元(本体のフォルダ)を読み続け、次の起動でやり直す(R2)。
         # 本体のフォルダに設定が無い(新規の導入)ときは、失うものが無いので置き場のまま
@@ -332,28 +423,6 @@ def setup(here=None, environ=None):
             # 送る処理などの子プロセスが、親と同じ置き場を使う(子は setup() を通らず root() で自分で決めるため)
             os.environ.update(FORMLIST_SETTINGS_DIR=str(r["root"]))  # 自分の変数への書き込み(外部資産への依存ではない)
     return r
-
-
-def _installed_first(here, environ=None):
-    """先に写す導入先のフォルダ。対象外なら None。
-    対象: 置き場が利用者領域(環境変数で指定されていない)か、導入先が環境変数 FORMLIST_INSTALL_DIR で明示されている(試験)。
-    導入先がこのフォルダ自身・無い・壊れている(必須ファイルの欠け)ときは対象外"""
-    env = os.environ if environ is None else environ
-    if not env.get("FORMLIST_INSTALL_DIR") and (environ is not None or os.environ.get("PYTEST_CURRENT_TEST")):
-        # 環境を渡した呼び出し(試験)と試験の実行中は、導入先が明示されたときだけ。既定の導入先(このPCの本物の設定)を試験の置き場へ写さない
-        # (2026-11-10 実装中に1回起きた: 試験の一時フォルダへこのPCの導入先の送信元が写った。一時フォルダは削除済み)
-        return None
-    forced = env.get("FORMLIST_SETTINGS_DIR")
-    if forced and _norm(forced) != _norm(_user_root(env)) and not env.get("FORMLIST_INSTALL_DIR"):
-        return None  # 試験・運用者が別の置き場を指定した: その環境の実際の導入先(本物の設定)を読みにいかない
-    try:
-        import ports
-        inst = ports.installed_dir(env)
-        if not inst.is_dir() or _norm(inst) == _norm(here) or ports.install_broken(inst):
-            return None
-        return inst
-    except Exception:
-        return None
 
 
 def root():

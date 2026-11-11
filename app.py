@@ -41,6 +41,8 @@ import settings_dir
 import settings_guard
 import state
 import updater
+import ai_engine
+import muse_link
 from ng_state_store import NgStateStore
 
 HERE = Path(__file__).resolve().parent
@@ -58,7 +60,8 @@ assert 8780 <= PORT <= 8790, PORT
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 PY = sys.executable[:-len("pythonw.exe")] + "python.exe" if sys.executable.lower().endswith("pythonw.exe") else sys.executable
 JOB = {"lines": [], "running": False, "name": ""}
-SJOB = {"lines": [], "running": False, "name": ""}  # 「探す」専用の枠。送る系(確認・本番送信・手入力)と同時に動かせる(2026-10-30 運用者の指示「ほかの処理が動いていても同時に動くように」)
+SJOB = {"lines": [], "running": False, "name": ""}
+HUMAN = {"asking": 0, "last_action": 0.0}  # 人の操作中の印(承認の窓を出している数・最後の書き込みの時刻)。whoami で見張りに渡す  # 「探す」専用の枠。送る系(確認・本番送信・手入力)と同時に動かせる(2026-10-30 運用者の指示「ほかの処理が動いていても同時に動くように」)
 OPENER_COL = "書き出しの作り方"  # リストの列。画面はこの値だけを見て「どう作った書き出しか」を言う(作り方と説明を一致させる)
 BASIS_COL, BASIS_URL_COL, BASIS_WHY_COL = "書き出しの根拠", "根拠URL", "根拠が拾えなかった理由"  # リストの列。根拠の文・取得元・拾えなかった理由(人が後から確かめられるように残す)
 OPENER_SOURCES = {"philosophy": "ホームページの特徴と文面の提案から作った下書き",
@@ -129,6 +132,9 @@ def installed_dir(environ=None):
 def launch_target(here=None, environ=None):
     """起動の入口がどのコピーを起動するか: (導入先 or None, 理由)。定義は ports.launch_target(install.ps1 -Open も同じ関数を呼ぶ R26)"""
     return ports.launch_target(here or HERE, environ)
+
+
+EXIT_SHOWN = 10  # 起動を自分で止め、理由を表示した(作業中の別コピー・別のアプリが番号を使っている)。振り向けた側は、この終了コードのときだけ黙って終わる
 
 
 def launch_notice(msg, show=True):
@@ -1069,7 +1075,29 @@ def support_report(symptom=""):
             parts.append(f"利用の確認: {lic.get('state')}（{lic.get('reason') or 'なし'}）。")
     except Exception:
         pass
+    try:
+        eng = ai_engine.engine()
+        parts.append("使う AI: " + ("Muse" if eng == "muse" else "Claude Code") + (f"（接続: {muse_link.status()['state']}）" if eng == "muse" else "") + "。")
+    except Exception:
+        pass
     return report_text("困りごと", "".join(parts) or "症状は画面で確かめます。")
+
+
+def ai_engine_view():
+    """画面の「使う AI を選ぶ」が読む状態: 選択(読めなければ claude_code と理由)と Muse との接続状態。キーの値は含めない"""
+    return dict(ai_engine.load(), muse=muse_link.status(), link_here=muse_link_owner())
+
+
+def muse_link_owner():
+    """Muse との接続を持つのは入口の番号(と開発用)の画面サーバーだけ(同じ導入から接続を何本も張らない)"""
+    return PORT == ports.MAIN or IS_DEV
+
+
+def muse_link_apply():
+    """AI設定の保存の直後と起動時に呼ぶ。muse なら接続を始め(つなぎ直し)、claude_code なら閉じる。claude_code の間は外向きの通信をしない"""
+    if not muse_link_owner():
+        return None
+    return muse_link.apply(PORT, TOKEN, VERSION, proposal_links.read_key, license_check.install_id)
 
 
 def bug_cfg():
@@ -1634,7 +1662,11 @@ class H(BaseHTTPRequestHandler):
             d = handoff_take(q.get("id"))
             return self.send(200, {"req": d} if d else {"req": None})
         if u.path == "/api/whoami":
-            return self.send(200, {"tool": "formlist", "here": str(HERE), "version": VERSION, "build": BUILD, "port": PORT, "dev": IS_DEV, "running": JOB["running"] or SJOB["running"], "name": JOB["name"] if JOB["running"] else SJOB["name"], "cond": SEARCH_COND.get("key", "") if SJOB["running"] else "", "watch": watch_status()})
+            return self.send(200, {"tool": "formlist", "here": str(HERE), "version": VERSION, "build": BUILD, "port": PORT, "dev": IS_DEV, "running": JOB["running"] or SJOB["running"], "name": JOB["name"] if JOB["running"] else SJOB["name"], "cond": SEARCH_COND.get("key", "") if SJOB["running"] else "", "watch": watch_status(),
+                                   "asking": HUMAN["asking"] > 0, "last_action_age": (round(time.monotonic() - HUMAN["last_action"]) if HUMAN["last_action"] else None),
+                                   "engine": ai_engine.engine(), "muse": {k: muse_link.status()[k] for k in ("state", "message", "last_ok_at")}})  # 使う AI と Muse の接続状態(キーの値は含めない)
+        if u.path == "/api/ai_engine":  # 使う AI の設定(読み取り)。読めないときは claude_code と理由(note)を返す
+            return self.send(200, ai_engine_view())
         if u.path == "/api/summary":
             # この画面(番号)の、最後の探索の内訳(段階別の件数・結果・理由)。画面の「結果を見る」が読む
             try:
@@ -1750,6 +1782,10 @@ class H(BaseHTTPRequestHandler):
     def _post(self):
         if not self.guard(True):
             return
+        if self.path != "/api/quit":  # 合言葉を通った画面・MCP からの書き込み(保存・開始・入力中の知らせ)の時刻。見張りは直近の操作中なら止めない(N3・R30)
+            HUMAN["last_action"] = time.monotonic()  # 時計の巻き戻しに影響されない時計で測る(R28)
+        if self.path == "/api/touch":  # 入力欄で入力している(保存前)ことの知らせ(R29)
+            return self.send(200, {"ok": True})
         ng_store = _NG_STORE
         if not self.headers.get("Content-Type", "").startswith("application/json"):
             return self.send(415, {"error": "json only"})
@@ -1773,6 +1809,15 @@ class H(BaseHTTPRequestHandler):
             if JOB["name"] == "確認":  # E-18
                 return self.send(409, {"error": "送る内容を出している間は変えられません。数秒で終わります"})
             return self.send(409, {"error": "いま送っている最中は、送信元・文面・送らない会社・書き出しを変えられません。送り終わってから変えます"})
+        if self.path == "/api/ai_engine":  # 使う AI の切り替え。送信元・文面・履歴には触れない。保存の直後に Muse との接続を始める/閉じる
+            if not self.from_browser_screen():  # 承認と同じ: 人が開いた画面からだけ受ける(合言葉を持つ手元の AI・MCP からは切り替えられない)
+                return self.send(403, {"error": "使う AI の切り替えは、ツールの画面（ブラウザ）で選んでください"})
+            try:
+                kept = ai_engine.save(d.get("engine"))
+            except ValueError:
+                return self.send(400, {"error": "使う AI は「Claude Code」か「Muse」から選びます"})
+            muse_link_apply()
+            return self.send(200, dict(ai_engine_view(), kept=bool(kept)))
         if self.path in ("/api/bug_report", "/api/bug_report/delete"):  # 不具合の提出と、本人の削除依頼(台帳サーバーへ。許可キー・版は自動で付く)
             try:
                 if self.path == "/api/bug_report":
@@ -1908,6 +1953,8 @@ class H(BaseHTTPRequestHandler):
             if (JOB["running"] and JOB["name"] == "本番送信") or (d.get("if_idle") and (JOB["running"] or SJOB["running"])):
                 _busy = JOB if JOB["running"] else SJOB
                 return self.send(409, {"error": f"「{_busy['name']}」の最中は終了できません。終わってから押してください"})
+            if d.get("if_idle") and HUMAN["asking"]:  # 送信承認の窓を出している間は、自動の終了(見張り・入れ替え)に応じない
+                return self.send(409, {"error": "送信の承認の窓を出している間は終了できません"})
             for _j in (JOB, SJOB):
                 if _j.get("proc"):
                     _j["proc"].terminate()
@@ -2028,7 +2075,13 @@ class H(BaseHTTPRequestHandler):
             if PREVIEW.get("channel") == "mail":
                 body = re.sub(r"送信元のメール: [^\n]*\n", lambda _m: "実際の送信元(SMTP): " + str(PREVIEW.get("from") or "") + "\n", body)
                 body = re.sub(r"入力がうまくいかなかったフォームは[^\n]*\n", "", body)
-            if not approval.ask_human("AIまるなげ営業 本番送信の承認", body):
+            HUMAN["asking"] += 1  # 承認の窓を出している間は、見張りが止めない(whoami の asking)
+            try:
+                _ok = approval.ask_human("AIまるなげ営業 本番送信の承認", body)
+            finally:
+                HUMAN["asking"] -= 1
+                HUMAN["last_action"] = time.monotonic()
+            if not _ok:
                 APPROVED["key"] = None
                 return self.send(200, {"ok": False, "declined": True, "message": "送りませんでした(確認で「いいえ」を押したため)"})  # E-16
             if PREVIEW["key"] != key_now:  # ダイアログの間に確認が変わった
@@ -2524,6 +2577,7 @@ if __name__ == "__main__":
     cap_log(OUT / "app_起動ログ.txt")  # 起動のたびに増える記録に上限を置く
     cap_log(OUT / SUPPORT_NAME, 300_000, 100_000)
     _target, _why = launch_target()
+    _err_start = 0
     if _why:  # 振り向けなかった理由(導入先が壊れている・古い案内の FORMLIST_PORT が入っている)を、黙らずに出す
         launch_notice(_why, show=not NO_BROWSER and not os.environ.get("FORMLIST_NO_BROWSER"))
     if _target is not None:  # 導入先のコピーを起動する(古いフォルダ・別の場所のコピーから起動されても、動くのは導入先の1つ)
@@ -2533,12 +2587,17 @@ if __name__ == "__main__":
         _errf = _target / "出力" / "起動エラー_振り向け.txt"
         try:
             _errf.parent.mkdir(parents=True, exist_ok=True)
-            _ef0 = open(_errf, "wb")
+            _ef0 = open(_errf, "ab")  # 追記: 前の振り向けで常駐中の導入先が同じファイルに書いた原文を消さない(破壊検証4回目 2-3)
+            if _errf.stat().st_size > 200_000:
+                _ef0.close()
+                _ef0 = open(_errf, "wb")  # 大きくなりすぎたら空にしてから書く(常駐中の導入先の原文は失う。上限の代わり)
         except OSError:
             import tempfile
             _errf = Path(tempfile.gettempdir()) / f"formlist_起動エラー_振り向け_{os.getpid()}.txt"
-            _ef0 = open(_errf, "wb")
+            _ef0 = open(_errf, "ab")
         try:
+            _ef0.seek(0, 2)
+            _err_start = _ef0.tell()  # 今回の起動の原文はここから(前の原文の Traceback を今回のものと読まない)
             with _ef0 as _ef:
                 _proc = subprocess.Popen([_pythonw()] + _args, cwd=_target, env=dict(os.environ, PYTHONIOENCODING="utf-8"),
                                          stdin=subprocess.DEVNULL, stdout=_ef, stderr=_ef, creationflags=NO_WINDOW,
@@ -2568,7 +2627,7 @@ if __name__ == "__main__":
                 sys.exit(0)
             _rc = _proc.poll()
             try:
-                _err = _errf.read_bytes().decode("utf-8", "replace")
+                _err = _errf.read_bytes()[_err_start:].decode("utf-8", "replace")
             except OSError:
                 _err = ""
             # 応答が無いときの分け方(2026-11-10 破壊検証 3-1)。導入先は、別のコピーが作業中なら自分で理由(作業中のため止めていません)を出して
@@ -2579,11 +2638,13 @@ if __name__ == "__main__":
             if _rc == 0:
                 launch_notice(f"導入先のコピー({_target})が理由を残して終了しました。このフォルダ({HERE})では起動しません", show=False)
                 sys.exit(0)
-            if "Traceback" not in _err:  # 落ちたのではなく、導入先が自分で理由を表示して止まった(作業中・別のアプリ等)
+            if _rc == EXIT_SHOWN:  # 導入先が自分で理由を表示して止まった(作業中・別のアプリ)ことを、導入先の側が終了コードで示したときだけ黙る
                 launch_notice(f"導入先のコピー({_target})が理由を表示して止まりました(終了コード {_rc})。このフォルダ({HERE})では起動しません", show=False)
-                sys.exit(1)
-            _tail = _err.strip().splitlines()[-1:]
-            launch_notice(f"導入先のコピー({_target})が起動の途中で終了しました({_tail[0] if _tail else '原文なし'})。"
+                sys.exit(EXIT_SHOWN)
+            # それ以外の終わり方は、Traceback の有無を問わず落ちたとみなし、このフォルダで起動する(強制終了・Fatal Python error は Traceback を残さない。
+            # 分からないときに黙る側へ倒さない。2026-11-10 破壊検証4回目 2-1)
+            _tail = [x for x in _err.strip().splitlines() if x.strip()][-1:]
+            launch_notice(f"導入先のコピー({_target})が起動の途中で終了しました(終了コード {_rc}{'・' + _tail[0] if _tail else '・原文なし'})。"
                           f"このフォルダ({HERE})で起動します。導入の1行をもう一度実行すると直ります", show=not NO_BROWSER)
     import socket
     with socket.socket() as s:
@@ -2612,11 +2673,11 @@ if __name__ == "__main__":
                                   show=not NO_BROWSER)
                     if not NO_BROWSER:
                         webbrowser.open(f"http://127.0.0.1:{PORT}/")  # 作業中の画面を開く(そのコピーが今回の版以降なら、画面の隅に版とフォルダが出る。古い版には隅の表示が無い)
-                    sys.exit(1)
+                    sys.exit(EXIT_SHOWN)
             if st == "foreign":
                 launch_notice(f"{PORT}番は、このツールではない別のアプリ(または応答しない古い版のこのツール)が使っています。止めていません。"
                               "使っていないアプリを閉じてから、もう一度起動してください", show=not NO_BROWSER)
-                sys.exit(1)
+                sys.exit(EXIT_SHOWN)
             if st == "ours":
                 if not NO_BROWSER:  # MCP やログイン時の自動起動のときは画面を開かない
                     webbrowser.open(f"http://127.0.0.1:{PORT}/")  # すでに動いている。新しく起動せず、画面だけ開く
@@ -2628,6 +2689,7 @@ if __name__ == "__main__":
         print("送らない会社の引っ越しに失敗しました。本番の送信は止まります:", NG_MIGRATION["error"])
     threading.Thread(target=ensure_watchdog_task, daemon=True).start()  # 見張りの登録の自己修復(R4)
     license_check.start_background(VERSION)  # 起動時と24時間ごとに利用許可を照合する(失敗してもツールは止めない)
+    muse_link_apply()  # AI設定が muse のときだけ Muse との外向き接続を始める(既定の claude_code では何もしない)
     threading.Thread(target=auto_update_loop, daemon=True).start()  # 画面を開かなくても、起動時と6時間ごとに最新の版へ追従する
     srv = Srv(("127.0.0.1", PORT), H)
     restore_interrupted()  # 番号が空いていて、自分がサーバーになると決まった後にだけ戻す(使用中の起動で、動いている送信の記録を消さない)

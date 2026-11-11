@@ -226,11 +226,12 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
   <details class="dt" id="condMore"><summary>くわしい条件</summary><div><label class="check"><input type="checkbox" id="supp"><span>検索で見つけたホームページの会社にも送る<span class="hint d">別の会社のページを拾っていることがあります。結果を見るで開いて確かめてから入れます。</span></span></label></div></details>
   <details class="dt" id="aiSend" hidden><summary>AI（Claude）に送ってもらうとき</summary><div>AIは承認を押せません。上の文を読んで、読みましたにチェックを入れてから、下のボタンを押します。画面の外に確認が出たら、内容を読んで「はい」を押します。それから AI に、送って、と伝えます。承認は1回の送信で使い切ります。<br><button class="btn sub" id="approve" type="button">この内容で送ることを承認する</button><p class="hint" id="aiNote"></p></div></details>
  </div>
+ <details class="dt" id="engineBox"><summary>使う AI を選ぶ</summary><div><label class="check"><input type="radio" name="engine" value="claude_code"><span>Claude Code（このパソコンの AI）<span class="hint d">このパソコンの Claude Code に頼みます。いままでどおりの使い方です。</span></span></label><label class="check"><input type="radio" name="engine" value="muse"><span>Muse（インターネットの先の AI）<span class="hint d">自分の Muse の契約で使います。このパソコンの Claude Code が止まっていても使えます。</span></span></label><div id="museRow" hidden><p class="hint" id="museState" role="status"></p><button class="btn sub sm" id="museRetry" type="button">つなぎ直す</button></div><p class="hint" id="engineNote" role="status"></p></div></details>
  <details class="dt" id="supLog"><summary>くわしい記録（サポート用）</summary><pre id="log2">まだ何も動いていません</pre></details>
 </section>
 <section id="d"><div class="now" id="now_d"></div><div class="card"><div class="toolbar"><h2 style="flex:1">送信の記録</h2><button class="btn sub sm" id="reload" type="button">更新</button></div><div class="sum" id="hsum"></div><p class="hint" id="hsent" style="margin:8px 0 0"></p><p class="hint" id="hfnote"></p><div id="manualst_d" role="status" aria-live="polite" hidden style="margin:8px 0;padding:10px 12px;border:1px solid var(--ac);border-radius:6px;font-size:15px;line-height:1.6;white-space:pre-line"></div><div class="manAsk edit" hidden><b class="manAskName"></b> のフォームから、送りましたか。 <button class="btn sm manYes" type="button">送りました</button> <button class="btn sub sm manNo" type="button">送っていません</button></div><div class="tw"><table class="rt" id="hist"></table></div></div></section>
 </main>
-<div class="wrap"><details class="dt" id="supBox" style="margin-bottom:32px"><summary>サポート用（再起動・終了・版）</summary><div><p class="hint" style="margin:6px 0">再起動と終了は、担当者から言われたときだけ使います。不具合の連絡は、下の「不具合を送る」から出します。</p><button type="button" id="restart" class="btn sub sm">再起動する</button> <button type="button" id="quit" class="btn sub sm">ツールを終了する</button> <button type="button" id="supCopy" class="btn sub sm">担当者に送る文をコピー</button> <span class="hint" id="supNote" role="status"></span><p id="ver" style="color:var(--mut);font-size:14px;margin:8px 0 0"></p></div></details>
+<div class="wrap"><details class="dt" id="supBox" style="margin-bottom:32px"><summary>サポート用（再起動・終了・版）</summary><div><p class="hint" style="margin:6px 0">再起動と終了は、担当者から言われたときだけ使います。不具合の連絡は、下の「不具合を送る」から出します。</p><button type="button" id="restart" class="btn sub sm">再起動する</button> <button type="button" id="quit" class="btn sub sm">ツールを終了する</button> <button type="button" id="supCopy" class="btn sub sm">担当者に送る文をコピー</button> <span class="hint" id="supNote" role="status"></span><p id="ver" style="color:var(--mut);font-size:14px;margin:8px 0 0"></p><p id="engSum" style="color:var(--mut);font-size:14px;margin:4px 0 0"></p></div></details>
 <details class="dt" id="bugBox" style="margin-bottom:32px"><summary>不具合を送る</summary><div><p class="hint" style="margin:6px 0">うまく動かないときに、ここから開発者へ届けます。受付番号つきのメールが届き、直って公開されたら完了のメールが届きます。許可キーと版は自動で付くので、入れる必要はありません。</p>
 <p style="margin:6px 0">版 <span id="bugVer"></span>・許可キー <span id="bugKey"></span></p>
 <p style="margin:6px 0"><label>件名(60字まで・必須)<br><input type="text" id="bugSummary" maxlength="60" style="width:100%"></label></p>
@@ -719,6 +720,7 @@ let HISTN=0;
 const refreshHist=async()=>{const r=await post('/api/history_status',collectSearch());const el=$('#resumeStatus');if(!el)return;if(r.error){el.textContent='';HISTN=0;return}HISTN=r.state=='match'?(r.checked||0):0;el.textContent=r.text||''};
 let histTimer=null;const histLater=()=>{clearTimeout(histTimer);histTimer=setTimeout(refreshHist,500)};
 document.addEventListener('input',e=>{if(e.target.closest&&e.target.closest('#area,#kw,#inds,#srcs'))histLater()});
+let TOUCHED=0;document.addEventListener('input',()=>{const n=Date.now();if(n-TOUCHED<30000)return;TOUCHED=n;fetch('/api/touch',{method:'POST',headers:{'X-Token':TOKEN,'Content-Type':'application/json'},body:'{}'}).catch(()=>{})});/* 入力中(保存前)も操作中として見張りに伝える。30秒に1回まで(破壊検証3回目 R29) */
 document.addEventListener('change',e=>{if(e.target.closest&&e.target.closest('#area,#kw,#inds,#srcs,#resumeChoice'))histLater()});
 const startSearch=async d=>{if(d.restart_search&&HISTN&&!confirm('「最初からやり直す」を選んでいます。前回までに調べた'+HISTN+'社も、もう一度調べます。よろしいですか'))return;const r=await post('/api/search',d);if(r.error)return alert(r.error);if(r.peer)return openPeer(r.peer);if(!r.started)return alert('この画面では、ほかの処理が動いています。少し待ってから、もう一度押してください');wasRun=true;poll()};
 $('#go').onclick=()=>startSearch(collectSearch());
@@ -820,6 +822,19 @@ function b_msg_reset(){const b=$('#lic');if(b)b.dataset.msg=''}
 async function copyText(t,note){let ok=false;try{await navigator.clipboard.writeText(t);ok=true}catch(e){const ta=document.createElement('textarea');ta.value=t;document.body.appendChild(ta);ta.select();try{ok=document.execCommand('copy')}catch(e2){}ta.remove()}
  note.textContent=ok?'コピーしました。担当者への連絡に貼り付けます（鍵の値は入っていません）。':'コピーできませんでした。次の文を選んで担当者へ送ります: '+t}
 async function licCopy(){copyText(LIC.report||'AIまるなげ営業の利用の確認ができません。',$('#licNote'))}
+let ENGINE_T=null;
+function showEngine(r){if(!r||r.error){$('#engineNote').textContent=(r&&r.error)||'AI の設定を読めませんでした';return}
+ const muse=r.engine=='muse',m=r.muse||{},name=muse?'Muse':'Claude Code';
+ document.querySelectorAll('input[name=engine]').forEach(e=>e.checked=e.value==r.engine);
+ $('#engineNote').textContent=r.note||'';
+ $('#museRow').hidden=!muse;$('#museState').textContent=muse?(m.message||'つなぎ直しています'):'';
+ $('#aiOpenHint').textContent='書き出しは、'+name+' に頼むと書き直せます。書き直した書き出しは、送る内容の一覧で読んで直せます。';
+ $('#engSum').textContent='使う AI: '+name+(muse&&m.message?'（'+m.message+'）':'');
+ clearTimeout(ENGINE_T);if(muse)ENGINE_T=setTimeout(loadEngine,15000)}
+async function loadEngine(){showEngine(await J('/api/ai_engine'))}
+document.querySelectorAll('input[name=engine]').forEach(e=>e.onchange=async()=>{$('#engineNote').textContent='保存しています';showEngine(await post('/api/ai_engine',{engine:e.value}))});
+$('#museRetry').onclick=async()=>{$('#museState').textContent='つなぎ直しています';showEngine(await post('/api/ai_engine',{engine:'muse'}))};
+loadEngine();
 $('#supCopy').onclick=async()=>{const r=await J('/api/support_report');copyText((r&&r.report)||'AIまるなげ営業の困りごとについて。版 '+($('#ver').textContent||'')+'。',$('#supNote'))};
 $('#bugBox').addEventListener('toggle',async()=>{if(!$('#bugBox').open)return;const r=await J('/api/bug_report/info');if(r&&!r.error){$('#bugVer').textContent=r.version||'';$('#bugKey').textContent=r.key_set?'設定済み':'未設定(設定の「計測キー」に入れます)'}});
 $('#bugSend').onclick=async()=>{const n=$('#bugNote');n.textContent='送っています。';$('#bugSend').disabled=true;
