@@ -541,6 +541,11 @@ def outputs():
     return [p.name for p in sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)]
 
 
+def autosend_adoption_error():
+    import message_adoption
+    return message_adoption.AdoptionError
+
+
 def sample_rows_for(rows, industry):
     """見本に使う会社の候補(送るリストの行)。実際に送るとき(autosend.pick_message_source)と同じく、
     業種は新しい分類の名前にそろえて(canonical)比べる。古い業種名で入ったリストでも、その業種の会社が当たる。
@@ -549,7 +554,21 @@ def sample_rows_for(rows, industry):
     want = industries.canonical(industry) if industry and industry != "default" else ""
     if not want:
         return list(rows)
-    return [r for r in rows if industries.canonical(str(r.get("業種") or "")) == want]
+    import autosend
+    import message_adoption
+    message_adoption.records()  # 記録が壊れているときは、ここで止めて理由を言う(行ごとに受け止めない)
+    expand_off = (MSG / autosend.EXPAND_OFF).exists()  # 業種ごとの文面がオフなら、指定は使われない(送るときと同じ)
+    out = []
+    for r in rows:  # 会社ごとに文面を指定した会社は、指定した文面の業種で数える(送るときの決め方と同じ)
+        try:
+            case = message_adoption.case_for(r.get("企業名", ""), r.get("問い合わせフォームURL 無ければメール", ""))  # オフでも、採用済みと同名でURLが違う行は例外で外れる(送るときと同じ)
+            assigned = (case.get("template_industry") or "") if case and case.get("assigned_only") and not expand_off else None
+        except message_adoption.AdoptionError:
+            continue  # 採用済み会社と名前だけ同じ行。送るときもその1社を外すだけなので、見本の候補からもその行だけ外す
+        ind = assigned if assigned is not None else str(r.get("業種") or "")
+        if industries.canonical(ind) == want:
+            out.append(r)
+    return out
 
 
 def messages():
@@ -1539,6 +1558,12 @@ class H(BaseHTTPRequestHandler):
         return self.send(200, {"started": True})
 
     def render_sample(self, d):
+        try:
+            return self._render_sample(d)
+        except autosend_adoption_error() as e:  # 採用記録が壊れている等。500にせず、理由を1行で言う
+            return self.send(400, {"error": str(e)})
+
+    def _render_sample(self, d):
         """文面の見本(D-10・M3)。送るリストの1社目(無ければ「株式会社サンプル」)で、autosend.render と同じ置き換えをした件名と全文。
         d: {industry, template_parts:{greeting, opener, body, signature}(省略時は保存済みの文面), file(省略時は最新のリスト)}"""
         import autosend

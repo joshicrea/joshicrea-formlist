@@ -132,10 +132,10 @@ def render(text, name, opener, sender):
     """{企業名}{書き出し}{署名}を置き換える。書き出し差込がある文面は、空欄なら停止する"""
     if "{書き出し}" in text and not opener.strip():
         raise EmptyOpenerError("書き出しが空欄のため、この会社には送りません（ホームページから特徴が取れず、送る文面にも提案の語が見つからないため、下書きを作れませんでした。文面に提案の語を入れるか、書き出しを直します）")
-    text = text.replace("{企業名}", name).replace("{署名}", sender.get("署名", "")).replace("{書き出し}", opener.strip())
+    text = text.replace("{企業名}", name.strip()).replace("{署名}", sender.get("署名", "")).replace("{書き出し}", opener.strip())
     if sender.get("資料URL"):  # 空のときは置き換えない: {資料URL}が残り、送信前の「差し込みの取り残し」で止まる
         # 資料URLに {識別} があれば、会社ごとの専用リンクにする(開かれたかを会社単位で数えるため)
-        text = text.replace("{資料URL}", proposal_links.url_for(sender["資料URL"], name))
+        text = text.replace("{資料URL}", proposal_links.url_for(sender["資料URL"], name.strip()))  # 空白の有無で識別子が分かれると、開封数が別々に数えられる
     return re.sub(r"\n{3,}", "\n\n", text).strip() + "\n"
 
 
@@ -195,7 +195,7 @@ def subject_industry(message_path, industry, name="", url=""):
 
 def subject_for(name, url, sender, industry=None):
     """その会社に実際に入れる件名(採用記録の送信元・業種別の件名を反映し、{企業名}を置き換えたもの)。industry は subject_industry の結果"""
-    return message_adoption.effective_sender(name, url, sender, industry).get("件名", "").replace("{企業名}", name)
+    return message_adoption.effective_sender(name, url, sender, industry).get("件名", "").replace("{企業名}", name.strip())
 
 
 MASK = "〇"  # 仮の文字の検査で、相手の会社名・書き出しの部分の代わりに置く1文字(括弧ではないので、それ自体は止まらない)
@@ -1026,7 +1026,7 @@ def manual_precheck(csv_path, sender_path, message_path, company_name):
     画面の入口(/api/manual)と manual_prefill_company が同じ確認を使う(始める前に理由と直し方を返すため)"""
     sender = json.loads(Path(sender_path).read_text(encoding="utf-8-sig"))
     with open(csv_path, encoding="utf-8-sig", newline="") as f:
-        rows = [r for r in csv.DictReader(f) if r.get("企業名") == company_name]
+        rows = [r for r in csv.DictReader(f) if message_adoption.norm_name(r.get("企業名")) == message_adoption.norm_name(company_name)]
     if len(rows) != 1:
         return None, None, ("指定した会社が1行に決まらないため、手動入力を始めません", "「2 結果を見る」で会社を選び直してください")
     r = rows[0]
@@ -1433,7 +1433,7 @@ def check_adopted_message(csv_path, sender_path, message_path, company_name):
     """本文だけを検査。NG・送信履歴・企業適格性は未検証。ブラウザ/DBには触れない。"""
     sender = json.loads(Path(sender_path).read_text(encoding="utf-8-sig"))
     with open(csv_path, encoding="utf-8-sig", newline="") as f:
-        rows = [r for r in csv.DictReader(f) if r.get("企業名") == company_name]
+        rows = [r for r in csv.DictReader(f) if message_adoption.norm_name(r.get("企業名")) == message_adoption.norm_name(company_name)]
     if len(rows) != 1:
         print("指定企業が1行に確定しないため本文検査を停止")
         return 5

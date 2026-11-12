@@ -55,13 +55,15 @@ def records():
     return _load(path)
 
 _CACHE = {}
+CACHE_SECONDS = 1.0
 
 def _load(path):
     """記録の読み込み。ファイルが変わっていなければ(更新時刻と大きさが同じ)読み直さない。読み込みでファイルを開きっぱなしにして、書き込み側の置き換えを妨げないため"""
     try:
         st = path.stat()
-        key = (str(path), st.st_mtime_ns, st.st_size)
-        if _CACHE.get('key') == key:
+        key = (str(path), st.st_mtime_ns, st.st_size, st.st_ino)
+        age = time.monotonic() - _CACHE.get('at', 0.0)
+        if _CACHE.get('key') == key and 0 <= age < CACHE_SECONDS:  # 大きさ・更新時刻が同じで中身だけ変わる場合に備え、信用するのは短い間だけ
             return json.loads(_CACHE['text'])
     except OSError:
         key = None
@@ -69,7 +71,7 @@ def _load(path):
         text = _retry(lambda: path.read_text(encoding='utf-8'))
         data = json.loads(text)
         if key:
-            _CACHE.update(key=key, text=text)
+            _CACHE.update(key=key, text=text, at=time.monotonic())
         return data
     except ValueError as e:  # JSONDecodeError。ファイルは書き換えず、壊れていることを1行で言う(該当会社は送らない側に倒れる)
         raise AdoptionError('文面の指定の記録(message_adoptions.json)が壊れていて読めません。直るまで、指定のある会社は送りません: ' + str(e)[:60])
@@ -80,12 +82,12 @@ def case_for(name, url):
         if c.get('assigned_only') and norm_contact(url) in _contacts_of(c) and norm_name(name) in _names_of(c):
             return c  # フォームURL・メールアドレス・mailto のどれで来ても同じ会社の指定として見つかる
     cases = [c for c in allcases if not c.get('assigned_only')]
-    matches = [c for c in cases if c['form_url'] == url]
+    matches = [c for c in cases if norm_contact(c['form_url']) == norm_contact(url)]
     if not matches:
-        if any(name in (c['source_name'], c['display_name']) for c in cases):
+        if any(norm_name(name) in _names_of(c) for c in cases):
             raise AdoptionError('採用済み会社のフォームURLが一致しません')
         return None
-    if len(matches) != 1 or name not in (matches[0]['source_name'], matches[0]['display_name']):
+    if len(matches) != 1 or norm_name(name) not in _names_of(matches[0]):
         raise AdoptionError('承認した会社名とフォームURLの組合せではありません')
     return matches[0]
 
@@ -141,11 +143,11 @@ def changed_parts(name, url, body, sender):
     if hashlib.sha256(body.encode('utf-8')).hexdigest() != case['body_sha256']:
         parts.append('全文')
     subject = case['subject']
-    subject_changed = effective.get('件名', '').replace('{企業名}', name) != subject
+    subject_changed = effective.get('件名', '').replace('{企業名}', name.strip()) != subject  # 会社名の前後の空白は、件名に入れない(autosend.subject_for と同じ)
     if subject_changed:
         parts.append('件名')
     # 件名は送信元の照合値にも入っている。件名と別の項目が同時に変わっても両方を示すため、採用時の件名の元の形(会社名の部分を {企業名} に戻したもの)に直して照合する
-    templates = {subject.replace(n, '{企業名}') for n in (name, case.get('display_name', name), case.get('source_name', name)) if n} | {subject}
+    templates = {subject.replace(n, '{企業名}') for n in (name.strip(), case.get('display_name', name).strip(), case.get('source_name', name).strip()) if n} | {subject}
     if subject_changed:
         sender_ok = any(_sender_matches(dict(effective, 件名=t), case['sender_sha256']) for t in templates)
     else:
@@ -180,7 +182,7 @@ def validate_send(name, url, body, sender):
 def validate_destination(name, original_url, actual_url):
     case = case_for(name, original_url)
     if case and not case.get('assigned_only') and actual_url not in case.get('allowed_destination_urls', [case['form_url']]):
-        raise AdoptionError('実際のフォームURLが採用時の対象と一致しません')
+        raise AdoptionError('実際のフォームURLが、承認したURLと文字列として一致しません(末尾の「/」・http/https・www などの表記の違い、または転送先の違いを含みます。厳密に照合しています)')
 
 def record_digest():
     return digest(records())
@@ -214,6 +216,7 @@ def _assign_locked(path, name, url, industry, contacts=()):
     try:
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
         _retry(lambda: tmp.replace(path))
+        _CACHE.clear()
     finally:
         if tmp.exists():  # 置き換えに失敗しても一時ファイルを残さない
             try:
