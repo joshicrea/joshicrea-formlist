@@ -107,6 +107,18 @@ def pick_message_source(path, industry):
     return "指定の文面", p.read_text(encoding="utf-8-sig")
 
 
+def source_for_company(path, name, url, industry):
+    """(どの文面か, 本文)。その会社に実際に入る文面。会社ごとの指定(採用記録の assigned_only)があればその業種の文面(「指定: 業種」)、
+    採用済みなら「承認済みの文面」、どちらも無ければ会社の業種欄で選ぶ(pick_message_source)"""
+    case = message_adoption.case_for(name, url)
+    if case and case.get("assigned_only"):
+        label, text = pick_message_source(path, case.get("template_industry") or "")
+        return "指定: " + label, text
+    if case:
+        return "承認済みの文面", message_adoption.resolve_row((name, url, industry, "", ""), path, {}, pick_message)[1]
+    return pick_message_source(path, industry)
+
+
 def pick_message(path, industry):
     """--message がフォルダなら 業種名.txt を優先し、無ければ default.txt。ファイルならそれを使う"""
     return pick_message_source(path, industry)[1]
@@ -152,20 +164,26 @@ def prepare_message_plan(todo, message_path, sender):
 
 def plan_digest(todo, bodies, sender, message_path=None):
     """送る会社・各社の全文・送信元(フォームに入れる値を全部含む。業種別の件名も入る)の照合番号。確認(--preview)と本番(--send --expect)で同じ関数を使う"""
-    rows = [(t[0], t[1], b, message_adoption.effective_sender(t[0], t[1], sender, subject_industry(message_path, t[2]))) for t, b in zip(todo, bodies)]
+    rows = [(t[0], t[1], b, message_adoption.effective_sender(t[0], t[1], sender, subject_industry(message_path, t[2], t[0], t[1]))) for t, b in zip(todo, bodies)]
     return hashlib.sha256(json.dumps({"rows": rows, "sender": sender, "adoptions": message_adoption.record_digest()}, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
 CONTACT = re.compile(r"@|\d{2,4}-\d{2,4}-\d{3,4}")  # 最終の本文に送信者の連絡先(メールか電話)があるか
 
 
-def subject_industry(message_path, industry):
+def subject_industry(message_path, industry, name="", url=""):
     """件名を業種別にしてよいときだけ業種名を返す(それ以外は None=送信元設定の件名)。
     業種ごとの文面がオフ(EXPAND_OFF)・文面が1ファイル指定のときは標準の文面なので、業種別の件名にしない"""
-    if not industry or not message_path:
+    if not message_path:
         return None
     p = Path(message_path)
     if not p.is_dir() or (p / EXPAND_OFF).exists():
+        return None
+    if name and url:  # 会社ごとに文面を指定した会社は、指定した文面の業種の件名(本文と同じ決め方)
+        assigned = message_adoption.assigned_industry(name, url)
+        if assigned is not None:
+            industry = assigned
+    if not industry:
         return None
     import industries
     import patterns
@@ -280,7 +298,7 @@ def build_plan(csv_path, include_supplemented, gate, max_count, message_path, se
     keep_todo, keep_bodies, subjects, labels = [], [], [], []
     for row, body in zip(todo, bodies):
         name, url = row[0], row[1]
-        sub_ind = subject_industry(message_path, row[2])
+        sub_ind = subject_industry(message_path, row[2], row[0], row[1])
         subject = subject_for(name, url, sender, sub_ind)
         left_subject = subject_leftovers(name, url, sender, words, sub_ind)
         left_body = body_leftovers(body, name, row[3], words, headings)
@@ -300,7 +318,7 @@ def build_plan(csv_path, include_supplemented, gate, max_count, message_path, se
             keep_bodies.append(body)
             subjects.append(subject)
             if explain:  # どの文面を使うか(画面の表示用)。本文は上の prepare_message_plan と同じ選び方で決まっている
-                labels.append("承認済みの文面" if message_adoption.case_for(name, url) else pick_message_source(message_path, row[2])[0])
+                labels.append(source_for_company(message_path, name, url, row[2])[0])
             continue
         skipped.append(dict(item, name=name, url=url))
     stop = "" if keep_todo else ("送れる会社がありません" if not skipped else "送れる会社がありません(理由は送らない会社の一覧)")
@@ -320,9 +338,9 @@ def message_label(message_path, name, url, industry):
     取れなくても送信は止めない(空にする)"""
     try:
         case = message_adoption.case_for(name, url)
-        if case:
+        if case and not case.get("assigned_only"):
             return Path(case["template_name"]).stem
-        return pick_message_source(message_path, industry)[0]
+        return source_for_company(message_path, name, url, industry)[0]
     except Exception:
         return ""
 
@@ -1035,7 +1053,7 @@ def manual_prefill_company(csv_path, sender_path, message_path, company_name):
     if not ok_url:
         print("宛先が公開サイトではないため開きません: " + why_url)
         return 5
-    eff = dict(sender, 件名=subject_for(row[0], row[1], sender, subject_industry(message_path, row[2])))
+    eff = dict(message_adoption.effective_sender(row[0], row[1], sender, subject_industry(message_path, row[2], row[0], row[1])), 件名=subject_for(row[0], row[1], sender, subject_industry(message_path, row[2], row[0], row[1])))
     print(f"手動入力: {row[0]} のフォームを開きます。入力できる項目だけ自動で埋めます。送信ボタンは押しません。")
     memo, skipped = prefill_manual(row[1], eff, bodies[0])
     print("入力のメモ: " + str(memo))
@@ -1482,7 +1500,7 @@ def build_mail_plan(csv_path, include_supplemented, gate, max_count, message_pat
     for row, body in zip(todo, bodies):
         name, addr, ind, opener = row[0], row[1], row[2], row[3]
         line_subject, text = mail_channel.split_subject(body)
-        subject = line_subject or subject_for(name, addr, sender, subject_industry(message_path, ind))
+        subject = line_subject or subject_for(name, addr, sender, subject_industry(message_path, ind, name, addr))
         why = ""
         if not subject.strip():
             why = "件名が空です(文面の1行目の「件名:」か、送信元の件名が要ります)"
@@ -1720,7 +1738,7 @@ def main():
     if a.preview:
         for (name, url, ind, opener, _hp), body in zip(todo, bodies):
             print(f"\n===== 送る文面 {name}（業種「{ind or '指定なし'}」）=====")
-            print("件名: " + subject_for(name, url, sender, subject_industry(a.message, ind)))
+            print("件名: " + subject_for(name, url, sender, subject_industry(a.message, ind, name, url)))
             print(body + "=====")
         print(f"\n送信者: {sender['会社名']} {sender['氏名']} {sender['メール']}\n以上 {len(todo)}社が送信対象です（まだ送っていません）。")
         print(f"確認番号: {got}")
@@ -1740,7 +1758,7 @@ def main():
             return 5
         for (name, url, ind, opener, _hp), body in zip(todo, bodies):
             print(f"\n===== 送る文面 {name}（業種「{ind or '指定なし'}」）=====")
-            print("件名: " + subject_for(name, url, sender, subject_industry(a.message, ind)))
+            print("件名: " + subject_for(name, url, sender, subject_industry(a.message, ind, name, url)))
             print(body + "=====")
         print(f"送信者: {sender['会社名']} {sender['氏名']} {sender['メール']}\n{len(todo)}社へ送ります。")
         if input("送ってよければ「送信」と入力してください > ").strip() != "送信":
@@ -1780,7 +1798,7 @@ def main():
                     ctx.route("**/*", block_internal)
                     ctx.route_web_socket("**/*", block_ws)
                     page = ctx.new_page()
-                    res, memo = send_one(page, name, url, message_adoption.effective_sender(name, url, sender, subject_industry(a.message, ind)), body, a.send, hp)
+                    res, memo = send_one(page, name, url, message_adoption.effective_sender(name, url, sender, subject_industry(a.message, ind, name, url)), body, a.send, hp)
                 except LogError as e:  # 記録が書けないまま送ると、次の回にもう一度送る。ここで止める
                     print("送信ログに書けません（Excelで開いていませんか）。二重送信を防ぐため、ここで止めます:", e)
                     br.close()

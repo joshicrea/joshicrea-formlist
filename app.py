@@ -71,13 +71,13 @@ OPENER_SOURCES = {"philosophy": "ホームページの特徴と文面の提案�
 _SOURCE_OF = {v: k for k, v in OPENER_SOURCES.items()}
 
 
-def opener_draft_for(overview="", industry="", basis="", template=None, taken=()):
+def opener_draft_for(overview="", industry="", basis="", template=None, taken=(), name="", url=""):
     """(下書き, 作り方)。ホームページの本文から拾った方針・思いの文(basis)の引用だけで作る(philosophy.opener_from_basis)。
     拾えなかった会社は ("", "")。題だけ・会社名と業種だけの下書きは作らない(2026-11-02 運用者の指示「ぜんぜんだめ」)。overview・industry は旧版との呼び出し互換のため受けるだけ"""
     if template is None:  # この会社に実際に送る文面(業種で選ばれる文面)の提案を、第2文に使う
         import autosend
         try:
-            template = autosend.pick_message_source(str(MSG), industry)[1] if MSG.exists() else ""
+            template = autosend.source_for_company(str(MSG), name, url, industry)[1] if MSG.exists() else ""  # 送るときと同じ決め方(会社ごとの指定を含む)
         except OSError:
             template = ""
     d = philosophy.opener_from_basis(basis, template, taken)  # taken=他の会社の書き出し。2文とも同じ行を作らない
@@ -906,8 +906,9 @@ def templates_for(p):
     messages()  # 標準の文面が無ければ、ひな形から作る(公開版の初回)
     out = {}
     rows = read_csv(p) if p else []
-    for ind in dict.fromkeys([""] + [r.get("業種", "") for r in rows]):
-        label, text = autosend.pick_message_source(str(MSG), ind)
+    out.setdefault(*autosend.pick_message_source(str(MSG), ""))
+    for r in rows:  # 会社ごとの指定を含め、送るときと同じ決め方
+        label, text = autosend.source_for_company(str(MSG), r.get("企業名", ""), r.get("問い合わせフォームURL 無ければメール", ""), r.get("業種", ""))
         out.setdefault(label, text)
     return out
 
@@ -1179,18 +1180,19 @@ def fill_drafts(p, supp, store=None):
     書いてから確認番号を作るので、確認と本番で同じ全文になる。書き出しのある会社(人・AIが書いたもの)は変えない"""
     import autosend
     want = {(t[0], t[1]) for t in autosend.targets(str(p), supp, gate=store)} if store is not None else {(t[0], t[1]) for t in autosend.targets(str(p), supp)}
-    uses_opener = {}  # 業種ごとに、使う文面に会社ごとの書き出しがあるか(無い文面の会社には書かない。書いても届く文に入らない)
+    uses_opener = {}  # 文面ごとに、使う文面に会社ごとの書き出しがあるか(無い文面の会社には書かない。書いても届く文に入らない)
 
-    def needs(ind):
-        if ind not in uses_opener:
-            uses_opener[ind] = "{書き出し}" in autosend.pick_message_source(str(MSG), ind)[1]
-        return uses_opener[ind]
+    def needs(ind, name="", url=""):
+        label, text = autosend.source_for_company(str(MSG), name, url, ind)  # 会社ごとの指定があれば、その文面で見る
+        if label not in uses_opener:
+            uses_opener[label] = "{書き出し}" in text
+        return uses_opener[label]
     with filelock.locked(p):
         rows = read_csv(p)
         n = 0
         for r in rows:
-            if (r.get("企業名", ""), r.get("問い合わせフォームURL 無ければメール", "")) in want and not (r.get("書き出し") or "").strip() and needs(r.get("業種", "")):
-                d, src = opener_draft_for(industry=r.get("業種", ""), basis=r.get(BASIS_COL, ""), taken={(x.get("書き出し") or "").strip() for x in rows})
+            if (r.get("企業名", ""), r.get("問い合わせフォームURL 無ければメール", "")) in want and not (r.get("書き出し") or "").strip() and needs(r.get("業種", ""), r.get("企業名", ""), r.get("問い合わせフォームURL 無ければメール", "")):
+                d, src = opener_draft_for(name=r.get("企業名", ""), url=r.get("問い合わせフォームURL 無ければメール", ""), industry=r.get("業種", ""), basis=r.get(BASIS_COL, ""), taken={(x.get("書き出し") or "").strip() for x in rows})
                 if not d:
                     continue  # 送る文面に提案語が無く自動の下書きも作れない会社だけが空のまま
                 r["書き出し"], r[OPENER_COL] = d, OPENER_SOURCES[src]
@@ -1411,7 +1413,7 @@ class H(BaseHTTPRequestHandler):
             todo, bodies, rejected = autosend.prepare_message_plan(rows[:50], MSG, sender)
         except RuntimeError as e:
             return self.send(400, {"error": str(e)})
-        out = [{"company": t[0], "form": t[1], "subject": autosend.subject_for(t[0], t[1], sender, autosend.subject_industry(MSG, t[2])), "message": b}
+        out = [{"company": t[0], "form": t[1], "subject": autosend.subject_for(t[0], t[1], sender, autosend.subject_industry(MSG, t[2], t[0], t[1])), "message": b}
                for t, b in zip(todo, bodies)]
         return self.send(200, {"companies": out, "skipped": [{"company": n, "why": w} for n, _u, w in rejected],
                                "legal_missing": send_rules.legal_missing(sender), "window": send_rules.window_refusal()})
@@ -1550,6 +1552,7 @@ class H(BaseHTTPRequestHandler):
             template = join_message(parts)
         else:
             template = autosend.pick_message_source(str(MSG), industry)[1] if MSG.exists() else ""
+        rows_all = []
         name, url, opener, label = "株式会社サンプル", "", "", "見本の会社(株式会社サンプル)。送るリストがまだ無いので、この名前で作りました"
         files = outputs()
         f = safe_out(str(d.get("file") or "")) or (safe_out(files[0]) if files else None)
@@ -1558,6 +1561,7 @@ class H(BaseHTTPRequestHandler):
                 rows = [r for r in read_csv(f) if r.get("企業名")]
             except PermissionError:
                 return self.send(409, excel_error(f))
+            rows_all = rows
             cand = sample_rows_for(rows, industry)
             if not cand and industry and industry != "default":
                 label = f"見本の会社(株式会社サンプル)。送るリストに{industry}の会社が無いので、この名前で作りました"
@@ -1575,7 +1579,7 @@ class H(BaseHTTPRequestHandler):
                     r = next((x for x in rows if (x["企業名"], x.get("問い合わせフォームURL 無ければメール", "")) in sendable), None)
                 if r is not None:
                     name, url = r["企業名"], r.get("問い合わせフォームURL 無ければメール", "")
-                    opener = (r.get("書き出し") or "").strip() or opener_draft_for(industry=r.get("業種", ""), basis=r.get(BASIS_COL, ""))[0]
+                    opener = (r.get("書き出し") or "").strip() or opener_draft_for(name=r.get("企業名", ""), url=r.get("問い合わせフォームURL 無ければメール", ""), industry=r.get("業種", ""), basis=r.get(BASIS_COL, ""))[0]
                     label = f"実際に送る会社の1社目({name}、業種: {r.get('業種', '')})で作りました"
                 else:
                     label = "見本の会社(株式会社サンプル)。送る会社が無いので、この名前で作りました"
@@ -1589,10 +1593,33 @@ class H(BaseHTTPRequestHandler):
         for w in left:  # 置き換わらない部分は記号のまま見せず、印にする(何が足りないかは problems で言う)
             if w["match"] == "{資料URL}":
                 text = text.replace(w["match"], "《資料のリンク(送信元の資料URLが空です)》")
+        sample_note = ""
+        recipients = []  # このリストで、いま選んでいる文面が実際に届く会社(指定があれば指定が優先。業種欄が同じでも指定が別なら届かない)
+        if f and str(f).endswith(".csv"):
+            want = ("標準" if not industry or industry == "default" else None, industry)
+            sendable_rows, note = [], ""  # 送る計画(フォーム=plan・メール=build_mail_plan)の対象だけを数える。送れない会社・お断り・フォームなしは数えない
+            try:
+                sendable_rows += plan(f, False, None, _NG_STORE, explain=True)["todo"]
+            except PermissionError:
+                return self.send(409, excel_error(f))
+            except Exception:
+                note = "送る計画を作れなかったため、届く会社を数えられません"
+            try:
+                sendable_rows += _mail_plan(f, False, None, _NG_STORE, None)["todo"]
+            except Exception:
+                pass  # メール送信の部品が無い版・メール設定が未入力でも、フォームの数え方は変えない
+            try:
+                for (n, u, ind, _o, _h) in sendable_rows:
+                    lab = autosend.source_for_company(str(MSG), n, u, ind)[0].replace("指定: ", "")
+                    if lab in want:
+                        recipients.append(n)
+            except autosend.message_adoption.AdoptionError as e:
+                note = str(e)
+            sample_note = note
         probs = message_problems({industry or "標準": template})
         if any(w["match"] == "{資料URL}" for w in left):
             probs.append({"field": "資料URL", "kind": "資料URLが空", "text": "文面に資料のリンクがありますが、送信元の「資料URL」が空です"})
-        return self.send(200, {"subject": autosend.subject_for(name, url, sender, autosend.subject_industry(MSG, industry)), "text": text, "company_label": label, "problems": probs})
+        return self.send(200, {"subject": autosend.subject_for(name, url, sender, autosend.subject_industry(MSG, industry, name, url)), "text": text, "company_label": label, "problems": probs, "recipients": recipients[:50], "recipient_count": len(recipients), "recipients_note": sample_note})
 
     def do_GET(self):
         try:
@@ -1727,12 +1754,12 @@ class H(BaseHTTPRequestHandler):
             companies = [{"name": r.get("企業名", ""), "industry": r.get("業種", ""), "hp": r.get("HP URL", ""), "form": r.get("問い合わせフォームURL 無ければメール", ""),
                           "overview": r.get("HP概要", ""), "opener": (r.get("書き出し") or "").strip(), "opener_source": opener_source(r),
                           "basis": r.get(BASIS_COL, ""), "basis_url": r.get(BASIS_URL_COL, ""), "why": opener_why(r),
-                          "draft": opener_draft_for(industry=r.get("業種", ""), basis=r.get(BASIS_COL, ""))[0]}
+                          "draft": opener_draft_for(name=r.get("企業名", ""), url=r.get("問い合わせフォームURL 無ければメール", ""), industry=r.get("業種", ""), basis=r.get(BASIS_COL, ""))[0]}
                          for r in rows if (r.get("企業名", ""), r.get("問い合わせフォームURL 無ければメール", "")) in want]
             if parse_qs(u.query).get("only_form", [""])[0] == "1":  # 画面用: 送る対象になりうる(フォーム検出・お断りなし)会社だけ
                 rows = [r for r in rows if r.get("フォーム判定") == "フォームあり" and r.get("営業お断りの表示") != "あり"]
             return self.send(200, {"total": total, "companies": companies,
-                                   "missing": [{"name": r.get("企業名", ""), "industry": r.get("業種", ""), "hp": r.get("HP URL", ""), "draft": opener_draft_for(industry=r.get("業種", ""), basis=r.get(BASIS_COL, ""))[0], "why": opener_why(r)} for r in rows if not (r.get("書き出し") or "").strip()][:200]})
+                                   "missing": [{"name": r.get("企業名", ""), "industry": r.get("業種", ""), "hp": r.get("HP URL", ""), "draft": opener_draft_for(name=r.get("企業名", ""), url=r.get("問い合わせフォームURL 無ければメール", ""), industry=r.get("業種", ""), basis=r.get(BASIS_COL, ""))[0], "why": opener_why(r)} for r in rows if not (r.get("書き出し") or "").strip()][:200]})
         if u.path == "/api/targets":
             return self.targets(q, ng_store)
         if u.path == "/api/log":
@@ -1769,7 +1796,10 @@ class H(BaseHTTPRequestHandler):
             if problem:
                 return self.send(400, {"error": f"理由: {problem[0]}。直し方: {problem[1]}"})
             sender = read_sender()
-            return self.send(200, {"company": name, "subject": autosend.subject_for(row[0], row[1], sender, autosend.subject_industry(MSG, row[2])), "message": bodies[0],
+            label = autosend.source_for_company(str(MSG), row[0], row[1], row[2])[0]
+            return self.send(200, {"company": name, "subject": autosend.subject_for(row[0], row[1], sender, autosend.subject_industry(MSG, row[2], row[0], row[1])), "message": bodies[0],
+                                   "template_label": label, "template_note": ("業種ごとの文面がオフのため、指定は使われず基本の文面が入ります" if (MSG / autosend.EXPAND_OFF).exists() and autosend.message_adoption.assigned_industry(row[0], row[1]) is not None else ""), "assigned": autosend.message_adoption.assigned_industry(row[0], row[1]), "company_industry": row[2],
+                                   "options": ["default"] + list(message_info()["industries"]) + [o["name"] for o in message_info()["orphans"]],
                                    "adoption_diff": autosend.message_adoption.difference_text(autosend.message_adoption.changed_parts(row[0], row[1], bodies[0], sender))})
         if u.path == "/download":
             p = safe_out(q.get("file", ""))
@@ -1805,7 +1835,7 @@ class H(BaseHTTPRequestHandler):
                 except Exception:
                     return self.send(400, count_error())
             return self.send(400, {"error": "入力の形が正しくありません（数は1以上の整数で入れてください）"})
-        if self.path in ("/api/message", "/api/sender", "/api/ng", "/api/ng/undo", "/api/openings") and JOB["running"] and JOB["name"] in ("本番送信", "確認"):
+        if self.path in ("/api/message", "/api/message/assign", "/api/sender", "/api/ng", "/api/ng/undo", "/api/openings") and JOB["running"] and JOB["name"] in ("本番送信", "確認"):
             if JOB["name"] == "確認":  # E-18
                 return self.send(409, {"error": "送る内容を出している間は変えられません。数秒で終わります"})
             return self.send(409, {"error": "いま送っている最中は、送信元・文面・送らない会社・書き出しを変えられません。送り終わってから変えます"})
@@ -2130,6 +2160,31 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, sample_from_material.make_sample(str(d.get("material", ""))[:20000], sender))
             except ValueError as e:
                 return self.send(400, {"error": str(e)})
+        if self.path == "/api/message/assign":  # 会社ごとの文面の指定(採用記録の assigned_only)。文面の選択だけで、送信の許可ではない。industry が空なら指定を外す
+            import autosend
+            p, err = list_or_error(d.get("file", ""))
+            if err:
+                return self.send(*err)
+            name, ind = str(d.get("name", "")), d.get("industry")
+            info = message_info()
+            ok_names = {"default"} | set(info["industries"]) | {o["name"] for o in info["orphans"]}
+            if ind not in (None, "") and ind not in ok_names:
+                return self.send(400, {"error": "指定できるのは、文面の画面にある業種(または基本の文面)だけです"})
+            try:
+                rows = [r for r in read_csv(p) if autosend.message_adoption.norm_name(r.get("企業名")) == autosend.message_adoption.norm_name(name)]  # CSVの値も同じ形にそろえて比べる(前後の空白・全角空白で断らない)
+            except PermissionError:
+                return self.send(409, excel_error(p))
+            if len(rows) != 1:
+                return self.send(400, {"error": "指定する会社が1行に決まりません(同じ名前の行が2つ以上、または見つかりません)。「2 結果を見る」で会社を選び直してください"})
+            name = rows[0].get("企業名", name)  # 記録はCSVの会社名のまま(送るときの照合も正規化して行う)
+            url = rows[0].get("問い合わせフォームURL 無ければメール", "")
+            try:
+                contacts = [url, rows[0].get("メールアドレス", ""), autosend._mail_of(rows[0])]  # フォームでもメールでも、この会社として指定が見つかるように、行の連絡先を全部記録する
+                autosend.message_adoption.assign(name, url, None if ind in (None, "") else ("" if ind == "default" else ind), contacts)
+            except autosend.message_adoption.AdoptionError as e:
+                return self.send(409, {"error": str(e)})
+            label = autosend.source_for_company(str(MSG), name, url, rows[0].get("業種", ""))[0]
+            return self.send(200, {"ok": True, "template_label": label})
         if self.path == "/api/message":
             MSG.mkdir(exist_ok=True)
             fill_only = bool(d.pop("_fill_only", False))  # 設定の文の適用(MCP の既定): 見本のまま・無い文面にだけ入れ、本人が直した文面は上書きしない(Q899)
