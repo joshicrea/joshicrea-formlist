@@ -98,17 +98,17 @@ def guard_keys_of(urls, company=""):
 
 
 def matching_rows(c, urls, company=""):
-    """二重送信の照合で見る sends の行 (state, updated) の全体。複合鍵と旧鍵(URLのみ)の行を見る。
+    """二重送信の照合で見る sends の行 (state, updated, key) の全体。複合鍵と旧鍵(URLのみ)の行を見る。
     会社名が空(または「株式会社」だけで正規化すると空)のときは、どの会社名の記録でも止める側に倒す(会社名が分からない=別会社と言えない)"""
     rows = []
     for k in guard_keys_of(urls, company):
-        r = c.execute("SELECT state, updated FROM sends WHERE key=?", (k,)).fetchone()
+        r = c.execute("SELECT state, updated, key FROM sends WHERE key=?", (k,)).fetchone()
         if r:
             rows.append(r)
     if not company_norm(company):
         for k in keys_of(urls):
             pre = k + COMPANY_SEP
-            rows += c.execute("SELECT state, updated FROM sends WHERE substr(key,1,?)=?", (len(pre), pre)).fetchall()
+            rows += c.execute("SELECT state, updated, key FROM sends WHERE substr(key,1,?)=?", (len(pre), pre)).fetchall()
     return rows
 
 
@@ -157,10 +157,13 @@ def reserve(urls, company=""):
     try:
         c.execute("BEGIN IMMEDIATE")
         now = time.time()
-        for row in matching_rows(c, urls, company):  # 書く鍵(複合鍵)だけでなく、URLのみの旧鍵の行・会社名が空のときは全会社名の行も「確保済み」として見る
+        rows = matching_rows(c, urls, company)  # 書く鍵(複合鍵)だけでなく、URLのみの旧鍵の行・会社名が空のときは全会社名の行も「確保済み」として見る
+        for row in rows:
             if not (row[0] == PREPARED and now - row[1] > RECOVER_AFTER):
                 c.execute("ROLLBACK")
                 return None
+        for row in rows:  # 引き継ぐ古い「準備」の行は消す。別の鍵(会社名つき/なし)の行を残すと、古い実行の start_click も通って二重に押す(2026-11-16 独立レビュー)
+            c.execute("DELETE FROM sends WHERE key=?", (row[2],))
         for k in ks:
             c.execute("INSERT OR REPLACE INTO sends VALUES (?,?,?,?,?,?,?,?)", (k, k, company, PREPARED, "", now, now, token))
         c.execute("COMMIT")

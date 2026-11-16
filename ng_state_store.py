@@ -641,10 +641,13 @@ class NgStateStore:
             if self._is_ng_locked(c, urls):
                 c.execute("ROLLBACK")
                 return None, ("要手動", "NGリストに該当したため送らない")
-            for row in state.matching_rows(c, urls, company):  # 複合鍵・旧鍵の行に加え、会社名が空のときは全会社名の行も確保済みとして見る
+            rows = state.matching_rows(c, urls, company)  # 複合鍵・旧鍵の行に加え、会社名が空のときは全会社名の行も確保済みとして見る
+            for row in rows:
                 if not (row[0] == PREPARED and now - float(row[1] or 0) > state.RECOVER_AFTER):
                     c.execute("ROLLBACK")
                     return None, ("スキップ", "このフォームは別の実行が送信中か送信済みのため送らない")
+            for row in rows:  # 引き継ぐ古い「準備」の行は消す(別の鍵の行を残すと古い実行の start_click も通って二重に押す)
+                c.execute("DELETE FROM sends WHERE key=?", (row[2],))
             for key in keys:
                 c.execute(
                     "INSERT OR REPLACE INTO sends VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -746,10 +749,13 @@ class NgStateStore:
             if self._is_ng_locked(c, urls):
                 c.execute("ROLLBACK")
                 return None
-            for row in state.matching_rows(c, urls, company):  # 複合鍵・旧鍵の行に加え、会社名が空のときは全会社名の行も確保済みとして見る
+            rows = state.matching_rows(c, urls, company)  # 複合鍵・旧鍵の行に加え、会社名が空のときは全会社名の行も確保済みとして見る
+            for row in rows:
                 if row[0] != PREPARED:
                     c.execute("ROLLBACK")
                     return None
+            for row in rows:  # 引き継ぐ「準備」の行は消す(別の鍵の行を残すと古い実行の start_click も通って二重に押す)
+                c.execute("DELETE FROM sends WHERE key=?", (row[2],))
             for key in keys:
                 c.execute(
                     "INSERT OR REPLACE INTO sends VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

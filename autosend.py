@@ -122,7 +122,7 @@ def pick_message_source(path, industry):
     return "指定の文面", p.read_text(encoding="utf-8-sig")
 
 
-def source_for_company(path, name, url, industry):
+def source_for_company(path, name, url, industry, use_industry=None):
     """(どの文面か, 本文)。その会社に実際に入る文面。会社ごとの指定(採用記録の assigned_only)があればその業種の文面(「指定: 業種」)、
     採用済みなら「承認済みの文面」、どちらも無ければ会社の業種欄で選ぶ(pick_message_source)"""
     case = message_adoption.case_for(name, url)
@@ -131,7 +131,15 @@ def source_for_company(path, name, url, industry):
         return "指定: " + label, text
     if case:
         return "承認済みの文面", message_adoption.resolve_row((name, url, industry, "", ""), path, {}, pick_message)[1]
-    return pick_message_source(path, industry)
+    return pick_message_source(path, industry if use_industry is None else use_industry)
+
+
+def _use_industry(v):
+    """画面③・--use-industry の値を、文面を選ぶ業種に直す。None=選ばない / "default"(基本の文面)=空の業種 / それ以外=その業種名"""
+    if v is None:
+        return None
+    v = str(v).strip()
+    return "" if v in ("", "default") else v
 
 
 def pick_message(path, industry):
@@ -154,12 +162,13 @@ def render(text, name, opener, sender):
     return re.sub(r"\n{3,}", "\n\n", text).strip() + "\n"
 
 
-def prepare_message_plan(todo, message_path, sender):
-    """会社単位の空書出しを除外し、対象と本文の対応を保つ。IO等の別障害は握りつぶさない。"""
+def prepare_message_plan(todo, message_path, sender, use_industry=None):
+    """会社単位の空書出しを除外し、対象と本文の対応を保つ。IO等の別障害は握りつぶさない。
+    use_industry=画面③「今回使う文面」(今回の呼び出しだけ・保存しない。会社ごとの指定がある会社には効かない)"""
     ready, bodies, rejected = [], [], []
     for row in todo:
         try:
-            row, template, local_sender = message_adoption.resolve_row(row, message_path, sender, pick_message)
+            row, template, local_sender = message_adoption.resolve_row(row, message_path, sender, pick_message, use_industry)
             name, url, industry, opener, _hp = row
             if "{書き出し}" in template and not (opener or "").strip():  # 空欄を理由に送れなくしない。業種の文面に沿った自動の下書きを入れる(画面では下書きの印が付く)
                 import philosophy
@@ -186,7 +195,7 @@ def plan_digest(todo, bodies, sender, message_path=None):
 CONTACT = re.compile(r"@|\d{2,4}-\d{2,4}-\d{3,4}")  # 最終の本文に送信者の連絡先(メールか電話)があるか
 
 
-def subject_industry(message_path, industry, name="", url=""):
+def subject_industry(message_path, industry, name="", url="", use_industry=None):
     """件名を業種別にしてよいときだけ業種名を返す(それ以外は None=送信元設定の件名)。
     業種ごとの文面がオフ(EXPAND_OFF)・文面が1ファイル指定のときは標準の文面なので、業種別の件名にしない"""
     if not message_path:
@@ -194,6 +203,8 @@ def subject_industry(message_path, industry, name="", url=""):
     p = Path(message_path)
     if not p.is_dir() or (p / EXPAND_OFF).exists():
         return None
+    if use_industry is not None:  # 画面③「今回使う文面」。本文と同じ決め方で、会社ごとの指定が無い会社だけ(下の指定が上書きする)
+        industry = use_industry
     if name and url:  # 会社ごとに文面を指定した会社は、指定した文面の業種の件名(本文と同じ決め方)
         assigned = message_adoption.assigned_industry(name, url)
         if assigned is not None:
@@ -1045,7 +1056,7 @@ def prefill_manual(url, sender, message):
     return memo, skipped
 
 
-def manual_precheck(csv_path, sender_path, message_path, company_name):
+def manual_precheck(csv_path, sender_path, message_path, company_name, use_industry=None):
     """「フォームで送る(自動挿入)」を始める前の確認(通信しない)。戻り値: (row, bodies, 問題)。問題は (理由, 直し方) か None。
     画面の入口(/api/manual)と manual_prefill_company が同じ確認を使う(始める前に理由と直し方を返すため)"""
     sender = json.loads(Path(sender_path).read_text(encoding="utf-8-sig"))
@@ -1057,7 +1068,7 @@ def manual_precheck(csv_path, sender_path, message_path, company_name):
     row = (r["企業名"], r.get("問い合わせフォームURL 無ければメール", ""), r.get("業種", ""), r.get("書き出し", ""), r.get("HP URL", ""))
     if not re.match(r"https?://", row[1]):
         return row, None, ("この会社はフォームのURLがありません(メールのみ)。手動入力の対象外です", "この会社はメールで送る方で扱います。「メールで送る」を使ってください")
-    todo, bodies, rejected = prepare_message_plan([row], message_path, sender)
+    todo, bodies, rejected = prepare_message_plan([row], message_path, sender, use_industry)
     if rejected or len(todo) != 1:
         whys = "、".join(f"{n}: {why}" for n, _u, why in rejected)
         fix = ("「2 結果を見る」でこの会社の書き出しを入れてから、もう一度押してください(書き出しの下書きを使うこともできます)"
@@ -1066,10 +1077,11 @@ def manual_precheck(csv_path, sender_path, message_path, company_name):
     return row, bodies, None
 
 
-def manual_prefill_company(csv_path, sender_path, message_path, company_name):
-    """画面の「手で送る」。1社のフォームを開いて入力できる項目を埋め、送信ボタンは押さずに、画面を閉じるまで待つ。"""
+def manual_prefill_company(csv_path, sender_path, message_path, company_name, use_industry=None):
+    """画面の「手で送る」。1社のフォームを開いて入力できる項目を埋め、送信ボタンは押さずに、画面を閉じるまで待つ。
+    use_industry=画面③「今回使う文面」(この1回だけ・保存しない)"""
     sender = json.loads(Path(sender_path).read_text(encoding="utf-8-sig"))
-    row, bodies, problem = manual_precheck(csv_path, sender_path, message_path, company_name)
+    row, bodies, problem = manual_precheck(csv_path, sender_path, message_path, company_name, use_industry)
     if problem:
         print(problem[0])
         return 5
@@ -1077,7 +1089,8 @@ def manual_prefill_company(csv_path, sender_path, message_path, company_name):
     if not ok_url:
         print("宛先が公開サイトではないため開きません: " + why_url)
         return 5
-    eff = dict(message_adoption.effective_sender(row[0], row[1], sender, subject_industry(message_path, row[2], row[0], row[1])), 件名=subject_for(row[0], row[1], sender, subject_industry(message_path, row[2], row[0], row[1])))
+    sub_ind = subject_industry(message_path, row[2], row[0], row[1], use_industry)
+    eff = dict(message_adoption.effective_sender(row[0], row[1], sender, sub_ind), 件名=subject_for(row[0], row[1], sender, sub_ind))
     print(f"手動入力: {row[0]} のフォームを開きます。入力できる項目だけ自動で埋めます。送信ボタンは押しません。")
     memo, skipped = prefill_manual(row[1], eff, bodies[0])
     print("入力のメモ: " + str(memo))
@@ -1703,6 +1716,7 @@ def main():
     ap.add_argument("--ng-state-db", help="Explicit isolated NG/state DB used by the UI handoff; omitted keeps the normal text NG/state defaults.")
     ap.add_argument("--only-company", action="append", default=None, help="--channel mail のとき、この会社の鍵(画面が渡す。company_key)だけを対象にする(何度でも指定できる)")
     ap.add_argument("--channel", choices=("form", "mail"), default="form", help="mail=フォームの無い会社へメールで1通ずつ送る(smtp.json が要る)。付けなければフォーム")
+    ap.add_argument("--use-industry", default=None, help="画面③「今回使う文面」の業種名(基本の文面は default)。この1回だけ。会社ごとの指定がある会社には効かず、何も保存しない")
     ap.add_argument("--manual-company", help="画面の「手で送る」。この会社のフォームを開いて入力だけ自動で行う(送信ボタンは押さない)")
     ap.add_argument("--check-message-name", help="採用済み企業1社の本文検査のみ。NG/履歴/企業適格性は未検証。DB・ブラウザ・送信動作なし")
     a = ap.parse_args()
@@ -1712,10 +1726,12 @@ def main():
         if not ok:
             print(why)
             return 7
+    if a.use_industry is not None and not a.manual_company:
+        ap.error("--use-industry は --manual-company と一緒にだけ使えます(それ以外の送信では、黙って無視しないため止めます)")
     if a.manual_company:
         if a.send or a.preview:
             ap.error("--manual-company は --send/--preview と併用できません")
-        return manual_prefill_company(a.csv, a.sender, a.message, a.manual_company)
+        return manual_prefill_company(a.csv, a.sender, a.message, a.manual_company, _use_industry(a.use_industry))
     if a.check_message_name is not None:
         if not a.check_message_name.strip():
             ap.error("--check-message-name に企業名が必要です")

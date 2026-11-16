@@ -899,6 +899,20 @@ def read_sender():
 LIST_FIELD = "list"  # エラーの応答の field。リストの問題と送信元の問題を同じ文で返さない(E-1〜E-3)
 
 
+def use_industry_arg(v):
+    """画面③「今回使う文面」の値を検査する。戻り値 (業種 or None, エラー文 or None)。None=選んでいない / "" =基本の文面。
+    選べるのは画面の選択肢(基本の文面・業種ごとの文面・古い名前)だけ。それ以外の文字は受けない(文面フォルダの外を読ませない)"""
+    if v is None or str(v).strip() == "":
+        return None, None
+    v = str(v).strip()
+    if v == "default":
+        return "", None
+    mi = message_info()
+    if v not in set(mi["industries"]) | {o["name"] for o in mi["orphans"]}:
+        return None, "今回使う文面の指定が、選べる文面にありません。画面の「今回使う文面」から選び直してください"
+    return v, None
+
+
 def list_or_error(name):
     """送るリストを開く。(Path, None) か (None, (HTTPコード, 応答))。原因ごとに別の文(E-1 選んでいない / E-2 無い / E-3 Excelで開いたまま)"""
     name = str(name or "").strip()
@@ -1818,12 +1832,17 @@ class H(BaseHTTPRequestHandler):
                 return self.send(400, problem_error(probs))
             import autosend
             name = str(q.get("name", "")).strip()
-            row, bodies, problem = autosend.manual_precheck(str(p), str(SENDER), str(MSG), name)
+            use, uerr = use_industry_arg(q.get("use"))  # 画面③「今回使う文面」(この表示だけ。何も保存しない)
+            if uerr:
+                return self.send(400, {"error": uerr})
+            row, bodies, problem = autosend.manual_precheck(str(p), str(SENDER), str(MSG), name, use)
             if problem:
                 return self.send(400, {"error": f"理由: {problem[0]}。直し方: {problem[1]}"})
             sender = read_sender()
-            label = autosend.source_for_company(str(MSG), row[0], row[1], row[2])[0]
-            return self.send(200, {"company": name, "subject": autosend.subject_for(row[0], row[1], sender, autosend.subject_industry(MSG, row[2], row[0], row[1])), "message": bodies[0],
+            label = autosend.source_for_company(str(MSG), row[0], row[1], row[2], use)[0]
+            return self.send(200, {"company": name, "subject": autosend.subject_for(row[0], row[1], sender, autosend.subject_industry(MSG, row[2], row[0], row[1], use)), "message": bodies[0], "use_industry": use, "use_overridden_by_assignment": use is not None and autosend.message_adoption.case_for(row[0], row[1]) is not None,
+                                   "use_note": ("「今回使う文面」の選択は使われていません。この会社には、会社ごとの文面の指定(または採用済みの文面)があり、そちらが先に使われます" if use is not None and autosend.message_adoption.case_for(row[0], row[1]) is not None
+                                                else "「今回使う文面」の選択は使われていません。業種ごとの文面がオフのため、基本の文面が入ります" if use is not None and (MSG / autosend.EXPAND_OFF).exists() else ""),
                                    "template_label": label, "template_note": ("業種ごとの文面がオフのため、指定は使われず基本の文面が入ります" if (MSG / autosend.EXPAND_OFF).exists() and autosend.message_adoption.assigned_industry(row[0], row[1]) is not None else ""), "assigned": autosend.message_adoption.assigned_industry(row[0], row[1]), "company_industry": row[2],
                                    "options": ["default"] + list(message_info()["industries"]) + [o["name"] for o in message_info()["orphans"]],
                                    "adoption_diff": autosend.message_adoption.difference_text(autosend.message_adoption.changed_parts(row[0], row[1], bodies[0], sender))})
@@ -2364,10 +2383,13 @@ class H(BaseHTTPRequestHandler):
             if probs:
                 return self.send(400, problem_error(probs))
             import autosend
-            _row, _bodies, problem = autosend.manual_precheck(str(p), str(SENDER), str(MSG), name)  # 始める前に、書き出し空欄・フォームURLなしを確かめる(ジョブを走らせて終了コードだけ見せない)
+            use, uerr = use_industry_arg(d.get("use_industry"))  # 画面③「今回使う文面」。この1回のジョブにだけ渡し、何も保存しない
+            if uerr:
+                return self.send(400, {"error": uerr})
+            _row, _bodies, problem = autosend.manual_precheck(str(p), str(SENDER), str(MSG), name, use)  # 始める前に、書き出し空欄・フォームURLなしを確かめる(ジョブを走らせて終了コードだけ見せない)
             if problem:
                 return self.send(400, {"error": f"「{name}」の「フォームで送る(自動挿入)」は始められません。理由: {problem[0]}。直し方: {problem[1]}", "field": LIST_FIELD, "fix": "list"})
-            return self.send(200, {"started": run_job("手動入力", ["autosend.py", str(p), "--sender", str(SENDER), "--message", str(MSG), "--manual-company", name])})
+            return self.send(200, {"started": run_job("手動入力", ["autosend.py", str(p), "--sender", str(SENDER), "--message", str(MSG), "--manual-company", name] + (["--use-industry", use or "default"] if use is not None else []))})
         if self.path == "/api/send/stop":  # 送信の途中で止める。今の1社は終え、次の会社に進まない。残りは未送信のまま残り、次の「送る内容を出す」に出る(承認・全文確認・確認番号は変えない)
             if not (JOB["running"] and JOB["name"] == "本番送信"):
                 return self.send(200, {"stopped": False, "note": "止める送信は動いていません"})
