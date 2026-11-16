@@ -74,7 +74,7 @@ def _load(path):
             _CACHE.update(key=key, text=text, at=time.monotonic())
         return data
     except ValueError as e:  # JSONDecodeError。ファイルは書き換えず、壊れていることを1行で言う(該当会社は送らない側に倒れる)
-        raise AdoptionError('文面の指定の記録(message_adoptions.json)が壊れていて読めません。直るまで、指定のある会社は送りません: ' + str(e)[:60])
+        raise AdoptionError('文面の指定の記録(message_adoptions.json)が壊れていて読めません。直るまで、指定のある会社は送りません: ' + str(e))
 
 def case_for(name, url):
     allcases = records()['cases']

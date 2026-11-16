@@ -585,15 +585,16 @@ def message_info():
     have = {p.stem for p in MSG.glob("*.txt")} if MSG.exists() else set()
     names = list(osm_source.INDUSTRY_TAGS)
     import patterns  # 専用の文面が無い業種に使われる、割り当て済みのパターン(画面に中身を出す)
-    pat = {n: patterns.pattern_for(n) for n in names if n not in have and patterns.pattern_for(n)}
+    import autosend
+    off = autosend.pattern_off_set(MSG) if MSG.exists() else set()  # 利用者が「この業種ではパターンを使わない」と決めた業種
+    pat = {n: patterns.pattern_for(n) for n in names if n not in have and n not in off and patterns.pattern_for(n)}
     texts = {n: patterns.text_for_industry(n) for n in pat}
     texts = {n: t for n, t in texts.items() if t}  # 割り当てはあっても、パターンのファイルが無い環境(公開版)では標準が使われる
     # uses: 画面の1つの印。その業種に「業種ごとの文面」(業種名.txt か、割り当て済みのパターン)が使われるか、「標準」か(D-8。専用とパターンを分けて見せない)
     uses = {n: ("業種ごと" if (n in have or n in texts) else "標準") for n in names}
-    import autosend
     mt = max([f.stat().st_mtime for f in MSG.glob("*.txt")] or [0]) if MSG.exists() else 0  # 画面が「文面が変わったか」を見分け、保存先と最終更新を利用者に見せる
     return {"msg_dir": str(MSG), "msg_mtime": time.strftime("%m/%d %H:%M:%S", time.localtime(mt)) if mt else "", "expand_on": not (MSG / autosend.EXPAND_OFF).exists(), "industries": {n: ("専用" if n in have else "標準") for n in names}, "uses": uses,
-            "patterns": {n: pat[n] for n in texts}, "pattern_texts": texts,
+            "patterns": {n: pat[n] for n in texts}, "pattern_texts": texts, "pattern_off": sorted(n for n in names if n in off and patterns.pattern_for(n)),
             "pattern_status": patterns.pattern_status(), "patterns_missing": patterns.patterns_missing(),  # パターン番号ごとの有無(欠けている番号は、画面の保存先の表示で知らせる)
             "subjects": {n: patterns.subject_for_industry(n) for n in names if patterns.subject_for_industry(n)},  # 業種の型ごとの件名(文面の画面で同時に直せる)
             "orphans": [{"name": n, "to": industries.LEGACY.get(n, "")} for n in sorted(have) if n != "default" and n not in names and not n.startswith("承認")]}
@@ -2258,6 +2259,56 @@ class H(BaseHTTPRequestHandler):
             kept = settings_guard.backup(patterns.PATTERN_DIR.parent.parent, [current_file]) if current_file is not None else None  # 変わる前を、設定の控えへ残す
             saved = patterns.save_pattern(number, text)
             return self.send(200, {"ok": True, "file": saved.name, "backup": str(kept) if kept else None, "pattern_status": patterns.pattern_status(), "patterns_missing": patterns.patterns_missing()})
+        if self.path == "/api/message/pattern_delete":
+            # パターンの文面を画面から消す: {"number": 番号, "confirm": true}。消さずに パターン/_削除済み/ へ移す。confirm が無いときは、文面が無くなる業種を返して確認を取る
+            import patterns
+            try:
+                number = int(d.get("number"))
+            except (TypeError, ValueError):
+                number = 0
+            if number not in patterns.PATTERN_NAMES:
+                return self.send(400, {"error": "パターン番号は、1から13で入れてください"})
+            if patterns.pattern_file(number) is None:
+                return self.send(404, {"error": "このパターンには専用の文面がありません"})
+            inds = patterns.industries_of(number)
+            who = ("「" + "」「".join(inds) + "」の業種") if inds else "どの業種にも割り当てていないため、業種の自動選択"
+            msg = (f"パターン{number}（{patterns.PATTERN_NAMES[number]}）の文面を削除します。{who}では、この文面を使えなくなり、基本の文面が使われます。"
+                   "削除した文面は消さず、パターン/_削除済み に残るので、元に戻せます。")
+            if not d.get("confirm"):
+                return self.send(200, {"ok": True, "confirm_needed": True, "message": msg, "industries": inds})
+            moved = patterns.delete_pattern(number)
+            return self.send(200, {"ok": True, "moved": moved.name if moved else None, "industries": inds, "note": msg,
+                                   "pattern_status": patterns.pattern_status(), "patterns_missing": patterns.patterns_missing()})
+        if self.path == "/api/message/pattern_off":
+            # 「この業種では、割り当てたパターンの文面を使わない」(標準になる)の設定。パターンのファイルも、利用者の業種ごとの文面も変えない。
+            # off=true は、当てはまる文面が無くなることを返して確認(confirm=true)を取ってから入れる。off=false はいつでも元に戻せる
+            import autosend
+            import patterns
+            ind = str(d.get("industry", ""))
+            n = patterns.pattern_for(ind) if ind in osm_source.INDUSTRY_TAGS else None
+            if not n:
+                return self.send(400, {"error": "この業種には、割り当てたパターンがありません"})
+            MSG.mkdir(exist_ok=True)
+            f = MSG / autosend.PATTERN_OFF
+            try:
+                cur = json.loads(f.read_text(encoding="utf-8-sig")) if f.exists() else []
+            except ValueError:
+                return self.send(409, {"error": "パターン不使用.json が読めません。壊さないため、変更しません"})
+            cur = [x for x in cur if isinstance(x, str)] if isinstance(cur, list) else []
+            if d.get("off", True):
+                msg = f"「{ind}」では、パターン{n}（{patterns.PATTERN_NAMES[n]}）の文面を使わなくなります。この業種に当てはまる文面が無くなり、基本の文面が使われます。パターンの文面と、保存してある業種ごとの文面は変わりません。いつでも元に戻せます。"
+                if not d.get("confirm"):
+                    return self.send(200, {"ok": True, "confirm_needed": True, "message": msg})
+                if ind not in cur:
+                    cur.append(ind)
+                note = msg
+            else:
+                cur = [x for x in cur if x != ind]
+                note = f"「{ind}」で、パターン{n}の文面を使う設定に戻しました"
+            tmp = f.with_suffix(".tmp")
+            tmp.write_text(json.dumps(cur, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, f)
+            return self.send(200, {"ok": True, "note": note, "pattern_off": cur})
         if self.path == "/api/message/subject":
             # 業種の型(パターン)ごとの件名を、文面と同じ画面で直す: {"industry": 業種名, "subject": 件名(空なら初期値に戻す)}
             import patterns

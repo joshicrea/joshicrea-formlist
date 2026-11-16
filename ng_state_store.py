@@ -630,7 +630,7 @@ class NgStateStore:
         return self.reserve_for_click(urls, company)
 
     def reserve_send(self, urls, company=""):
-        keys = state.keys_of(urls)
+        keys = state.keys_of(urls, company)
         if not keys:
             return None, ("スキップ", "このフォームは別の実行が送信中か送信済み(送らない)")
         token = secrets.token_hex(8)
@@ -641,9 +641,8 @@ class NgStateStore:
             if self._is_ng_locked(c, urls):
                 c.execute("ROLLBACK")
                 return None, ("要手動", "NGリストに該当したため送らない")
-            for key in keys:
-                row = c.execute("SELECT state, updated FROM sends WHERE key=?", (key,)).fetchone()
-                if row and not (row[0] == PREPARED and now - float(row[1] or 0) > state.RECOVER_AFTER):
+            for row in state.matching_rows(c, urls, company):  # 複合鍵・旧鍵の行に加え、会社名が空のときは全会社名の行も確保済みとして見る
+                if not (row[0] == PREPARED and now - float(row[1] or 0) > state.RECOVER_AFTER):
                     c.execute("ROLLBACK")
                     return None, ("スキップ", "このフォームは別の実行が送信中か送信済みのため送らない")
             for key in keys:
@@ -662,11 +661,11 @@ class NgStateStore:
         finally:
             c.close()
 
-    def start_click(self, urls, token):
-        return self.start_click_if_not_ng(urls, token)
+    def start_click(self, urls, token, company=""):
+        return self.start_click_if_not_ng(urls, token, company)
 
-    def start_click_send(self, urls, token):
-        keys = state.keys_of(urls)
+    def start_click_send(self, urls, token, company=""):
+        keys = state.keys_of(urls, company)
         if not keys or not token:
             return False, ("スキップ", "確保が別実行へ引き継がれたため送らない")
         c = self._conn()
@@ -701,8 +700,8 @@ class NgStateStore:
         finally:
             c.close()
 
-    def mark(self, urls, result_state, memo="", token=None):
-        keys = state.keys_of(urls)
+    def mark(self, urls, result_state, memo="", token=None, company=""):
+        keys = state.keys_of(urls, company)
         if not keys:
             return
         c = self._conn()
@@ -736,7 +735,7 @@ class NgStateStore:
             return "ng", "NGリストに該当したため送らない"
         return "handoff", "確保が別実行へ引き継がれたため送らない"
     def reserve_for_click(self, urls, company=""):
-        keys = state.keys_of(urls)
+        keys = state.keys_of(urls, company)
         if not keys:
             return None
         token = secrets.token_hex(8)
@@ -747,9 +746,8 @@ class NgStateStore:
             if self._is_ng_locked(c, urls):
                 c.execute("ROLLBACK")
                 return None
-            for key in keys:
-                row = c.execute("SELECT state FROM sends WHERE key=?", (key,)).fetchone()
-                if row and row[0] != PREPARED:
+            for row in state.matching_rows(c, urls, company):  # 複合鍵・旧鍵の行に加え、会社名が空のときは全会社名の行も確保済みとして見る
+                if row[0] != PREPARED:
                     c.execute("ROLLBACK")
                     return None
             for key in keys:
@@ -765,8 +763,8 @@ class NgStateStore:
         finally:
             c.close()
 
-    def start_click_if_not_ng(self, urls, token):
-        keys = state.keys_of(urls)
+    def start_click_if_not_ng(self, urls, token, company=""):
+        keys = state.keys_of(urls, company)
         if not keys or not token:
             return False
         c = self._conn()

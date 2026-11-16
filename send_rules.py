@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 
 import ng_list
 import placeholders
+import state
 
 ENFORCE_WINDOW = False  # 2026-10-30 運用者の指示「送信時間が9－18時とあるけれどもこの制約は外してください、使い勝手が悪いです」で外した。時間帯の検査そのもの(window_refusal)は、入れ直したテストのために残す
 HOURS = (9, 18)
@@ -209,12 +210,13 @@ def company_refusal(log, name, url, hp="", now=None):
     now = now or dt.datetime.now()
     me = {company_key(name)} - {""}
     doms = {form_domain(url), form_domain(hp)} - {""}
+    forms = set(state.keys_of([url]))  # 同じフォームURL(別の会社名で押した記録も数える。2026-11-16 0310 独立レビュー・決定 D-20261116-013。共有サービスのフォームはドメインでは当たらないため)
     hits = []
     unreadable = False
     for r in _rows(log):
         if r.get("結果") not in PRESSED:
             continue
-        if company_key(r.get("企業名")) in me or form_domain(r.get("フォームURL")) in doms:
+        if company_key(r.get("企業名")) in me or form_domain(r.get("フォームURL")) in doms or (forms and forms & set(state.keys_of([r.get("フォームURL") or ""]))):
             t = _when(r)
             if t:
                 hits.append(t)

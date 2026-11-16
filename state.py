@@ -14,6 +14,7 @@ import sqlite3
 import sys
 import time
 import json
+import unicodedata
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -71,10 +72,55 @@ def _conn():
     return c
 
 
-def keys_of(urls):
-    """同じページの別の書き方(/index.html・/index.php など)を同じ鍵にする"""
+COMPANY_SEP = "\t"  # 複合鍵の区切り。URL にも会社名にも入らない文字(タブ)
+
+
+def company_norm(company):
+    """会社名の照合用の形。全角半角・空白・「株式会社」等の違いでは別会社にしない(別の書き方の同じ会社へ二重に送らないため)"""
+    s = unicodedata.normalize("NFKC", company or "").lower()
+    return re.sub(r"\s|株式会社|有限会社|合同会社|\(株\)|\(有\)|\(合\)", "", s).replace(COMPANY_SEP, "")
+
+
+def keys_of(urls, company=""):
+    """同じページの別の書き方(/index.html・/index.php など)を同じ鍵にする。
+    company を渡すと「URL鍵 + タブ + 正規化した会社名」の複合鍵にする(同じフォームURLでも会社名が違えば別件。チェーンの共通フォーム等)。
+    company が空なら従来のURLのみの鍵(2026-11-16 以前に書かれた旧記録も、この形)"""
     ks = (re.sub(r"/index\.(?:html?|php)$", "", k) for k in (ng_list.norm_url(u) for u in urls if u) if k)
-    return list(dict.fromkeys(k for k in ks if k))
+    base = list(dict.fromkeys(k for k in ks if k))
+    cn = company_norm(company)
+    return [k + COMPANY_SEP + cn for k in base] if cn else base
+
+
+def guard_keys_of(urls, company=""):
+    """二重送信を止めるために照合する鍵の全体。複合鍵と、URLのみの旧鍵(会社名が記録に無い旧記録は、どの会社名でも止める側に倒す)。
+    別会社の複合鍵(同じURL・違う会社名)は、どちらにも当たらないので止めない"""
+    return list(dict.fromkeys(keys_of(urls, company) + keys_of(urls)))
+
+
+def matching_rows(c, urls, company=""):
+    """二重送信の照合で見る sends の行 (state, updated) の全体。複合鍵と旧鍵(URLのみ)の行を見る。
+    会社名が空(または「株式会社」だけで正規化すると空)のときは、どの会社名の記録でも止める側に倒す(会社名が分からない=別会社と言えない)"""
+    rows = []
+    for k in guard_keys_of(urls, company):
+        r = c.execute("SELECT state, updated FROM sends WHERE key=?", (k,)).fetchone()
+        if r:
+            rows.append(r)
+    if not company_norm(company):
+        for k in keys_of(urls):
+            pre = k + COMPANY_SEP
+            rows += c.execute("SELECT state, updated FROM sends WHERE substr(key,1,?)=?", (len(pre), pre)).fetchall()
+    return rows
+
+
+def hit(done, urls, company=""):
+    """done(送信済み・結果ありの鍵の集合)に、この会社名＋URLが当たるか。複合鍵と旧鍵で当たる。
+    会社名が空(正規化しても空)なら、同じURLの記録はどの会社名のものでも当たる"""
+    if any(k in done for k in guard_keys_of(urls, company)):
+        return True
+    if not company_norm(company):
+        bases = set(keys_of(urls))
+        return any(d.split(COMPANY_SEP, 1)[0] in bases for d in done)
+    return False
 
 
 def _one_key(url):
@@ -103,7 +149,7 @@ def check_key(url, variant=""):
 def reserve(urls, company=""):
     """全てのURLを確保できたら、確保の持ち主を示す印(文字列)を返す。1つでも他の実行に確保されていれば、何も確保せず None。
     以後の start_click / mark には、この印を渡す(引き継がれた古い持ち主が、新しい持ち主の状態を書き換えないため)"""
-    ks = keys_of(urls)
+    ks = keys_of(urls, company)
     if not ks:
         return None
     token = secrets.token_hex(8)
@@ -111,9 +157,8 @@ def reserve(urls, company=""):
     try:
         c.execute("BEGIN IMMEDIATE")
         now = time.time()
-        for k in ks:
-            row = c.execute("SELECT state, updated FROM sends WHERE key=?", (k,)).fetchone()
-            if row and not (row[0] == PREPARED and now - row[1] > RECOVER_AFTER):
+        for row in matching_rows(c, urls, company):  # 書く鍵(複合鍵)だけでなく、URLのみの旧鍵の行・会社名が空のときは全会社名の行も「確保済み」として見る
+            if not (row[0] == PREPARED and now - row[1] > RECOVER_AFTER):
                 c.execute("ROLLBACK")
                 return None
         for k in ks:
@@ -212,10 +257,11 @@ def fail_check(url, company, error, lease_id=None, variant=""):
         c.close()
 
 
-def start_click(urls, token):
+def start_click(urls, token, company=""):
     """送信ボタンを押す直前に呼ぶ。自分の確保がまだ「準備」のまま残っているときだけ True。
-    確保が引き継がれていた(10分以上かかった)・消されていた場合は False=押さない"""
-    ks = keys_of(urls)
+    確保が引き継がれていた(10分以上かかった)・消されていた場合は False=押さない。
+    company は reserve に渡した会社名と同じ値(違うと、予約した複合鍵の行を見つけられず必ず False=押さない側に倒れる)"""
+    ks = keys_of(urls, company)
     if not ks or not token:
         return False
     c = _conn()
@@ -239,9 +285,9 @@ def start_click(urls, token):
         c.close()
 
 
-def mark(urls, state, memo="", token=None):
-    """結果を記録する。token を渡したときは、自分の確保のものだけを書き換える"""
-    ks = keys_of(urls)
+def mark(urls, state, memo="", token=None, company=""):
+    """結果を記録する。token を渡したときは、自分の確保のものだけを書き換える。company は reserve に渡した会社名と同じ値"""
+    ks = keys_of(urls, company)
     if not ks:
         return
     c = _conn()

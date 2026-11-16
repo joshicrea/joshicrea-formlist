@@ -83,6 +83,20 @@ CONSENT = re.compile(r"同意|承諾|プライバシー|個人情報|privacy|agr
 EXPAND_OFF = "業種展開.オフ"  # 文面フォルダにこのファイルがあるとき、業種ごとの文面は使わない(無い=使う。これまでの動きのまま)
 
 
+PATTERN_OFF = "パターン不使用.json"  # 文面フォルダのこのファイル(業種名の一覧)にある業種は、割り当てたパターンの文面・件名を使わず標準にする(利用者の設定。パターンのファイルと業種ごとの文面は変えない)
+
+
+def pattern_off_set(path):
+    """パターンを使わない業種の名前の集まり(新しい分類の名前にそろえる)。ファイルが無い・読めないときは空(これまでの動き)"""
+    import json
+    import industries
+    try:
+        v = json.loads((Path(path) / PATTERN_OFF).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return set()
+    return {industries.canonical(n) for n in v if isinstance(n, str)} if isinstance(v, list) else set()
+
+
 def pick_message_source(path, industry):
     """(どの文面か, 本文)。どの文面か は「標準」か、業種ごとの文面の業種名(ファイルを1つ指定したときは「指定の文面」)。
     --message がフォルダなら 業種名.txt を優先し、無ければ割り当てた業種別パターン、それも無ければ default.txt"""
@@ -99,8 +113,9 @@ def pick_message_source(path, industry):
             if safe and f.exists():
                 return name, f.read_text(encoding="utf-8-sig")
         import patterns  # 専用の業種文面が無ければ、割り当てた業種別パターン。割り当てが無い業種は標準へ(人が送信前に確認する)
+        off = pattern_off_set(p)  # 「この業種ではパターンを使わない」と利用者が決めた業種は、標準へ
         for name in dict.fromkeys([industry, industries.canonical(industry) if industry else industry]):
-            text = patterns.text_for_industry(name) if name else None
+            text = patterns.text_for_industry(name) if name and industries.canonical(name) not in off else None
             if text:
                 return name, text
         return "標準", (p / "default.txt").read_text(encoding="utf-8-sig")
@@ -187,8 +202,9 @@ def subject_industry(message_path, industry, name="", url=""):
         return None
     import industries
     import patterns
+    off = pattern_off_set(p)
     for n in dict.fromkeys([industry, industries.canonical(industry)]):
-        if n and patterns.pattern_for(n):
+        if n and patterns.pattern_for(n) and industries.canonical(n) not in off:
             return n
     return None
 
@@ -391,7 +407,8 @@ def sent_urls(results_only=False):
     after = ("届いた(本人確認)", "届いていない(本人確認)", "手で送信済み")  # 送ったあとに本人が記録した結果(sales_records)。自動では送り直さない
     kinds = ("送信済み", "不明(要確認)", INPUT_ERROR_RESULT) + after if results_only else ("送信試行", "送信済み", "不明(要確認)", INPUT_ERROR_RESULT) + after
     with open(LOG, encoding="utf-8-sig", newline="") as f:
-        return {k for r in csv.DictReader(f) if r["結果"] in kinds for k in state.keys_of([r["フォームURL"]])}
+        # 企業名がある行は「会社名＋フォームURL」の複合鍵(同じURLでも別の会社名は別件)。企業名が空の行だけ、URLのみの鍵(どの会社名でも止める)
+        return {k for r in csv.DictReader(f) if r["結果"] in kinds for k in state.keys_of([r["フォームURL"]], r.get("企業名") or "")}
 
 
 def _gate_blocked_keys(gate):
@@ -439,6 +456,17 @@ def _hp_verify_skip_reason(row):
     return "HPの照合が検証済みの電話一致/住所一致ではない: " + ev[:80]
 
 
+def _row_key(row):
+    """この行を「送った」と記録するときの鍵(会社名＋フォームURLの複合鍵)。URLが無ければ空文字"""
+    return (state.keys_of([row.get(formlist.LEDGER_COLS[7], "")], row.get("企業名") or "") or [""])[0]
+
+
+def _row_hit(done, row):
+    """この行が、送信済みの鍵の集合 done に当たるか。複合鍵と、URLのみの旧鍵(会社名の無い旧記録はどの会社名でも止める)で当たる。
+    別会社の複合鍵には当たらない。この行の企業名が空なら、同じURLの記録はどの会社名のものでも当たる"""
+    return state.hit(done, [row.get(formlist.LEDGER_COLS[7], "")], row.get("企業名") or "")
+
+
 def _target_skip_reason(row, include_supplemented=False, gate=None, done=None):
     if row.get(formlist.EXTRA_COLS[0]) != next(iter(formlist.ORDER)):
         return "フォーム判定がフォームありではない"
@@ -453,11 +481,10 @@ def _target_skip_reason(row, include_supplemented=False, gate=None, done=None):
     if hp_reason:
         return hp_reason
     url = row.get(formlist.LEDGER_COLS[7], "")
-    key = (state.keys_of([url]) or [""])[0]
     if not url.startswith("http"):
         return "フォームURLがhttp(s)ではない"
-    if done is not None and key in done:
-        return "送信済みまたは同一回の重複フォームURL"
+    if done is not None and _row_hit(done, row):
+        return "送信済みまたは同一回の重複(同じ会社名＋同じフォームURL)"
     if _mail_available() and _mail_addr_ok(row):  # フォームとメールの両方がある会社
         ck = _choice_key(row)
         if "form" not in channel_choice.allowed_channels(True, True, ck):
@@ -624,8 +651,7 @@ def _mail_scan(csv_path, include_supplemented=False, gate=None, ignore_choice=Fa
         if ignore_choice:
             break  # 文面を見るだけ(選択を見ない)なら、フォームで送る会社の目印は要らない
         if row_channel(r) == "フォーム" and not (_mail_available() and not channel_choice.rule_enabled() and _mail_addr_ok(r)):
-            key = (state.keys_of([r.get(formlist.LEDGER_COLS[7], "")]) or [""])[0]
-            if (key in form_done or not _target_skip_reason(r, include_supplemented=include_supplemented, gate=gate, done=set())) and _hp_root(r):
+            if (_row_hit(form_done, r) or not _target_skip_reason(r, include_supplemented=include_supplemented, gate=gate, done=set())) and _hp_root(r):
                 done.add("co:" + _choice_key(r))
     targets_, skips = [], []
     for r in rows:
@@ -686,9 +712,7 @@ def target_skip_reasons(csv_path, include_supplemented=False, gate=None):
             if reason:
                 out.append((r.get("企業名", ""), r.get(formlist.LEDGER_COLS[7], ""), reason))
                 continue
-            url = r.get(formlist.LEDGER_COLS[7], "")
-            key = (state.keys_of([url]) or [""])[0]
-            done.add(key)
+            done.add(_row_key(r))  # 同じ回の中の重複は、同じ会社名＋同じURLだけ(会社名が違えば別件)
     return out
 
 
@@ -701,9 +725,9 @@ def targets(csv_path, include_supplemented=False, gate=None):
             if _target_skip_reason(r, include_supplemented=include_supplemented, gate=gate, done=done):
                 continue
             url = r.get(formlist.LEDGER_COLS[7], "")
-            key = (state.keys_of([url]) or [""])[0]
+            key = _row_key(r)
             if url.startswith("http") and key not in done:
-                done.add(key)  # 同じ回の中の重複(チェーンの共通フォーム)も1回にする
+                done.add(key)  # 同じ回の中の重複は、同じ会社名＋同じURLの2行目だけ1回にする。チェーンの共通フォームでも会社名が違えば別件として送る(2026-11-16 の変更。以前はURLだけで1回にしていた)
                 out.append((r["企業名"], url, r.get("業種", ""), r.get("書き出し", ""), r.get("HP URL", "")))
     return out
 
@@ -1256,19 +1280,19 @@ def _gate_reserve(gate, urls, name):
     return None, ("スキップ", "このフォームは別の実行が送信中か送信済み(送らない)")
 
 
-def _gate_start_click(gate, urls, token):
+def _gate_start_click(gate, urls, token, name=""):
     if gate is not None and hasattr(gate, "start_click_send"):
-        return gate.start_click_send(urls, token)
-    ok = gate.start_click(urls, token) if gate is not None else state.start_click(urls, token)
+        return gate.start_click_send(urls, token, name)
+    ok = gate.start_click(urls, token, name) if gate is not None else state.start_click(urls, token, name)
     if ok:
         return True, None
     return False, ("スキップ", "確保が別の実行へ引き継がれたため送らない")
 
 
-def _gate_mark(gate, urls, result_state, memo, token):
+def _gate_mark(gate, urls, result_state, memo, token, name=""):
     if gate is not None:
-        return gate.mark(urls, result_state, memo, token)
-    return state.mark(urls, result_state, memo, token)
+        return gate.mark(urls, result_state, memo, token, name)
+    return state.mark(urls, result_state, memo, token, name)
 
 
 def _gate_ng_result():
@@ -1318,7 +1342,7 @@ def send_one(page, name, url, sender, message, do_send, hp=""):
         return "要手動", late + "(送れる時間を過ぎたため、送信ボタンは押していない。次の平日の時間内に送れます)"
     if _gate_is_ng(gate, [url, page.url, hp]):  # 長い送信の途中で追加されたNGも、押す直前に見る(会社のHPのドメインも)
         return _gate_ng_result()
-    if set(state.keys_of([url, page.url])) & (sent_urls(results_only=True) | state.blocked_keys()):  # 画面版・コマンド版のどちらで押したものも、送信ログの結果行で止める
+    if state.hit(sent_urls(results_only=True) | state.blocked_keys(), [url, page.url], name):  # 会社名＋リダイレクト後のURLの複合鍵と、URLのみの旧鍵で止める  # 画面版・コマンド版のどちらで押したものも、送信ログの結果行で止める
         return "スキップ", "このフォームは送信ログに結果(送信済み・不明・入力エラー)があるため送らない"
     return _press(page, name, url, message, hp, gate, btn, memo, shot)
 
@@ -1333,7 +1357,7 @@ def _press(page, name, url, message, hp, gate, btn, memo, shot):
     STATE["targets"] = targets_now
     if _gate_is_ng(gate, targets_now + [hp]):  # ログ書き込みの間に追加されたNGも、押す直前にもう一度見る
         return _gate_ng_result()
-    started, refusal = _gate_start_click(gate, targets_now, token)
+    started, refusal = _gate_start_click(gate, targets_now, token, name)
     if not started:  # ログ書き込み等に時間がかかり、確保が別の実行へ引き継がれていたら押さない
         return refusal
     before = page.url
@@ -1347,7 +1371,7 @@ def _press(page, name, url, message, hp, gate, btn, memo, shot):
     stuck = False
     if nxt is not None and _gate_is_ng(gate, targets_now + [page.url, hp]):  # 確認画面にいるあいだに別経路で追加されたNGも、本送信の直前に見る
         final = ("要手動", memo + " 確認画面の送信ボタンを押す直前にNGリストへ追加されていたため、2回目(本送信)を押していない")
-        _gate_mark(gate, targets_now, final[0], final[1], token)
+        _gate_mark(gate, targets_now, final[0], final[1], token, name)
         return final
     if nxt is not None:  # 確認画面だと識別できたときだけ、もう一段押す
         try:
@@ -1371,7 +1395,7 @@ def _press(page, name, url, message, hp, gate, btn, memo, shot):
         final = (INPUT_ERROR_RESULT, memo + " 送信後もフォームが残り、入力エラーの表示がある。先方に届いていない可能性が高いが、自動では再送しない" + note)
     else:
         final = ("不明(要確認)", memo + " 完了画面の文言を確認できず" + note)
-    _gate_mark(gate, targets_now, final[0], final[1], token)
+    _gate_mark(gate, targets_now, final[0], final[1], token, name)
     return final
 
 
@@ -1808,7 +1832,7 @@ def main():
                     if STATE["clicked"] and STATE.get("token"):
                         gate = STATE.get("gate")
                         targets_for_mark = STATE.get("targets") if gate is not None else [url]
-                        _gate_mark(gate, targets_for_mark or [url], res, memo, STATE["token"])
+                        _gate_mark(gate, targets_for_mark or [url], res, memo, STATE["token"], name)
             results.append(res)
             print(f"[{i}/{len(todo)}] {res}  {name}  {memo}")
             try:

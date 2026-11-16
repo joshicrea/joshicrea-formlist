@@ -208,7 +208,7 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
     <div class="arow" id="openRow"><span class="al">書き出し</span><span id="openView"></span></div><p class="hint" id="aiOpenHint" style="margin:4px 0 0">書き出しは、Claude に頼むと書き直せます。書き直した書き出しは、送る内容の一覧で読んで直せます。</p></div>
    <label for="mtext">本文（ここを直します）</label><textarea id="mtext" style="min-height:260px"></textarea>
    <div class="autobox"><p class="ah">自動で入る部分</p><div class="arow"><span class="al">署名（送信元から）</span><button class="lnk" id="toSender" type="button">送信元を直す</button></div><div class="msgbody" id="sigView"></div></div>
-   <div class="actions"><button class="btn sub" id="saveMsg" type="button">この文面を保存</button> <button class="btn sub" id="moveMsg" type="button" hidden></button> <button class="btn sub" id="delMsg" type="button" hidden>この業種の文面をやめる（基本の文面に戻す）</button> <button class="lnk" id="msgClose" type="button">閉じる</button></div>
+   <div class="actions"><button class="btn sub" id="saveMsg" type="button">この文面を保存</button> <button class="btn sub" id="moveMsg" type="button" hidden></button> <button class="btn sub" id="delMsg" type="button" hidden>この業種の文面をやめる（基本の文面に戻す）</button> <button class="btn sub" id="offMsg" type="button" hidden></button><button class="lnk" id="msgClose" type="button">閉じる</button></div>
    <p class="hint" id="msgSaved"></p>
    <h3 class="eh">パターンの文面（業種の型ごとの文面）</h3>
    <p class="hint">業種ごとの文面が無い業種では、このパターンの文面が使われます。パターンは全部で13種類あります。まだ無いパターンは、ここで新しく作れます。作った文面は、そのパターンを使う業種すべてに届きます。</p>
@@ -216,7 +216,7 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
    <label for="patSel">どのパターンの文面か</label><select id="patSel"></select>
    <p class="hint" id="patState"></p><p class="ferr" id="patProb" hidden></p>
    <label for="patText">パターンの本文（ここを直します。新しく作るときも、ここに書きます）</label><textarea id="patText" style="min-height:260px" placeholder="まだ文面がありません。ここに書いて「このパターンを保存」を押すと、新しく作れます"></textarea>
-   <div class="actions"><button class="btn sub" id="patSave" type="button">このパターンを保存</button></div>
+   <div class="actions"><button class="btn sub" id="patSave" type="button">このパターンを保存</button> <button class="btn sub" id="patDel" type="button">このパターンを削除</button></div>
    <p class="hint" id="patSaved" role="status"></p>
    <h3 class="eh">実際に届く文の見本</h3><p class="hint" id="sampleNote"></p><div class="msgbody" id="sampleView"></div>
    <details class="dt"><summary>営業資料から、文面のたたき台を作る</summary><div><p class="why">営業資料の文章を貼ります。見出し・箇条書き・URLを拾って、本文の欄にたたき台を入れます。保存するまでは、文面は変わりません。AIは使っていません。自分で読んで直します。</p><textarea id="mat" style="min-height:120px" placeholder="営業資料の文章をここに貼り付け"></textarea><button class="btn sub" id="mkSample" type="button">たたき台を作って、本文に入れる</button><p class="hint" id="matNote"></p></div></details>
@@ -539,7 +539,7 @@ function showMsg(){const k=S.msgInd=$('#mind').value,mi=META.message_info||{orph
  S.parts=splitMsg(rawMsg(k));S.greet=S.parts.greet;S.opener=S.parts.opener;$('#mtext').value=S.parts.body;
  $('#mstate').textContent=k=='default'?'':(o&&o.to)?'古い業種名で作った文面です。いまの業種の分類にこの名前は無いので、送るときには使われません。':own?'この業種には、業種ごとの文面を使います。':'この業種には、基本の文面を使います。直して保存すると、この業種だけの文面になります。';
  const mp=msgProbs().filter(p=>(p.industry||'default')==k);const bt=($('#now_c')&&$('#now_c').textContent)||'',mt=mp.map(p=>p.text).filter(t=>!bt.includes(t));$('#mprob').hidden=!mt.length&&S.parts.ok;$('#mprob').textContent=mt.join(' ')+(S.parts.ok?'':' 自動で入る部分の位置が、ほかの文面と違います。印のところは送るときに置き換わります。');
- $('#delMsg').hidden=!(own&&(META.messages||{})[k]!=null);$('#moveMsg').hidden=!(o&&o.to);$('#moveMsg').textContent=o&&o.to?`この文面を ${o.to} の文面にコピーする`:'';
+ $('#delMsg').hidden=!(own&&(META.messages||{})[k]!=null);{const pa=!!(mi.patterns&&mi.patterns[k]!=null),po=(mi.pattern_off||[]).includes(k);$('#offMsg').hidden=!(k!='default'&&!own&&(pa||po));$('#offMsg').textContent=po?'この業種で、パターンの文面を使う設定に戻す':'この業種では、パターンの文面を使わない'}$('#moveMsg').hidden=!(o&&o.to);$('#moveMsg').textContent=o&&o.to?`この文面を ${o.to} の文面にコピーする`:'';
  const sj=(mi.subjects||{})[k];$('#msubjRow').hidden=sj==null||k=='default';$('#msubj').value=sj||'';S.subj0=sj||'';
  renderAuto();renderSample()}
 function renderAuto(){const p=S.parts||{};show('#greetRow',!!p.ok);show('#openRow',!!p.ok);
@@ -571,20 +571,27 @@ $('#newIndBtn').onclick=()=>{const pe=$('#newIndProb');pe.hidden=true;const name
 // パターンの文面: 状態と中身は GET /api/message/patterns、保存は POST /api/message/pattern(1番号ずつ)を使う。既存APIだけで足りるため app.py は変えない
 let PAT={status:{},missing:[],cur:null,orig:'',loaded:false};
 function patNums(){return Object.keys(PAT.status).map(Number).sort((a,b)=>a-b)}
-function patStateText(n,s){if(!s)return '';if(s.present)return 'このパターンには、専用の文面があります（ファイル: '+(s.file||'')+'）。直して保存すると、上書きされます。';if(s.fallback)return 'このパターンの専用の文面は、まだありません。いまは旧パターン10の文面で代用されています。下の本文は代用中の文面です。そのまま保存すると、このパターンの専用の文面として新しく作られます。';return 'このパターンの文面は、まだありません。下に書いて保存すると、新しく作れます。'}
+function patStateText(n,s){if(!s)return '';if(s.present)return 'このパターンには、専用の文面があります（ファイル: '+(s.file||'')+'）。直して保存すると、上書きされます。';if(s.fallback)return 'このパターンの専用の文面は、まだありません。いまはパターン10（自治体・公共・団体）の文面で代用されています。下の本文は代用中の文面です。そのまま保存すると、このパターンの専用の文面として新しく作られます。';return 'このパターンの文面は、まだありません。下に書いて保存すると、新しく作れます。'}
 function renderPatOptions(){const sel=$('#patSel');if(!sel)return;sel.innerHTML=patNums().map(n=>{const s=PAT.status[n]||{};const mark=s.present?'文面あり':(s.fallback?'代用中（専用はまだありません）':'まだありません');return `<option value="${n}">パターン${n}（${esc(s.name||'')}） ― ${mark}</option>`}).join('');if(PAT.cur!=null&&PAT.status[PAT.cur])sel.value=String(PAT.cur)}
 function renderPatMissing(){const box=$('#patMissing');if(!box)return;if(!PAT.missing.length){box.hidden=true;box.innerHTML='';return}box.hidden=false;box.innerHTML='文面がまだ無いパターンがあります。番号を押すと、そのパターンを選んだ状態になります。そのまま本文を書いて保存すると、新しく作れます: '+PAT.missing.map(n=>`<button class="lnk patJump" data-n="${n}" type="button">パターン${n}（${esc((PAT.status[n]||{}).name||'')}）</button>`).join('、');box.querySelectorAll('.patJump').forEach(b=>b.onclick=()=>{PAT.cur=+b.dataset.n;renderPatOptions();showPat();const t=$('#patText');if(t)t.focus()})}
 function showPat(){const sel=$('#patSel');if(!sel||!Object.keys(PAT.status).length)return;const n=PAT.cur=+sel.value;const s=PAT.status[n]||{};PAT.orig=s.text||'';$('#patText').value=PAT.orig;$('#patState').textContent=patStateText(n,s);$('#patProb').hidden=true;$('#patSaved').textContent=''}
 async function loadPatterns(keep,force){if(PAT.loaded&&!force)return;const r=await J('/api/message/patterns');if(!r||r.error){const e=$('#patProb');if(e){e.hidden=false;e.textContent=(r&&r.error)||'パターンの文面を読み込めませんでした'}return}PAT.status=r.pattern_status||{};PAT.missing=r.patterns_missing||[];PAT.loaded=true;if(keep!=null&&PAT.status[keep])PAT.cur=keep;else if(PAT.cur==null||!PAT.status[PAT.cur])PAT.cur=PAT.missing.length?PAT.missing[0]:(patNums()[0]||1);renderPatOptions();renderPatMissing();showPat()}
 async function savePat(){const n=PAT.cur;if(n==null)return;const s=PAT.status[n]||{};const text=$('#patText').value;const pe=$('#patProb');pe.hidden=true;if(!text.trim()){pe.hidden=false;pe.textContent='本文が空です。文面を書いてから保存してください。';return}
  if(s.present&&text!==PAT.orig&&!confirm('パターン'+n+'（'+(s.name||'')+'）には、すでに文面があります。いまの本文で上書きします。よろしいですか。'))return;
- if(!s.present&&s.fallback&&!confirm('パターン'+n+'（'+(s.name||'')+'）の専用の文面を、新しく作ります。いま下に表示されているのは、旧パターン10の代用文面です。この内容で作ります。よろしいですか。'))return;
+ if(!s.present&&s.fallback&&!confirm('パターン'+n+'（'+(s.name||'')+'）の専用の文面を、新しく作ります。いま下に表示されているのは、パターン10（自治体・公共・団体）の代用文面です。この内容で作ります。よろしいですか。'))return;
  const r=await post('/api/message/pattern',{number:n,text:text});
  if(r.error){pe.hidden=false;pe.innerHTML=errHtml(r);return}
  PAT.loaded=false;await refreshMeta(true);showWhere();await loadPatterns(n,true);
  $('#patSaved').textContent='保存しました（'+(r.file||('パターン'+n))+'）。'+(PAT.missing.length?'文面がまだ無いパターンは、あと'+PAT.missing.length+'種類あります。':'パターンは全種類そろいました。')}
 $('#patSel').onchange=()=>{PAT.cur=+$('#patSel').value;showPat()};
 $('#patSave').onclick=savePat;
+async function delPat(){const n=PAT.cur;if(n==null)return;const s=PAT.status[n]||{};const pe=$('#patProb');pe.hidden=true;if(!s.present){pe.hidden=false;pe.textContent='このパターンには専用の文面がないため、削除するものがありません。';return}
+ const q=await post('/api/message/pattern_delete',{number:n});if(q.error){pe.hidden=false;pe.innerHTML=errHtml(q);return}
+ if(q.confirm_needed&&!confirm(q.message+' よろしいですか。'))return;
+ const r=await post('/api/message/pattern_delete',{number:n,confirm:true});if(r.error){pe.hidden=false;pe.innerHTML=errHtml(r);return}
+ PAT.loaded=false;await refreshMeta(true);showWhere();await loadPatterns(n,true);
+ $('#patSaved').textContent='削除しました。前の文面は パターン/_削除済み に残してあります。'}
+$('#patDel').onclick=delPat;
 async function importSettings(file){S.err='';let b;try{b=JSON.parse(await file.text())}catch(e){S.err='設定ファイルとして読めませんでした。受け取ったファイルをそのまま選んでください。';renderSend();return}
  if(!b||b.format!=='formlist-settings-1'||typeof b.sender!=='object'||typeof b.messages!=='object'){S.err='このファイルは、設定ファイルではないようです。';renderSend();return}
  const n=Object.keys(b.messages).length;
@@ -598,6 +605,7 @@ function showWhere(){const mi=META.message_info||{};const e=$('#mwhere');if(e)e.
 function missingPat(mi){const ms=mi.patterns_missing||[];if(!ms.length)return '';const st=mi.pattern_status||{};return '／ 文面が欠けているパターンがあります: '+ms.map(n=>'パターン'+n+'（'+((st[n]||{}).name||'')+'）').join('、')}
 function showCopy(){const c=META.copy;const e=$('#mcopy');if(!e)return;if(!c){e.textContent='';return}e.textContent='';const p=document.createElement('p');p.className='hint';p.textContent='動いているフォルダ: '+(c.here||'')+'／設定の保存先: '+(c.settings_dir||'');e.appendChild(p);(c.warnings||[]).forEach(w=>{const d=document.createElement('p');d.className='warn';d.textContent=w;e.appendChild(d)})}
 function syncExpand(){const e=$('#expandOn');if(e)e.checked=((META.message_info||{}).expand_on)!==false}
+$('#offMsg').onclick=async()=>{const k=S.msgInd,po=((META.message_info||{}).pattern_off||[]).includes(k);let r;if(po){r=await post('/api/message/pattern_off',{industry:k,off:false})}else{const q=await post('/api/message/pattern_off',{industry:k,off:true});if(q.error){S.err=errHtml(q);renderSend();return}if(!confirm(q.message+' よろしいですか。'))return;r=await post('/api/message/pattern_off',{industry:k,off:true,confirm:true})}if(r.error){S.err=errHtml(r);renderSend();return}await refreshMeta(true);renderMsgOptions();showMsg()};
 $('#expandOn').onchange=async()=>{const r=await post('/api/message/expand',{on:$('#expandOn').checked});if(r.error){S.err=errHtml(r);renderSend();return}await refreshMeta(true);syncExpand();renderMsgOptions();showMsg();renderSend()};
 $('#expandMake').onclick=async()=>{if(!confirm('基本の文面を写して、まだ専用の文面が無い業種すべてに専用の文面を作ります。作ったあと、業種ごとに直せます。すでにある専用の文面は上書きしません。よろしいですか。'))return;const r=await post('/api/message/expand',{make:true,on:true});if(r.error){S.err=errHtml(r);renderSend();return}await refreshMeta(true);syncExpand();renderMsgOptions();showMsg();S.flash=r.made.length+'業種に専用の文面を作りました。';renderSend()};
 $('#moveMsg').onclick=async()=>{const k=S.msgInd;const o=((META.message_info||{}).orphans||[]).find(x=>x.name==k);if(!o||!o.to)return;const r=await post('/api/message/move',{from:k,to:o.to});if(r.error){$('#msgSaved').innerHTML=errHtml(r);return}await refreshMeta(true);S.msgInd=o.to;renderMsgOptions();showMsg();$('#msgSaved').textContent=r.note||''};

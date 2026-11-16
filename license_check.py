@@ -22,7 +22,7 @@ import proposal_links
 import state
 
 SERVICE_ID = "formlist"
-PRODUCT_VERSION = "1.0.8"  # 製品全体の版(ドット区切りの数字)。台帳の min_version と比べる。手元は 1.0.0 のまま。公開のたびに publish_formlist.py が、公開物だけ上げる(公開中の版の末尾に+1。ビルドの印は build として別に送る)
+PRODUCT_VERSION = "1.0.9"  # 製品全体の版(ドット区切りの数字)。台帳の min_version と比べる。手元は 1.0.0 のまま。公開のたびに publish_formlist.py が、公開物だけ上げる(公開中の版の末尾に+1。ビルドの印は build として別に送る)
 PUBKEY_NAME = "license_sign_pub.pem"  # 配布版に同梱する公開鍵(台帳サーバーの lic_private/sign_pub.pem と同じもの)。無い間は署名を検証しない
 CLOCK_SKEW_SECONDS = 86400  # パソコンの時計とサーバー時刻のずれの許容(これを超えて進んだ・戻った時計は、署名つきの成功で直るまで止める)
 RETRY_WAITS = (2, 4, 8)  # 初回1回のあとの再試行(最大3回)の待機秒。ゆらぎをつける
@@ -150,13 +150,29 @@ def _signed_at(c, key):
 
 
 def _record(update, now):
-    """手元の記録を書き換える。キーの実値は入れない"""
+    """手元の記録を書き換える。キーの実値は入れない。update は dict か、読み込んだ記録を受けて dict を返す関数(読みと書きを同じロックの中で行う)"""
     with _LOCK:
         d = _load()
         d.setdefault("first_attempt_at", now)
         d["last_attempt_at"] = now
-        d.update(update)
+        d.update(update(d) if callable(update) else update)
         _save(d)
+
+
+def _same_key(bound, kh):
+    """記録の key_hash が今のキーのものか、束縛の無い旧記録(None・項目なし)なら True。別のキーのものなら False(Q729: 共有の記録で他キーの結果を混ぜない)"""
+    return bound is None or bound == kh
+
+
+def _denial_update(den, kh):
+    """拒否の記録。成功控え(署名・nonce・checked_at・last_ok_at)を消すのは、控えが同じキーのもの(または束縛の無い旧記録)のときだけ。
+    他キーの成功控えと、その last_result は残す(他キーの照合の否認で、本番側の表示を壊さない)"""
+    def upd(d):
+        u = {"denied": dict(den, key_hash=kh), "not_deployed": False}
+        if _same_key(d.get("key_hash"), kh):
+            u.update({"last_result": "denied", "sig": None, "nonce": None, "checked_at": None, "last_ok_at": None, "key_hash": None})
+        return u
+    return upd
 
 
 def _retry_after(r):
@@ -176,9 +192,9 @@ def check(version="", now=None, post=None, retries=0, sleep=time.sleep):
     if not key:
         # 鍵が無いときは台帳を呼ばない。呼んでも台帳は unknown_key を返すだけで、台帳のアクセス記録に拒否が毎回1件残り、運用側の失敗検知(夜間検査)が毎晩鳴る(2026-11-05 実測・Q671)。
         # 端末側で拒否(reason=no_key)として記録し、画面には次の一歩を具体的に出す。鍵が入ったあとは、画面の保存の直後の再照合(/api/license/recheck)が台帳を呼ぶ
-        _record({"last_result": "denied", "denied": {"reason": "no_key", "message": "許可キーがまだ入っていません。画面の上の「許可キー」の行から入れてください", "expires_on": None, "at": now},
-                 "not_deployed": False, "sig": None, "nonce": None, "checked_at": None, "last_ok_at": None}, now)
+        _record(_denial_update({"reason": "no_key", "message": "許可キーがまだ入っていません。画面の上の「許可キー」の行から入れてください", "expires_on": None, "at": now}, None), now)
         return status(now)
+    kh = _key_hash()
     headers = {"Content-Type": "application/json", "X-Install-Id": install_id(), "X-License-Key": key}
     nonce = secrets.token_urlsafe(24)  # 毎回新しく作る(32文字・英数字と _ -)。応答の署名に含まれ、古い応答の使い回しを防ぐ
     body_out = {"service_id": SERVICE_ID, "version": PRODUCT_VERSION, "build": str(version)[:40], "nonce": nonce}
@@ -212,14 +228,17 @@ def check(version="", now=None, post=None, retries=0, sleep=time.sleep):
             return status(now)
         grace = body.get("grace_days")
         grace = grace if isinstance(grace, int) and 0 <= grace <= MAX_GRACE_DAYS else DEFAULT_GRACE_DAYS
-        upd = {"last_result": "ok", "last_ok_at": now, "grace_days": grace, "expires_on": body.get("expires_on"), "denied": None, "not_deployed": False}
+        upd = {"last_result": "ok", "last_ok_at": now, "grace_days": grace, "expires_on": body.get("expires_on"), "not_deployed": False, "key_hash": kh}
         if key is not None:
             upd.update({"sig": body.get("sig"), "nonce": nonce, "checked_at": body.get("checked_at"), "capabilities": body.get("capabilities")})
-        _record(upd, now)
+
+        def ok_update(d):  # 拒否の記録を消すのは、同じキー(または束縛の無い旧記録)の拒否だけ。他キーの拒否は残す
+            den = d.get("denied")
+            return dict(upd, denied=None) if not isinstance(den, dict) or _same_key(den.get("key_hash"), kh) else upd
+        _record(ok_update, now)
     elif code in (401, 403):  # 契約0.7: 署名なしで返る。署名や本文の有無によらず確定した拒否として即時に止め、猶予に回さない
-        _record({"last_result": "denied", "denied": {"reason": str(body.get("reason", ""))[:40], "message": str(body.get("message") or "")[:200],
-                                                     "expires_on": body.get("expires_on"), "at": now}, "not_deployed": False,
-                 "sig": None, "nonce": None, "checked_at": None, "last_ok_at": None}, now)  # 拒否のあと、控えから denied だけを消しても、前回の成功の猶予に戻れないようにする
+        _record(_denial_update({"reason": str(body.get("reason", ""))[:40], "message": str(body.get("message") or "")[:200],
+                                "expires_on": body.get("expires_on"), "at": now}, kh), now)  # 拒否のあと、控えから denied だけを消しても、前回の成功の猶予に戻れないようにする(同じキーの控えのとき)
     elif (code in (404, 410) or (code == 200 and "ok" not in body)) and _pubkey() is None and not (_load().get("last_ok_at") or _load().get("denied")):
         _record({"last_result": "not_deployed", "not_deployed": True}, now)  # 台帳サーバーがまだ無い(この端末が、台帳の正式な応答を一度も受けていない間だけ)。止めない(猶予も使わない)
     else:
@@ -232,8 +251,9 @@ def status(now=None):
     now = time.time() if now is None else now
     c = _load()
     den = c.get("denied")
-    if den:
-        den = den if isinstance(den, dict) else {}
+    if den and not isinstance(den, dict):
+        den = {"_malformed": True}  # 形の壊れた拒否は止める側に倒す(束縛の無い旧記録と同じ扱い)
+    if den and ("key_hash" not in den or den.get("key_hash") == _key_hash()):  # 今のキーの拒否と、束縛の無い旧記録の拒否だけを返す。他キーの拒否は猶予の判定へ進む(Q729)
         msg = den.get("message") or "利用が許可されていません。担当者にご連絡ください"
         return {"allowed": False, "state": "denied", "reason": den.get("reason", ""), "message": msg, "expires_on": den.get("expires_on")}
     key = _pubkey()

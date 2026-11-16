@@ -595,7 +595,7 @@ def formlist_message_unset(name: str) -> dict:
 @mcp.tool()
 def formlist_pattern_get(number: int = 0) -> dict:
     """業種の型(パターン)ごとの文面テンプレートを読む。number は1から13(0なら全番号の状態の一覧)。
-    pattern_status は番号ごとに、名前・ファイル名・present(専用ファイルがあるか)・effective(実際に文面が読めるか。11と12は旧パターン10の文面の代用でも可)・fallback(代用で読めているか)・text(文面。読めない番号は空)。
+    pattern_status は番号ごとに、名前・ファイル名・present(専用ファイルがあるか)・effective(実際に文面が読めるか。11と12はパターン10の文面の代用でも可)・fallback(代用で読めているか)・text(文面。読めない番号は空)。
     patterns_missing は、文面が読めない(欠けている)番号の一覧。欠けている番号のパターンは使えず、その業種は標準の文面になる。"""
     code, d = api("GET", "/api/message/patterns")
     if code != 200:

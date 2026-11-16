@@ -1,6 +1,8 @@
 """業種別メール文面13パターン(利用者が用意する・文面/パターン/)と、17業種からの割り当て。実行環境: Windows / Mac / Linux
 割り当てが無い業種は None を返し、呼び出し側が標準の文面にして人が事前確認する(勝手に近いパターンへ寄せない)。"""
+import os
 import re
+import time
 from pathlib import Path
 
 import settings_dir
@@ -18,11 +20,11 @@ INDUSTRY_TO_PATTERN = {
     "宿泊・観光": 7,
     "ブライダル・婚活": 8,
     "製造・メーカー": 9,
-    "教育・学習": 11,  # 2026-11-01 運用者の指示: 旧パターン10(自治体・教育機関・福祉施設)を、10=自治体・地域団体 / 11=教育機関 / 12=福祉施設の3つに分けた
+    "教育・学習": 11,  # 2026-11-01 運用者の指示: 自治体・教育機関・福祉施設の合体だった文面を、10=自治体・公共・団体 / 11=教育・学習 / 12=福祉・介護の3つに分けた
     "福祉・介護": 12,
     "自治体・公共・団体": 10,
 }
-SPLIT_FROM_10 = (10, 11, 12)  # 旧パターン10から分かれた3つ。11・12 の文面ファイルが無いうちは、旧パターン10の文面を呼び名つきで使う(今までの動きを変えない)
+SPLIT_FROM_10 = (10, 11, 12)  # パターン10(自治体・公共・団体)の文面から分かれた3つ。利用者の文面フォルダに11・12 の専用ファイルが無いときだけ、パターン10の文面を呼び名つきで代用する(古い文面フォルダの利用者の動きを変えない)
 
 # 業種別の件名の初期値(12パターン・2026-11-01 運用者の指示)。利用者が 文面/パターン/件名.json で業種ごとに変えられる(キーはパターン番号。空・無いキーは初期値)
 DEFAULT_SUBJECTS = {
@@ -55,7 +57,7 @@ def load_pattern(number, industry="", directory=None):
     d = Path(directory) if directory else PATTERN_DIR
     files = sorted(d.glob("パターン%02d_*.txt" % number))
     if len(files) != 1 and number in SPLIT_FROM_10 and number != 10:
-        files = sorted(d.glob("パターン10_*.txt"))  # 11・12 の文面が未作成なら、分割前のパターン10を使う
+        files = sorted(d.glob("パターン10_*.txt"))  # 11・12 の専用ファイルが無いときは、パターン10を代用する
     if len(files) != 1:
         return None
     text = files[0].read_text(encoding="utf-8-sig")
@@ -117,7 +119,7 @@ PATTERN_NAMES = {
     7: "ホテル・旅館・観光施設・旅行会社",
     8: "ブライダル・結婚式場・ウェディング関連",
     9: "一般企業・人事・総務・福利厚生担当",
-    10: "自治体・教育機関・福祉施設・地域団体",
+    10: "自治体・公共・団体",
     11: "教育・学習",
     12: "福祉・介護",
     13: "フォトスタジオ・写真館",
@@ -143,8 +145,37 @@ def save_pattern(number, text, directory=None):
     return target
 
 
+TRASH_DIR_NAME = "_削除済み"
+
+
+def industries_of(number):
+    """そのパターン番号が割り当てられている業種(17業種のうち)。削除すると文面が無くなる業種を、画面で知らせるために使う"""
+    return [k for k, v in INDUSTRY_TO_PATTERN.items() if v == number]
+
+
+def delete_pattern(number, directory=None):
+    """パターン番号の専用ファイルを、消さずに パターン/_削除済み/ へ時刻つきの名前で移す(前の文面は残る)。移した先の Path を返す。専用ファイルが無ければ None。
+    11・12 の専用ファイルを移したあとは、旧パターン10の代用が働く(今までの動き)。番号が表に無いときは ValueError"""
+    if number not in PATTERN_NAMES:
+        raise ValueError("パターン番号は1から13です: %r" % (number,))
+    d = Path(directory) if directory else PATTERN_DIR
+    f = pattern_file(number, d)
+    if f is None:
+        return None
+    bin_dir = d / TRASH_DIR_NAME
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    dest = bin_dir / ("%s_%s.txt" % (f.stem, stamp))
+    k = 1
+    while dest.exists():  # 同じ秒に2回消しても、前の控えを上書きしない
+        dest = bin_dir / ("%s_%s_%d.txt" % (f.stem, stamp, k))
+        k += 1
+    os.replace(f, dest)
+    return dest
+
+
 def pattern_status(directory=None):
-    """パターン番号ごとの状態。present=専用ファイルがあるか / effective=実際に文面が読めるか(11・12は旧パターン10の代用でも可) / fallback=代用で読めているか"""
+    """パターン番号ごとの状態。present=専用ファイルがあるか / effective=実際に文面が読めるか(11・12はパターン10の代用でも可) / fallback=代用で読めているか"""
     d = Path(directory) if directory else PATTERN_DIR
     out = {}
     for n, name in PATTERN_NAMES.items():
