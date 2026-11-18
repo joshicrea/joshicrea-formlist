@@ -106,11 +106,13 @@ def effective_sender(name, url, sender, industry=None):
             base['件名'] = subject
     return dict(base, **case['sender_overrides']) if case else base
 
-def resolve_row(row, message_path, sender, pick_message):
+def resolve_row(row, message_path, sender, pick_message, use_industry=None):
+    """use_industry=画面③「今回使う文面」の業種(None は選ばない)。優先順: 会社ごとの指定・採用済み > ③の今回の選択 > 会社の業種欄。
+    ③は保存せず、呼び出しごとの引数だけ。会社ごとの指定がある会社には効かない"""
     name, url, industry, opener, hp = row
     case = case_for(name, url)
     if not case:
-        return row, pick_message(message_path, industry), dict(sender)
+        return row, pick_message(message_path, industry if use_industry is None else use_industry), dict(sender)
     if case.get('assigned_only'):  # 指定した業種の文面(見本と同じ選び方)。書き出し・会社名は行のまま
         return row, pick_message(message_path, case.get('template_industry') or ''), effective_sender(name, url, sender)
     filename = case['template_name']
