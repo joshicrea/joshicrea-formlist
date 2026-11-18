@@ -245,7 +245,14 @@ def _stage(m, names, stage):
         try:
             b = fetch(n, timeout=20)
         except Exception as e:
-            raise ValueError(f"{n} を取得できませんでした（{type(e).__name__}: {e}）")
+            try:  # 例外の原文は画面に出さず、更新の記録に残す(波2 D)
+                rec = HERE / "出力" / "更新の記録.txt"
+                rec.parent.mkdir(exist_ok=True)
+                with open(rec, "a", encoding="utf-8") as f:
+                    f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {n} の取得に失敗(原文): {type(e).__name__}: {e}\n")
+            except OSError:
+                pass
+            raise ValueError(f"{n} を取得できませんでした。インターネットにつながっているかを確かめて、少し待ってからもう一度更新します（くわしい理由は 出力/更新の記録.txt に残しました）")
         if sha(b) != m["files"][n]:
             raise ValueError(f"{n} の中身が manifest と合いません。取得の途中で変わったか、通信の途中で書き換えられた可能性があります。何も入れ替えていません")
         if n.endswith(".py"):
@@ -325,14 +332,40 @@ def _apply(log):
         shutil.rmtree(stage, ignore_errors=True)  # 検査に通らなかった分は残さない(手元のファイルには、まだ何も書いていない)
         raise
     backup = HERE / "更新前の版" / ts
+    try:
+        return _replace_with_backup(m, names, got, stage, backup, ts, log)
+    except Exception as e:
+        try:
+            e.formlist_backup = str(backup)  # 画面が、手元のファイルが前の版のままかを、この控えの一覧で確かめる(Codex 2周目 弱点)
+        except Exception:
+            pass
+        raise
+
+
+class BackupError(ValueError):
+    """控えを作れなかった(手元のファイルはまだ1つも入れ替えていない)"""
+
+
+def _replace_with_backup(m, names, got, stage, backup, ts, log):
     backup.mkdir(parents=True, exist_ok=True)
-    added = []
+    # 控えの一覧は、入れ替える前の元のファイルから作る(控えに残ったファイルから作ると、欠けた控えを正常として固定する。Codex 2周目 致命傷1)
+    originals, added = {}, []
     for n in names:
         if (HERE / n).exists():
-            shutil.copy2(HERE / n, backup / n)
+            originals[n] = _restore_sha(HERE / n)
         else:
             added.append(n)
+    for n in originals:
+        shutil.copy2(HERE / n, backup / n)
     (backup / ADDED_NAME).write_text("\n".join(added), encoding="utf-8")  # 新しい版で増えたファイル。戻すときは消す
+    write_backup_list(backup, originals, added)
+    for n, want in originals.items():  # 控えの写しが一覧と合わなければ、何も入れ替えない(戻せない更新をしない)
+        try:
+            ok = _restore_sha(backup / n) == want
+        except OSError:
+            ok = False
+        if not ok:
+            raise BackupError("前の版の控えを正しく作れませんでした。何も入れ替えていません")
     done = []
     try:
         for n in names:
@@ -359,7 +392,7 @@ def restore(backup, names=None):
     """前の版に戻す。names が無ければ、バックアップにあるファイルを全部戻す"""
     backup = Path(backup)
     for p in backup.iterdir():
-        if p.name == ADDED_NAME or (names is not None and p.name not in names):
+        if p.name.startswith("_") or (names is not None and p.name not in names):  # _新規.txt・_一覧.json は控えの管理用で、戻すファイルではない
             continue
         tmp = HERE / (p.name + ".更新中")
         shutil.copy2(p, tmp)
@@ -370,6 +403,114 @@ def restore(backup, names=None):
                 (HERE / n).unlink(missing_ok=True)
     except OSError:
         pass
+
+
+BACKUP_LIST = "_一覧.json"
+
+# 前の版へ戻す処理(1つの実装)。起動し直しのプログラム(_RELAUNCH)にも、そのまま埋め込む(別のプロセスで、新しい版のファイルを読まずに動くため)。
+# 1) 控えの一覧(_一覧.json)が無い・読めない・空なら、何も戻さず「戻せなかった」とする(空の控えを「全部戻せた」と扱わない。Codex 致命傷B)
+# 2) 一覧の各ファイルは、控えの中身が一覧の sha256 と一致することと、戻した後の中身が一致することを確かめる
+# 3) 起動の止め(startup_guard)を持つ updater.py・app.py は最後に、この順で戻す。ほかが1つでも戻せなければ、この2つは新しい版のまま残し、
+#    次の起動で止まれるようにする(旧 app.py には止めが無いので、先に戻すと混ざった版が動く。Codex 致命傷A)
+_RESTORE_SRC = r"""
+def _restore_sha(p):
+    import hashlib
+    with open(p, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+def restore_backup(here, backup):
+    import os, json, shutil
+    guard = ("updater.py", "app.py")
+    failed, raw, restored = [], [], []
+    try:
+        with open(os.path.join(backup, "_一覧.json"), encoding="utf-8") as f:
+            man = json.load(f)
+        files, added = man["files"], man["added"]
+        if not isinstance(files, dict) or not isinstance(added, list) or not (files or added):
+            raise ValueError("backup list is empty")
+    except Exception as e:
+        return ["前の版の写しの一覧(_一覧.json)"], ["backup list: %r" % (e,)], []
+    def put(n):
+        dst = os.path.join(here, n)
+        tmp = dst + ".更新中"
+        keep = None  # 起動の止めを持つファイル(updater.py・app.py)の、置き換える前の中身(新しい版)
+        try:
+            if os.sep in n or "/" in n or n.startswith(("_", ".")):
+                raise ValueError("bad name")
+            src = os.path.join(backup, n)
+            if _restore_sha(src) != files[n]:
+                raise ValueError("backup copy differs from the list")
+            if n in guard and os.path.isfile(dst):
+                with open(dst, "rb") as f:
+                    keep = f.read()
+            shutil.copy2(src, tmp)
+            if _restore_sha(tmp) != files[n]:  # 置き換える前に照合する(置き換えた後に照合を待つ隙間を作らない。Codex 2周目 致命傷2)
+                raise ValueError("temporary copy differs from the list")
+            os.replace(tmp, dst)
+            try:
+                same = _restore_sha(dst) == files[n]
+            except OSError:  # 置き換えた直後に読めない(一時的な掴み・読み取り障害)。照合できないので食い違いと同じ扱いにする(Codex 3周目 致命傷)
+                same = False
+            if not same:
+                if keep is not None:  # 置き換えた後に外から書き換えられた・照合できない。起動の止めを持つ新しい版を書き戻し、次の起動で止まれるようにする
+                    with open(tmp, "wb") as f:
+                        f.write(keep)
+                    os.replace(tmp, dst)
+                raise ValueError("restored file differs from the list")
+            restored.append(n)
+        except Exception as e:
+            failed.append(n)
+            raw.append("%s: %r" % (n, e))
+            try:
+                if os.path.isfile(tmp):
+                    os.remove(tmp)  # 写しかけを本体のフォルダに残さない
+            except OSError:
+                pass
+    for n in sorted(files):
+        if n not in guard:
+            put(n)
+    for n in added:
+        p = os.path.join(here, str(n))
+        try:
+            if os.path.isfile(p):
+                os.remove(p)
+            if os.path.exists(p):
+                raise OSError("still exists")
+        except Exception as e:
+            failed.append("%s(新しい版で増えたファイル・消せなかった)" % n)
+            raw.append("%s: %r" % (n, e))
+    for n in guard:
+        if n in files:
+            if failed:
+                failed.append("%s(ほかを戻せなかったため、次の起動を止めるよう新しい版のまま)" % n)
+            else:
+                put(n)
+    return failed, raw, restored
+"""
+exec(_RESTORE_SRC)  # restore_backup をこのモジュールでも使う(次の起動の戻し直し・試験)
+
+
+def write_backup_list(backup, files, added=()):
+    """控えの一覧を書く。files = {名前: 入れ替える前の元のファイルの sha256}(控えに残ったファイルからは作らない。Codex 2周目 致命傷1)、
+    added = 新しい版で増えたファイルの名前"""
+    backup = Path(backup)
+    files = {str(k): str(v) for k, v in dict(files).items()}
+    tmp = backup / (BACKUP_LIST + ".tmp")
+    tmp.write_text(json.dumps({"files": files, "added": [str(a) for a in added]}, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, backup / BACKUP_LIST)
+
+
+def matches_backup_list(backup, here=None):
+    """手元のファイルが控えの一覧のとおり(入れ替える前の版)か。一覧の各ファイルの sha256 が一致し、新しい版で増えたファイルが無いとき True。
+    一覧が無い・読めない・空なら False(確かめられないときに「前の版のまま」と言わない)"""
+    here = Path(here or HERE)
+    try:
+        lst = json.loads((Path(backup) / BACKUP_LIST).read_text(encoding="utf-8"))
+        files, added = lst["files"], lst["added"]
+        if not isinstance(files, dict) or not isinstance(added, list) or not (files or added):
+            return False
+        return all(_restore_sha(here / n) == v for n, v in files.items()) and not any((here / str(a)).exists() for a in added)
+    except Exception:
+        return False
 
 
 # 起動し直しを受け持つ小さなプログラム。画面のサーバーが終わったあとに、新しい版で起動し直す。
@@ -419,18 +560,10 @@ try:
     proc.wait(timeout=10)
 except Exception:
     pass
-for n in os.listdir(backup):
-    if n.startswith("_"):
-        continue
-    shutil.copy2(os.path.join(backup, n), os.path.join(here, n + ".更新中"))
-    os.replace(os.path.join(here, n + ".更新中"), os.path.join(here, n))
-try:
-    for n in open(os.path.join(backup, "_新規.txt"), encoding="utf-8").read().split():
-        p = os.path.join(here, n)
-        if os.path.isfile(p):
-            os.remove(p)
-except OSError:
-    pass
+#@RESTORE@
+# 戻せなかったファイル。1つ失敗しても残りは戻す。1つでも残れば、新旧の混ざった版は起動しない(波2 F)。
+# 控えの一覧で照合し、updater.py・app.py は最後に戻す(ほかが戻せなければ新しい版のまま残し、次の起動で止める。Codex 致命傷A・B)
+failed, raw, _restored = restore_backup(here, backup)
 count = 1
 try:
     j = json.load(open(skip, encoding="utf-8"))
@@ -438,13 +571,62 @@ try:
         count = int(j.get("count", 0)) + 1
 except Exception:
     pass
-with open(os.path.join(here, "出力", "更新の記録.txt"), "a", encoding="utf-8") as f:
-    f.write(time.strftime("%Y-%m-%d %H:%M:%S") + " 更新後に画面が立たなかったため、前の版に戻しました(%s秒待った・この版で%s回目)\n" % (int(wait), count))
-if version:
-    with open(skip, "w", encoding="utf-8") as f:
-        json.dump({"version": version, "count": count, "last": time.time()}, f)
-start()
+now = time.strftime("%Y-%m-%d %H:%M:%S")
+sid = "U" + time.strftime("%m%d-%H%M%S")  # 受付番号(画面のサーバーが立たないので、ここで決めて記録とお知らせに書く)
+try:
+    with open(os.path.join(here, "出力", "更新の記録.txt"), "a", encoding="utf-8") as f:
+        if failed:
+            f.write(now + " 更新後に画面が立たなかったため前の版に戻そうとしましたが、戻せなかったファイルがあります(ほかのプログラムが開いていた等): %s。前の版の写しは %s に残っています。新旧が混ざるので起動していません(受付番号 %s)\n" % ("、".join(failed), backup, sid))
+        else:
+            f.write(now + " 更新後に画面が立たなかったため、前の版に戻しました(%s秒待った・この版で%s回目)\n" % (int(wait), count))
+except OSError:
+    pass
+try:
+    if version:
+        with open(skip, "w", encoding="utf-8") as f:
+            json.dump({"version": version, "count": count, "last": time.time()}, f)
+except OSError:
+    pass
+if not failed:
+    start()
+    sys.exit(0)
+# 戻しきれなかった。新旧の混ざった版で送信や送信状態の記録を動かさないよう、起動せずに止まり、利用者に日本語で知らせる(波2 F)
+notice = os.path.join(here, "出力", "前の版に戻せませんでした.txt")
+try:  # 次の起動の入口(app.py の最初・startup_guard)がこの印を見て、戻しをやり直す。戻せなければ起動しない(破壊検証3 致命傷1)
+    with open(os.path.join(here, "出力", "前の版に戻せませんでした.json"), "w", encoding="utf-8") as f:
+        json.dump({"backup": backup, "sid": sid, "failed": failed, "at": now}, f, ensure_ascii=False)
+except OSError:
+    pass
+try:
+    with open(os.path.join(here, "出力", "サポート記録.txt"), "a", encoding="utf-8") as f:
+        f.write("===== 受付番号 %s %s updater_rollback\n戻せなかったファイル: %s\n前の版の写し: %s\n%s\n" % (sid, now, "、".join(failed), backup, "\n".join(raw)))
+except OSError:
+    pass
+try:
+    with open(notice, "w", encoding="utf-8") as f:
+        f.write("フォームリスト作成ツールの更新に失敗し、前の版にも全部は戻せませんでした(%s)。\n"
+                "新しい版と前の版が混ざった状態で動かすと、送信の記録が正しく残らないおそれがあるため、ツールは起動していません。\n\n"
+                "次にすること:\n"
+                "1. パソコンを再起動してから、ツールをもう一度起動してください(ほかのプログラムがファイルを開いていたことが多い原因です)。"
+                "起動するときに、前の版へ戻すのをもう一度試します。戻しきれないときは、混ざった版では起動せず、この案内をもう一度出します。\n"
+                "2. それでも起動しないときは、この文と受付番号を担当者に送ってください。\n\n"
+                "受付番号: %s\n戻せなかったファイル: %s\n前の版の写しの場所: %s\n" % (now, sid, "、".join(failed), backup))
+except OSError:
+    pass
+if not os.environ.get("FORMLIST_NO_NOTICE_OPEN"):  # 試験では開かない
+    try:
+        if os.name == "nt":
+            os.startfile(notice)
+        else:
+            subprocess.Popen(["open", notice], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+sys.exit(1)
 """
+
+
+_RELAUNCH = _RELAUNCH.replace("#@RESTORE@\n", _RESTORE_SRC)
+assert "def restore_backup" in _RELAUNCH
 
 
 RELAUNCH_WAIT_S = 180  # 新しい版が応答するまで待つ秒数。実測して決めた(報告参照)。起動の途中で終了したときは、待たずに戻す
@@ -466,3 +648,128 @@ def relaunch(port, backup, exe=None, version=""):
     subprocess.Popen([exe, "-X", "utf8", "-c", _RELAUNCH, str(HERE), str(port), str(backup), exe, str(version), str(relaunch_wait())],
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW,
                      start_new_session=(os.name != "nt"))  # Mac/Linux: 親(画面のサーバー)が終わっても、この小さなプログラムは生きて起動し直す
+
+
+# ---- 戻し失敗の印と、次の起動での戻し直し(破壊検証3 致命傷1) ----
+# 起動し直しのプログラム(_RELAUNCH)が前の版へ戻しきれなかったとき、出力/前の版に戻せませんでした.json(と .txt のお知らせ)を残す。
+# 次にツールが動き出すとき(app.py の最初・ほかの部品を読み込む前)に startup_guard がこの印を見て、前の版の写しから戻しをやり直す。
+# 全部戻せたら印を消して起動し直す。戻せなければ、新旧の混ざった版では起動せず、決まった日本語と受付番号を出して止まる(原文はサポート記録へ)。
+FAIL_MARK = "前の版に戻せませんでした.json"
+FAIL_NOTICE = "前の版に戻せませんでした.txt"
+
+
+def _fail_backup(out):
+    """印から、前の版の写しの場所を読む。.json が無い(古い版が残した .txt だけ)ときは、お知らせの「前の版の写しの場所:」の行から読む"""
+    try:
+        j = json.loads((out / FAIL_MARK).read_text(encoding="utf-8"))
+        if isinstance(j, dict) and j.get("backup"):
+            return str(j["backup"])
+    except (OSError, ValueError):
+        pass
+    try:
+        for line in (out / FAIL_NOTICE).read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("前の版の写しの場所:"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def recover_failed_rollback(here=None):
+    """戻し失敗の印があれば、前の版の写しから戻しをやり直す。
+    戻り: None=印が無い(何もしない) / {"ok": True, "restored": [...]} / {"ok": False, "sid": 受付番号, "failed": [...], "raw": [原文]}"""
+    here = Path(here or HERE)
+    out = here / "出力"
+    if not ((out / FAIL_MARK).exists() or (out / FAIL_NOTICE).exists()):
+        return None
+    backup = _fail_backup(out)
+    failed, raw, restored = [], [], []
+    if not backup or not os.path.isdir(backup):
+        failed.append("前の版の写し(%s)" % (backup or "場所が分からない"))
+        raw.append("backup not found: %r" % backup)
+    else:
+        failed, raw, restored = restore_backup(str(here), backup)  # 一覧で照合・updater.py と app.py は最後(Codex 致命傷A・B)
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    if not failed:
+        for f in (FAIL_MARK, FAIL_NOTICE):
+            try:
+                (out / f).unlink()
+            except OSError:
+                pass
+        try:
+            with open(out / "更新の記録.txt", "a", encoding="utf-8") as f:
+                f.write(f"{now} 起動のときに、前の版へ戻すのをやり直し、全部戻しました({len(restored)}個)。前の版で起動します\n")
+        except OSError:
+            pass
+        return {"ok": True, "restored": restored}
+    sid = "U" + time.strftime("%m%d-%H%M%S")
+    try:
+        out.mkdir(exist_ok=True)
+        with open(out / "サポート記録.txt", "a", encoding="utf-8") as f:
+            f.write("===== 受付番号 %s %s startup_rollback_retry\n前の版の写し: %s\n%s\n" % (sid, now, backup, "\n".join(raw)))
+    except OSError:
+        pass
+    try:
+        with open(out / "更新の記録.txt", "a", encoding="utf-8") as f:
+            f.write(f"{now} 起動のときに前の版へ戻すのをやり直しましたが、戻せなかったファイルがあります: {'、'.join(failed)}。新旧が混ざるので起動していません(受付番号 {sid})\n")
+    except OSError:
+        pass
+    try:
+        (out / FAIL_NOTICE).write_text(
+            "フォームリスト作成ツールの更新に失敗し、前の版にも全部は戻せていません(%s に起動したときの確認)。\n"
+            "新しい版と前の版が混ざった状態で動かすと、送信の記録が正しく残らないおそれがあるため、ツールは起動していません。\n\n"
+            "次にすること:\n"
+            "1. パソコンを再起動してから、ツールをもう一度起動してください(ほかのプログラムがファイルを開いていたことが多い原因です)。"
+            "起動するときに、前の版へ戻すのをもう一度試します。\n"
+            "2. それでも起動しないときは、この文と受付番号を担当者に送ってください。\n\n"
+            "受付番号: %s\n戻せなかったファイル: %s\n前の版の写しの場所: %s\n" % (now, sid, "、".join(failed), backup or "不明"), encoding="utf-8")
+    except OSError:
+        pass
+    return {"ok": False, "sid": sid, "failed": failed, "raw": raw}
+
+
+def startup_message(sid):
+    """戻せなかったときに、起動の入口が出す決まった日本語(例外の原文は入れない)"""
+    return ("フォームリスト作成ツールは、更新の失敗で新しい版と前の版が混ざったままのため、起動していません。"
+            "前の版へ戻すのをもう一度試しましたが、戻せないファイルがありました。"
+            "パソコンを再起動してから、もう一度起動してください。それでも起動しないときは、"
+            f"出力フォルダの「{FAIL_NOTICE}」と受付番号 {sid} を担当者に送ってください。")
+
+
+def startup_guard(argv=None, exit_code=1, here=None):
+    """ツールが動き出す入口(app.py の最初)で呼ぶ。印が無ければ何もしない。
+    戻しをやり直して全部戻せたら、戻した版で同じ入口を起動し直して、この(読み込み済みの)プロセスは終わる。
+    戻せなければ、決まった日本語と受付番号を出して exit_code で終わる(混ざった版では起動しない)"""
+    here = Path(here or HERE)
+    r = recover_failed_rollback(here)
+    if r is None:
+        return None
+    argv = list(sys.argv if argv is None else argv)
+    if r["ok"]:
+        if os.environ.get("FORMLIST_ROLLBACK_RESTARTED"):  # 起動し直した先でまた印があった(起こらないはず)。続けて起動し直さない
+            return r
+        env = dict(os.environ, FORMLIST_ROLLBACK_RESTARTED="1")
+        script = os.path.abspath(argv[0]) if argv else str(here / "app.py")
+        subprocess.Popen([sys.executable, "-X", "utf8", script] + argv[1:], cwd=str(here), env=env, creationflags=NO_WINDOW,
+                         start_new_session=(os.name != "nt"))
+        sys.exit(0)
+    msg = startup_message(r["sid"])
+    try:
+        with open(here / "出力" / "app_起動ログ.txt", "ab") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 起動を止めました: {msg}\n".encode("utf-8"))
+    except OSError:
+        pass
+    try:
+        print(msg, file=sys.stderr)
+    except Exception:
+        pass
+    show = "--no-browser" not in argv and not os.environ.get("FORMLIST_NO_BROWSER") and not os.environ.get("FORMLIST_NO_NOTICE_OPEN")
+    if show:  # 画面から起動したときだけ、お知らせを開く(見張り・MCP からの起動では開かない。記録には残る)
+        try:
+            if os.name == "nt":
+                os.startfile(str(here / "出力" / FAIL_NOTICE))
+            else:
+                subprocess.Popen(["open", str(here / "出力" / FAIL_NOTICE)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+    sys.exit(exit_code)

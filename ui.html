@@ -108,7 +108,7 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
 .tag.gray{background:var(--bg);color:var(--mut)}.nw{display:inline-block;max-width:100%;overflow-wrap:anywhere}
 @media(min-width:641px){#c .now.stick{position:sticky;top:0;z-index:4;box-shadow:0 2px 8px rgba(16,24,40,.12)}}
 @media(max-width:640px){.sumline .k{min-width:0}.al{display:block}.edit{padding:12px}table.op textarea{min-height:96px}}
-#runningCopy{position:fixed;right:8px;bottom:6px;z-index:9999;max-width:60vw;font-size:12px;color:#555;background:rgba(255,255,255,.92);border:1px solid #ccc;border-radius:6px;padding:2px 8px;pointer-events:none;overflow-wrap:anywhere}@media (max-width:600px){#runningCopy{max-width:70vw;font-size:10px;padding:1px 5px;opacity:.9}}</style></head><body><div id="runningCopy" title="いま動いている版とフォルダ"></div>
+#runningCopy{position:fixed;right:8px;bottom:6px;z-index:9999;max-width:60vw;font-size:12px;color:#555;background:rgba(255,255,255,.92);border:1px solid #ccc;border-radius:6px;padding:2px 8px;pointer-events:none;overflow-wrap:anywhere}html{height:100%;overflow:hidden}body{height:calc(100% - 20px);overflow-y:auto}#runningCopy{left:0;right:0;bottom:0;height:20px;box-sizing:border-box;max-width:none;border-radius:0;border-width:1px 0 0;font-size:11px;line-height:14px;padding:2px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:1}@media (max-width:600px){#runningCopy{font-size:10px}}.manDraft{max-width:46em}.manDraft .fullbox{max-width:46em}</style></head><body><div id="runningCopy" title="いま動いている版とフォルダ"></div>
 <header class="top"><div class="wrap hd"><div><h1><span class="mark" aria-hidden="true"></span>AIまるなげ営業</h1><p>地域と業種から、問い合わせフォームのある会社を探して、営業の文面を送ります。</p></div></div>
 <nav class="wrap" aria-label="画面の切り替え"><button data-t="a" class="on"><span class="n">1</span>探す</button><button data-t="b"><span class="n">2</span>結果を見る</button><button data-t="c"><span class="n">3</span>送る</button><button data-t="d">送信の記録</button></nav></header>
 <div id="upd" role="status" aria-live="polite" hidden style="background:#fff7e0;border-bottom:1px solid #e6c36a;padding:10px 16px;text-align:center"></div>
@@ -189,7 +189,7 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
   <div id="c_sum"><div class="sumline" id="senderLine"></div><div class="sumline" id="msgLine"></div></div>
   <div class="edit" id="senderEdit" hidden>
    <h3 class="eh">送信元（相手に見える名前と連絡先）</h3><p class="hint">一度保存すれば残ります。</p>
-   <p class="hint"><label>受け取った「設定ファイル」があれば、ここで読み込めます（今の内容は置き換わります）:<input type="file" id="importFile" accept=".json,application/json"></label><br><label>計測キー（担当者から届いた鍵・初回だけ）:<input type="password" id="importKey" autocomplete="off" size="40"></label></p>
+   <p class="hint"><label>受け取った「設定ファイル」があれば、ここで読み込めます（今の内容は置き換わります）:<input type="file" id="importFile" accept=".json,application/json"></label><br><label>許可キー（担当者から届いた鍵・初回だけ）:<input type="password" id="importKey" autocomplete="off" size="40"></label></p>
    <div class="row" id="sender"></div>
    <div class="fld" id="f_署名"><label for="s_署名">署名</label><p class="hint">住所・電話・お名前と、不要ならご返信くださいの案内を入れます（法律で決まっている表示です）。</p><textarea id="s_署名" style="min-height:130px"></textarea><p class="ferr" id="e_署名" hidden></p><button class="btn sub sm" id="sigSample" type="button" style="margin-top:8px">見本を入れる</button></div>
    <div class="actions"><button class="btn sub" id="saveSender" type="button">この送信元を保存</button> <button class="lnk" id="senderClose" type="button">閉じる</button></div>
@@ -197,7 +197,7 @@ table.op textarea{min-height:76px;font-size:15px;padding:8px 10px}tr.fullrow td{
   <div class="edit" id="msgEdit" hidden>
    <h3 class="eh">文面</h3>
    <p class="hint"><label><input type="checkbox" id="expandOn"> 業種ごとの文面を使う</label> <button type="button" id="expandMake">基本の文面から、業種ごとの文面を作る</button></p>
-   <label for="mind">今回使う文面</label><p class="hint">ここで選んだ文面が、「フォームで送る(自動挿入)」の本文と、いま開いている送信の今回分に使われます。下の本文は、選んだ文面を直して保存する欄です。会社ごとに文面を指定してある会社は、その指定が先に使われます。選んだ内容は保存されず、次回は会社の業種で自動に選ばれます。</p><select id="mind"></select>
+   <label for="mind">どの業種の文面か</label><select id="mind"></select>
    <div class="fld"><label for="newIndName">新しい業種の文面を作る</label><p class="hint">上の「どの業種の文面か」に無い業種は、ここで業種名を入れて作れます。作ると上の選択肢に加わり、本文を書いて「この文面を保存」を押すと、その業種の会社に届く文面になります。</p><input type="text" id="newIndName" autocomplete="off" placeholder="業種名を入れます"><button class="btn sub sm" id="newIndBtn" type="button" style="margin-top:8px">この業種の文面を作る</button><p class="ferr" id="newIndProb" hidden></p></div>
    <p class="hint" id="mstate"></p><p class="ferr" id="mprob" hidden></p>
    <div id="msubjRow" hidden><label for="msubj">この業種の件名（本文と同じ画面で直せます）</label><input type="text" id="msubj" autocomplete="off"><p class="hint">空にすると、初期の件名に戻ります。相手の会社名は {企業名} の位置に自動で入ります。</p></div>
@@ -325,11 +325,11 @@ async function loadRes(){const f=$('#files').value;if(!f){const down=NETFAIL||!M
  const wc={};rows.forEach(({v})=>{if(v.why)wc[v.why]=(wc[v.why]||0)+1});const shared=new Map();rows.forEach(({v})=>{if(v.why&&wc[v.why]>1&&!shared.has(v.why))shared.set(v.why,v)});
  $('#legend').hidden=!shared.size;$('#legend').innerHTML='<b style="color:var(--ink)">表示の意味</b>'+[...shared.values()].map(v=>`<div>${tag(v.t,v.k)}${esc(v.why)}</div>`).join('');
  $('#res').innerHTML='<tr><th style="width:30%">会社</th><th style="width:30%">状態</th><th style="width:20%">開いて確かめる</th><th style="width:20%">送らない</th></tr>'+(rows.length?rows.map(({r,v},i)=>{const form=r['問い合わせフォームURL 無ければメール']||'',mail=r['メールアドレス']||(form.startsWith('http')?'':form);
-  return `<tr><td>${RTAB=='mail'?`<label style="display:flex;gap:6px;align-items:center;font-weight:400"><input type="checkbox" class="mailChk" data-n="${esc(r._key||r['企業名'])}"${MAILSEL.has(r._key||r['企業名'])?' checked':''}>この会社に送る</label>`:''}<b>${esc(r['企業名'])}</b><div class="why">${esc(r['業種'])}</div>${mailCell(r,i)}<details class="dt"><summary>くわしく</summary><div>取得元: ${esc(r['取得元'])}<br>メール: ${esc(mail||'なし')}<br>メモ: ${esc(plain(r['判定メモ']))||'なし'}</div></details></td><td>${tag(v.t,v.k)}${v.why&&wc[v.why]==1?`<div class="why">${esc(v.why)}</div>`:''}</td><td>${lk(r['HP URL'],'ホームページを開く')}<br>${lk(form,'フォームを開く')}</td><td><button class="btn sub sm ngb" data-i="${i}" type="button">送らない</button>${form&&/^https?:/.test(form)?`<br><button class="btn sub sm manb" data-i="${i}" type="button" style="margin-top:6px" title="フォームを開き、入れられる欄だけ自動で入れます。送信ボタンは押しません">フォームで送る(自動挿入)</button><details class="dt manDraft" data-i="${i}"><summary>届く件名と本文を見る</summary><div class="manDraftBody">開くと表示します。</div></details>`:''}</td></tr>`}).join(''):'<tr><td colspan="4">表示できる会社がありません。上の、フォームがある会社だけ表示、を外すと、ほかの会社も見えます。</td></tr>');
+  return `<tr><td>${RTAB=='mail'?`<label style="display:flex;gap:6px;align-items:center;font-weight:400"><input type="checkbox" class="mailChk" data-n="${esc(r._key||r['企業名'])}"${MAILSEL.has(r._key||r['企業名'])?' checked':''}>この会社に送る</label>`:''}<b>${esc(r['企業名'])}</b><div class="why">${esc(r['業種'])}</div>${mailCell(r,i)}<details class="dt"><summary>くわしく</summary><div>取得元: ${esc(r['取得元'])}<br>メール: ${esc(mail||'なし')}<br>メモ: ${esc(plain(r['判定メモ']))||'なし'}</div></details></td><td>${tag(v.t,v.k)}${v.why&&wc[v.why]==1?`<div class="why">${esc(v.why)}</div>`:''}</td><td>${lk(r['HP URL'],'ホームページを開く')}<br>${lk(form,'フォームを開く')}</td><td><button class="btn sub sm ngb" data-i="${i}" type="button">送らない</button>${form&&/^https?:/.test(form)?`<br><button class="btn sub sm manb" data-i="${i}" type="button" style="margin-top:6px" title="フォームを開き、入れられる欄だけ自動で入れます。送信ボタンは押しません">フォームで送る(自動挿入)</button>`:''}</td></tr>${form&&/^https?:/.test(form)?`<tr class="draftRow"><td colspan="4" style="border-top:0;padding-top:0"><details class="dt manDraft" data-i="${i}"><summary>${esc(r['企業名'])} に届く件名と本文を見る</summary><div class="manDraftBody">開くと表示します。</div></details></td></tr>`:''}`}).join(''):'<tr><td colspan="4">表示できる会社がありません。上の、フォームがある会社だけ表示、を外すと、ほかの会社も見えます。</td></tr>');
  document.querySelectorAll('.manb').forEach(b=>b.onclick=async()=>{const x=rows[+b.dataset.i].r;if(!confirm(x['企業名']+' のフォームを別の画面で開き、入れられる欄だけ自動で入れます。\n送信ボタンは押しません。中身を確かめて、ご自分で送ってください。よろしいですか'))return;manStart(x['企業名'],x['問い合わせフォームURL 無ければメール']||'',+b.dataset.i)});manPaint(JOB);
- document.querySelectorAll('.manDraft').forEach(d=>d.ontoggle=async()=>{if(!d.open)return;const box=d.querySelector('.manDraftBody');box.textContent='作っています…';const x=rows[+d.dataset.i].r;let p;try{p=await J('/api/manual_draft?file='+encodeURIComponent($('#files').value)+'&name='+encodeURIComponent(x['企業名'])+useQs())}catch(e){box.textContent='ツールに届きませんでした。ツールが動いているか確かめてください';return}
+ document.querySelectorAll('.manDraft').forEach(d=>d.ontoggle=async()=>{if(!d.open)return;const box=d.querySelector('.manDraftBody');box.textContent='作っています…';const x=rows[+d.dataset.i].r;let p;try{p=await J('/api/manual_draft?file='+encodeURIComponent($('#files').value)+'&name='+encodeURIComponent(x['企業名']))}catch(e){box.textContent='ツールに届きませんでした。ツールが動いているか確かめてください';return}
   const opts=(p.options||[]).map(o=>`<option value="${esc(o)}"${(p.assigned===null?'':(p.assigned||'default'))===o?' selected':''}>${esc(o=='default'?'基本の文面':o)}</option>`).join('');
-  const pick=p.error?'':`<div class="why"><b>使う文面: ${esc(p.template_label||'')}</b>${p.assigned===null?`(この会社の業種「${esc(p.company_industry||'なし')}」の文面。指定はしていません)`:'(この会社に指定した文面)'}</div>${p.template_note?`<div class="why">${esc(p.template_note)}</div>`:''}${p.use_note?`<div class="why">${esc(p.use_note)}</div>`:''}<div class="actions"><select class="asgSel" aria-label="この会社に使う文面"><option value=""${p.assigned===null?' selected':''}>指定しない(業種の文面)</option>${opts}</select> <button class="btn sub sm asgBtn" type="button">この文面を指定</button> <span class="why asgMsg"></span></div>`;
+  const pick=p.error?'':`<div class="why"><b>使う文面: ${esc(p.template_label||'')}</b>${p.assigned===null?`(この会社の業種「${esc(p.company_industry||'なし')}」の文面。指定はしていません)`:'(この会社に指定した文面)'}</div>${p.template_note?`<div class="why">${esc(p.template_note)}</div>`:''}<div class="actions"><select class="asgSel" aria-label="この会社に使う文面"><option value=""${p.assigned===null?' selected':''}>指定しない(業種の文面)</option>${opts}</select> <button class="btn sub sm asgBtn" type="button">この文面を指定</button> <span class="why asgMsg"></span></div>`;
   box.innerHTML=p.error?esc(p.error):pick+`${p.adoption_diff?`<div class="why">【採用との違い】${esc(p.adoption_diff)}</div>`:''}<div>件名: ${esc(p.subject)}</div><pre class="fullbox" tabindex="0" aria-label="届く本文の全文" style="white-space:pre-wrap;margin:6px 0">${esc(p.message)}</pre><div class="why">フォームに入る文です。送るのはご自分の手で、確かめてからです。</div>`;
   const ab=box.querySelector('.asgBtn');if(ab)ab.onclick=async()=>{const r=await post('/api/message/assign',{file:$('#files').value,name:x['企業名'],industry:box.querySelector('.asgSel').value});if(r.error){box.querySelector('.asgMsg').textContent=r.error;return}d.open=false;d.open=true}});
  document.querySelectorAll('.ngb').forEach(b=>b.onclick=async()=>{const x=rows[+b.dataset.i].r;const form=x['問い合わせフォームURL 無ければメール']||'';
@@ -386,7 +386,7 @@ async function mailFlow(names){if(!MAILST.available)return;
  $('#mailCancel').onclick=async()=>{await post('/api/approve/cancel',{});MAILFLOW=null;mailPanel('')};
  $('#mailSend').onclick=async()=>{const note=t=>{$('#mailSendNote').textContent=t};$('#mailSend').disabled=true;note('画面の外に出る確認で「はい」を押してください。');
   const a=await post('/api/approve',{key:MAILFLOW.key});if(a.error){note(a.error);$('#mailSend').disabled=false;return}
-  if(!a.ok){note('送りませんでした(確認で「いいえ」を押したため)');$('#mailSend').disabled=false;return}
+  if(!a.ok){note(a.message||'送りませんでした(確認で「いいえ」を押したため)');$('#mailSend').disabled=false;return}
   const s=await post('/api/mail/send',{file:f,only:MAILFLOW.names,confirm:'送信'});
   if(s.error||!s.started){await post('/api/approve/cancel',{});note(s.error||'いまほかの処理が動いています。終わってから押します。');$('#mailSend').disabled=false;return}
   MAILFLOW=null;mailPanel('<p>送信を始めました。進み具合は「進み具合」に出ます。結果は「送信の記録」で見られます。</p>');wasRun=true;poll()}}
@@ -403,14 +403,14 @@ function manView(j,name,pending){const ls=(j&&j.lines||[]).filter(l=>l.trim()&&!
    :{busy:true,kind:'run',text:who+' のフォームを別の画面で開いています。開くまで少し待ちます(1分ほどかかることがあります)。開いた画面で内容を確かめて、ご自分で送信してください。'+short}}
  if(pending&&!(mine&&j.running===false))return{busy:true,kind:'run',text:who+' のフォームを別の画面で開いています。開くまで少し待ちます(1分ほどかかることがあります)。開いた画面で内容を確かめて、ご自分で送信してください。'};
  if(mine&&j.running===false&&(pending||MAN.seen)){if(j.code===0&&opened)return{busy:false,kind:'ok',text:who+' のフォームを開きました。開いた画面で送信してください。この処理は終わりました。'};
-  return{busy:false,kind:'ng',text:who+' のフォームは開けませんでした。'+(last?'理由: '+last:'くわしい経過を見てください。')}}
+  return{busy:false,kind:'ng',text:who+(j.code===6?' の自動挿入を終えました。':' のフォームは開けませんでした。')+(last?'理由: '+last:'くわしい経過を見てください。')}}
  return{busy:false,kind:'none',text:''}}
 function manPaint(j){const pend=!!MAN.busy;let v=manView(j,MAN.name,pend);if(j&&j.name=='手動入力'&&j.running)MAN.seen=true;
  if(v.kind=='ok'||v.kind=='ng')MAN={busy:false,name:MAN.name,form:MAN.form,asked:MAN.asked,started:MAN.started,i:MAN.i,final:v};else if(v.kind=='none'&&MAN.final)v=MAN.final;
  ['manualst','manualst_d'].forEach(id=>{const bx=document.getElementById(id);if(bx){bx.hidden=!v.text;bx.textContent=v.text;bx.style.color=v.kind=='ng'?'var(--danger-ink)':''}});
  document.querySelectorAll('.manb,.manrec').forEach(b=>{b.disabled=v.busy;b.textContent=v.busy&&b.classList.contains('manb')&&MAN.i===+b.dataset.i?'フォームを開いています…':'フォームで送る(自動挿入)'});
  const ask=!!(MAN.final&&MAN.final.kind=='ok'&&MAN.started&&MAN.name&&MAN.form&&!MAN.asked);document.querySelectorAll('.manAsk').forEach(a=>{a.hidden=!ask;const n=a.querySelector('.manAskName');if(n)n.textContent=MAN.name||''})}
-async function manStart(name,form,i){MAN={busy:true,name:name,form:form,i:i,final:null};manPaint(JOB);let r;try{r=await post('/api/manual',Object.assign({file:$('#files').value,name:name},useBody()))}catch(e){r={error:'ツールに届きませんでした。ツールが動いているか確かめてください'}}if(r.error){MAN={busy:false,final:{busy:false,kind:'ng',text:r.error}};manPaint(JOB);return resNote(r.error)}if(!r.started){MAN={busy:false};manPaint(JOB);resNote('いまほかの処理が動いています。終わってから押します')}else{MAN.started=true;wasRun=true;poll()}}
+async function manStart(name,form,i){MAN={busy:true,name:name,form:form,i:i,final:null};manPaint(JOB);let r;try{r=await post('/api/manual',{file:$('#files').value,name:name})}catch(e){r={error:'ツールに届きませんでした。ツールが動いているか確かめてください'}}if(r.error){MAN={busy:false,final:{busy:false,kind:'ng',text:r.error}};manPaint(JOB);return resNote(r.error)}if(!r.started){MAN={busy:false};manPaint(JOB);resNote('いまほかの処理が動いています。終わってから押します')}else{MAN.started=true;wasRun=true;poll()}}
 // 手で送る: フォームを開いたあとに「送りましたか」と聞き、送信の記録(送信ログ)に入れる。送ったと答えると、同じ会社には自動で送らない
 async function manAnswer(yes){const n=MAN.name,f=MAN.form||'';MAN.asked=true;manPaint(JOB);if(!yes){HNOTE=n+': 送っていないので、記録は変えていません。';hist();return}
  const r=await post('/api/manual_sent',{company:n,form:f,how:'フォームを開いたあと、画面で「送りました」と答えた'});if(r.error){HNOTE=n+': '+r.error;MAN.asked=false;manPaint(JOB);return}
@@ -551,9 +551,7 @@ async function renderSample(){const k=S.msgInd;$('#sampleNote').textContent='見
  if(k!=S.msgInd)return;if(r.error){$('#sampleNote').innerHTML=errHtml(r);$('#sampleView').textContent='';return}
  $('#sampleNote').textContent=`見本の会社: ${r.company_label||''}。このリストでこの文面が実際に届く会社: ${r.recipient_count?r.recipient_count+'社（'+(r.recipients||[]).slice(0,5).join('、')+(r.recipient_count>5?' ほか':'')+'）':'なし'}。会社の業種欄がこの業種でない会社には、会社ごとに指定しない限り届きません。`;$('#sampleView').textContent='件名: '+(r.subject||'')+'\n\n'+(r.text||'')}
 function openMsg(k){S.editMsg=true;S.editSender=false;S.msgInd=k||'default';renderMsgOptions();showMsg();loadPatterns();renderSend();const e=$('#msgEdit');if(e)e.scrollIntoView({block:'start'})}
-function useQs(){return S.usePick!=null?'&use='+encodeURIComponent(S.usePick):''}  // ③「今回使う文面」を直接選んだ値だけを、フォーム挿入の本文に渡す(保存しない・選ぶ前は会社の業種で自動。他のボタンで S.msgInd が変わっても影響しない)
-function useBody(){return S.usePick!=null?{use_industry:S.usePick}:{}}
-$('#mind').onchange=()=>{$('#msgSaved').textContent='';S.usePick=$('#mind').value;showMsg();document.querySelectorAll('.manDraft[open]').forEach(d=>{d.open=false})};  // 選び直したら、開いている確認欄を閉じる(開き直すと今回の文面で作り直す)
+$('#mind').onchange=()=>{$('#msgSaved').textContent='';showMsg()};
 $('#greetToggle').onclick=()=>{S.greet=!S.greet;renderAuto()};
 $('#toSender').onclick=()=>{S.editMsg=false;S.editSender=true;renderSend();const e=$('#s_会社名');if(e){e.scrollIntoView({block:'center'});e.focus()}};
 $('#msgClose').onclick=()=>{S.editMsg=false;renderSend()};
@@ -646,14 +644,14 @@ async function doPreview(auto){S.err='';if(!auto)S.flash='';const v=smaxCheck();
  if(!r.started){S.err='いまほかの処理が動いています。終わってから押します。';renderSend();return}
  S.dirty='';S.condOpen=false;S.leave7=false;S.T=null;S.read=false;wasRun=true;poll()}
 function curKey(){for(let i=JOB.lines.length-1;i>=0;i--){const m=/確認番号: (\S+)/.exec(JOB.lines[i]);if(m)return m[1]}return ''}
-async function askApprove(){const T=S.T||{};const r=await post('/api/approve',{key:T.key||T.key_short||curKey()});if(r.error)return {err:r};return {ok:!!r.ok}}
+async function askApprove(){const T=S.T||{};const r=await post('/api/approve',{key:T.key||T.key_short||curKey()});if(r.error)return {err:r};return {ok:!!r.ok,message:r.message||''}}
 async function doSend(){const T=S.T||{};S.err='';S.flash='';
  if(!S.read){S.err='先に、ボタンの上の、読みました、にチェックを入れます。';renderSend();const c=$('#readok');if(c){c.scrollIntoView({block:'center'});c.focus()}return}
  if(T.window){S.err=esc(T.window);renderSend();return}
  S.wait='画面の外に確認が出ています。内容を読んで「はい」か「いいえ」を押します。';renderSend();
  const a=await askApprove();S.wait='';
  if(a.err){S.err=errHtml(a.err);renderSend();return}
- if(!a.ok){S.flash='送りませんでした（確認で「いいえ」を押したため）。';S.read=false;renderPlan();renderSend();return}
+ if(!a.ok){S.flash=a.message?esc(a.message):'送りませんでした（確認で「いいえ」を押したため）。';S.read=false;renderPlan();renderSend();return}
  const r=await post('/api/send',{file:$('#sfile').value,max:smaxCheck().n,supp:$('#supp').checked,send:true,confirm:'送信'});
  if(r.error||!r.started){await post('/api/approve/cancel',{});S.err=r.error?errHtml(r):'いまほかの処理が動いています。終わってから押します。';renderSend();return}
  S.T=null;S.read=false;wasRun=true;poll()}
@@ -737,7 +735,7 @@ let TOUCHED=0;document.addEventListener('input',()=>{const n=Date.now();if(n-TOU
 document.addEventListener('change',e=>{if(e.target.closest&&e.target.closest('#area,#kw,#inds,#srcs,#resumeChoice'))histLater()});
 const startSearch=async d=>{if(d.restart_search&&HISTN&&!confirm('「最初からやり直す」を選んでいます。前回までに調べた'+HISTN+'社も、もう一度調べます。よろしいですか'))return;const r=await post('/api/search',d);if(r.error)return alert(r.error);if(r.peer)return openPeer(r.peer);if(!r.started)return alert('この画面では、ほかの処理が動いています。少し待ってから、もう一度押してください');wasRun=true;poll()};
 $('#go').onclick=()=>startSearch(collectSearch());
-const stopNow=async()=>{if(!confirm('ここで止めます。調べ終えた分でリストを作って終わります（数十秒かかります）。よろしいですか'))return;const r=await post('/api/stop',{});if(r.error)return alert(r.error);alert(r.note)};
+const stopNow=async()=>{const man=JOB.running&&JOB.name=='手動入力';if(!confirm(man?'ここで止めます。開いているフォームの画面を閉じて終わります。ツールは送信ボタンを押していません。ご自身で送った場合は、その送信結果を確認してください。よろしいですか':'ここで止めます。調べ終えた分でリストを作って終わります（数十秒かかります）。よろしいですか'))return;const r=await post('/api/stop',man?{what:'手動入力'}:{});if(r.error)return alert(r.error);alert(r.note)};
 $('#stop').onclick=stopNow;$('#stop2').onclick=stopNow;
 $('#newtab').onclick=async()=>{const w=window.open('about:blank','_blank');const r=await post('/api/newtab',{});if(r.error||!r.url){if(w)w.close();return alert(r.error||'別の画面を開けませんでした')}if(w)w.location=r.url;else alert('ブラウザが新しいタブを止めました。次のアドレスを開いてください: '+r.url)};
 let planTimer;function refreshPlan(){clearTimeout(planTimer);planTimer=setTimeout(async()=>{const area=$('#area').value.trim();if(!area||!(document.querySelectorAll('#inds input:checked').length||$('#kw').value.trim())){$('#plan').textContent='';return}
@@ -751,7 +749,7 @@ const JN={'探す':'「探す」を実行しています','確認':'送る内容
 function status(){const j=JOB,mine=j.name=='探す',last=(j.lines.filter(l=>l.trim()).slice(-1)[0]||'');
  const os=j.other&&j.other.name=='探す'?j.other:null;
  $('#st_a').textContent=os?`【探す】実行中… ${os.last}`:!mine||!j.name?'まだ何も動いていません':j.running?`【${j.name}】実行中… ${last}`:j.code===0?`【${j.name}】終わりました。`:`【${j.name}】途中で止まりました。くわしい経過の最後の行を見てください。`;
- $('#jobbar').classList.toggle('on',!!j.running);const canStop=(!!j.running&&mine)||!!os;$('#stop').hidden=!canStop;$('#stop2').hidden=!canStop;
+ $('#jobbar').classList.toggle('on',!!j.running);const canStop=(!!j.running&&(mine||j.name=='手動入力'))||!!os;$('#stop').hidden=!canStop;$('#stop2').hidden=!canStop;
  if(j.running){$('#jobname').textContent=JN[j.name]||'処理をしています';const c=cnt();$('#jobline').textContent=mine?last:(j.name=='本番送信'&&c.has&&c.total?`${c.done}／${c.total}社`:'')}}
 async function refreshMeta(quiet){const sf=$('#sfile'),m=await J('/api/meta'+(sf&&sf.value?'?file='+encodeURIComponent(sf.value):''));if(!m||m.error){if(!quiet){S.err=esc((m&&m.error)||'ツールから読み込めませんでした');renderSend()}return}
  const prev=META.send_state;META=m;if(!$('#sender').children.length)renderSenderForm();
@@ -762,6 +760,7 @@ async function poll(){clearInterval(timer);const t=async()=>{const j=await J('/a
  if(!j.running){clearInterval(timer);const fin=wasRun&&mine&&j.code===0;if(wasRun&&updWait){updWait=false;setTimeout(checkUpdate,500)}
   if(wasRun&&mine&&j.code!==0&&j.code!==null)alert('「探す」が途中で止まりました。進み具合のくわしい経過に、理由が出ています');
   if(wasRun&&sj&&j.code!==0&&j.code!==null)S.err=j.name=='確認'?'送る内容を出す途中で止まりました。もう一度押しても止まるときは、この画面を写して連絡します（くわしい記録に理由が残っています）。':'送る途中で止まりました。送れた会社と送れなかった会社は、送信の記録で読めます。';
+  if(wasRun&&sj&&j.stop_reason)S.err=esc(j.stop_reason);
   opts($('#files'),j.files,fin?j.files[0]:$('#files').value);opts($('#sfile'),j.files,fin||!$('#sfile').value?j.files[0]:$('#sfile').value);META.files=j.files;
   if(wasRun&&sj){S.T=null;if(/出し直しています。$/.test(S.flash))S.flash='書き出しを直して、送る内容を出し直しました。';await refreshMeta(true)}
   wasRun=false;banners();if(fin){loadFunnel();goto('b')}if(j.other&&j.other.name=='探す'){wasRun=true;setTimeout(poll,300)}}};t();timer=setInterval(t,1500)}
@@ -810,7 +809,8 @@ function lockApply(){const L=LIC.denied;
  if(L&&run){mb.disabled=true;mb.title=LICWHY;mb.dataset.lic='1';if(!$('#licWhy')){const h=document.createElement('span');h.className='hint';h.id='licWhy';h.textContent=LICWHY;mb.parentNode.appendChild(h)}}
  else if(mb.dataset.lic){delete mb.dataset.lic;mb.disabled=false;mb.title='';const h=$('#licWhy');if(h)h.remove()}}
 function keyShow(r){const s=$('#keyState');if(!s||!r||typeof r.key_set!=='boolean')return;
- s.innerHTML='許可キー: <b>'+(r.key_set?'設定済み':'まだ入っていません')+'</b>';$('#keyOpen').textContent=r.key_set?'変える':'設定する'}
+ const full=r.allowed===false&&/端末の数|上限/.test(String(r.message||''));
+ s.innerHTML=full?'許可キー: <b>設定済み</b>。ただし、このパソコンはいまは使えません（このキーで使えるパソコンの台数がいっぱいです）。担当者にご連絡ください。':'許可キー: <b>'+(r.key_set?'設定済み':'まだ入っていません')+'</b>';$('#keyOpen').textContent=r.key_set?'変える':'設定する'}
 $('#keyOpen').onclick=()=>{$('#keyEdit').hidden=false;$('#keyMsg').textContent='';$('#keyIn').focus()};
 $('#keyCancel').onclick=()=>{$('#keyEdit').hidden=true;$('#keyIn').value='';$('#keyNote').textContent=''};
 $('#keySave').onclick=async()=>{const n=$('#keyNote'),k=$('#keyIn').value.trim();
@@ -822,7 +822,8 @@ $('#keySave').onclick=async()=>{const n=$('#keyNote'),k=$('#keyIn').value.trim()
 function licShow(r){keyShow(r);const b=$('#lic');if(!b)return;
  if(r&&r.allowed===false){LIC.denied=true;LIC.report=r.report||'';
   if(b.dataset.msg!==String(r.message)){b.dataset.msg=String(r.message);
-   b.innerHTML='<div>探す・送るは、いま使えません。'+esc(r.message)+'（できたリストの閲覧と書き出しは使えます）</div><div style="margin-top:6px">許可キー（担当者から届いた鍵。設定の「計測キー」と同じものです）: <input type="password" id="licKey" autocomplete="off" size="40"> <button class="btn sub sm" id="licGo" type="button">鍵を入れて確かめる</button> <button class="btn sub sm" id="licCopy" type="button">担当者へ送る文をコピー</button></div><p class="hint" id="licNote" role="status"></p>';
+   const full=/端末の数|上限/.test(String(r.message||''));
+   b.innerHTML='<div>探す・送るは、いま使えません。'+(full?'許可キーは入っていますが、このキーで使えるパソコンの台数がいっぱいで、このパソコンでは使えません。担当者にご連絡ください。':esc(r.message))+'（できたリストの閲覧と書き出しは使えます）</div><div style="margin-top:6px">'+(full?'別のキーをもらったときは、ここに入れます。':'許可キー（担当者から届いた鍵）:')+' <input type="password" id="licKey" autocomplete="off" size="40"> <button class="btn sub sm" id="licGo" type="button">鍵を入れて確かめる</button> <button class="btn sub sm" id="licCopy" type="button">担当者へ送る文をコピー</button></div><p class="hint" id="licNote" role="status"></p>';
    $('#licGo').onclick=licTry;$('#licCopy').onclick=licCopy}
   b.hidden=false}
  else{LIC.denied=false;b.hidden=true;b.dataset.msg=''}
@@ -849,7 +850,7 @@ document.querySelectorAll('input[name=engine]').forEach(e=>e.onchange=async()=>{
 $('#museRetry').onclick=async()=>{$('#museState').textContent='つなぎ直しています';showEngine(await post('/api/ai_engine',{engine:'muse'}))};
 loadEngine();
 $('#supCopy').onclick=async()=>{const r=await J('/api/support_report');copyText((r&&r.report)||'AIまるなげ営業の困りごとについて。版 '+($('#ver').textContent||'')+'。',$('#supNote'))};
-$('#bugBox').addEventListener('toggle',async()=>{if(!$('#bugBox').open)return;const r=await J('/api/bug_report/info');if(r&&!r.error){$('#bugVer').textContent=r.version||'';$('#bugKey').textContent=r.key_set?'設定済み':'未設定(設定の「計測キー」に入れます)'}});
+$('#bugBox').addEventListener('toggle',async()=>{if(!$('#bugBox').open)return;const r=await J('/api/bug_report/info');if(r&&!r.error){$('#bugVer').textContent=r.version||'';$('#bugKey').textContent=r.key_set?'設定済み':'未設定(画面上の「許可キー」の「設定する」から入れます)'}});
 $('#bugSend').onclick=async()=>{const n=$('#bugNote');n.textContent='送っています。';$('#bugSend').disabled=true;
  const r=await post('/api/bug_report',{summary:$('#bugSummary').value,detail:$('#bugDetail').value,contact:$('#bugContact').value});$('#bugSend').disabled=false;
  if(r.error){n.textContent=r.error;return}

@@ -263,6 +263,33 @@ function Test-SampleSender([string]$Path) {
     try { $j = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json; return ("$($j.'氏名')".StartsWith("【") -or -not "$($j.'氏名')") } catch { return $false }
 }
 
+# 上書きする前の控え。見本そのものと同じ中身なら控えない。控えの名前は「元の名前_置き換え前_日時.拡張子」で、同じ場所に置く
+# 戻り値: 上書きしてよいとき $true。控えが要るのに作れなかったときは $false を返し、呼び出し元は上書きしない
+function Backup-BeforeReplace([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $true }
+    $sample = [IO.Path]::Combine($AppDir, "sender.sample.json")
+    try {
+        if ((Test-Path -LiteralPath $sample) -and ((Get-FileHash -LiteralPath $Path -ErrorAction Stop).Hash -eq (Get-FileHash -LiteralPath $sample -ErrorAction Stop).Hash)) { return $true }
+    } catch {
+        Write-Host "上書きする前の $([IO.Path]::GetFileName($Path)) を確かめられなかったので、置き換えていません: $($_.Exception.Message)"
+        return $false
+    }
+    $dir = [IO.Path]::GetDirectoryName($Path)
+    $stem = [IO.Path]::GetFileNameWithoutExtension($Path)
+    $ext = [IO.Path]::GetExtension($Path)
+    $to = [IO.Path]::Combine($dir, $stem + "_置き換え前_" + (Get-Date -Format "yyyyMMdd_HHmmss") + $ext)
+    $n = 1
+    while (Test-Path -LiteralPath $to) { $n++; $to = [IO.Path]::Combine($dir, $stem + "_置き換え前_" + (Get-Date -Format "yyyyMMdd_HHmmss") + "_" + $n + $ext) }
+    try {
+        Copy-Item -LiteralPath $Path -Destination $to -ErrorAction Stop
+    } catch {
+        Write-Host "上書きする前の $([IO.Path]::GetFileName($Path)) の控えを作れなかったので、置き換えていません: $($_.Exception.Message)"
+        return $false
+    }
+    Write-Host "上書きする前の $([IO.Path]::GetFileName($Path)) を控えました: $to"
+    return $true
+}
+
 # --- 画面を開く (-Open)。終了コード 0=開いた / 3=原因を表示して止まった ---
 if ($Open) {
     $Here = $PSScriptRoot
@@ -469,7 +496,14 @@ try {
         foreach ($it in @(Get-ChildItem -LiteralPath $proot.FullName -Force)) {
             $dest = [IO.Path]::Combine($(if ($it.Name -eq "出力") { $AppDir } else { $SettingsDir }), $it.Name)  # 出力/NGリスト.txt はツール本体側。送信元・文面・採用記録・計測キーは設定の置き場へ
             if ($it.Name -eq "sender.json" -and -not $it.PSIsContainer) {
-                if (Test-SampleSender $dest) { Copy-Item -LiteralPath $it.FullName -Destination $dest -Force; $added++ }
+                if (Test-SampleSender $dest) {
+                    # 見本と判定した送信元でも、見本そのものと中身が違えば、上書きの前に日時つきの控えを同じ場所に残す。波2 B: 氏名が空なだけの本人の設定を失わない
+                    if (Backup-BeforeReplace $dest) {
+                        Copy-Item -LiteralPath $it.FullName -Destination $dest -Force; $added++
+                    } else {
+                        $skipped += "sender.json 控えを作れなかったので、いまの送信元のまま置き換えていません"
+                    }
+                }
             } elseif ($it.Name -eq "計測キー.txt" -and -not $it.PSIsContainer) {
                 # 撤去前のフォルダにだけある。いまの鍵があれば上書きしない。画面の保存と同じ形(英数字と - _ の32〜128文字)でなければ戻さない
                 $keyText = ""

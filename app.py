@@ -23,6 +23,18 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse, quote
 
 import time
+if __name__ == "__main__":
+    # 起動の入口の最初(ほかの部品を読み込む前)で、更新の戻しに失敗した印を見る。印があれば前の版へ戻すのをやり直し、
+    # 戻せなければ新旧の混ざった版では起動せず、決まった日本語と受付番号を出して止まる(破壊検証3 致命傷1)。
+    # 部品の読み込み(設定の引っ越し等)より前に置くのは、混ざった版の部品を1つも動かさないため。updater は標準ライブラリだけで動く
+    import updater as _rollback_guard
+    if hasattr(_rollback_guard, "startup_guard"):
+        _rollback_guard.startup_guard(sys.argv, exit_code=10)  # 10 = EXIT_SHOWN(理由を出して止まった。振り向けた側は黙る)
+    elif any((Path(__file__).resolve().parent / "出力" / _n).exists() for _n in ("前の版に戻せませんでした.json", "前の版に戻せませんでした.txt")):
+        # updater.py だけが前の版(止めを持たない版)に戻り、この app.py は戻せなかった。戻し直しはできないが、混ざった版では動かさない(Codex 致命傷A)
+        print("フォームリスト作成ツールは、更新の失敗で新しい版と前の版が混ざったままのため、起動していません。"
+              "出力フォルダの「前の版に戻せませんでした.txt」と受付番号を担当者に送ってください。", file=sys.stderr)
+        sys.exit(10)
 import filelock
 import ng_list
 import approval
@@ -172,8 +184,9 @@ def ensure_watchdog_task():
             return
         import watchdog
         watchdog.ensure_task(HERE)
-    except Exception as e:
-        launch_notice(f"見張りの登録を確かめられませんでした({type(e).__name__})", show=False)
+    except Exception:
+        _sid = support_error("ensure_watchdog_task")["support_id"]  # 原文はサポート記録へ(破壊検証3 致命傷2)
+        launch_notice(f"見張りの登録を確かめられませんでした(受付番号 {_sid})", show=False)
 
 
 def watchdog_registered():
@@ -449,38 +462,88 @@ def keep_awake_start():
     return (lambda: None), "none"
 
 
+SEND_LIMIT_BASE_S, SEND_LIMIT_PER_S = 1800, 300  # 本番送信の全体の上限: 30分 + 1社につき5分(1社の送信は通常1〜2分。押した後の確認待ちを含めても超えない幅)
+STOP_GRACE_S = 120  # 上限を超えたら、まず「いまの1社を終えて止まる」印を置き、この秒数たっても終わらなければ処理を終了させる
+
+
+def send_job_limit():
+    """本番送信の全体の上限(秒)。社数が多いほど長くする。上限を超えたら止め、理由を画面に出す(波2 C)"""
+    return SEND_LIMIT_BASE_S + SEND_LIMIT_PER_S * int(SEND_INFO.get("total") or 0)
+
+
+def manual_stop_flag():
+    """自動挿入(手動入力)を画面の「ここで止める」で止める印。autosend がこの印を見て、開いたブラウザを閉じて終わる(波2 C)"""
+    return OUT / f"手動入力_止める_{PORT}.flag"
+
+
+def _over_limit(slot, p, limit):
+    """上限を超えた送信を止める。先に止める印(今の1社は終える)、それでも終わらなければ終了させる。理由は画面に出す日本語の1文"""
+    if p.poll() is not None:
+        return
+    mins = max(1, int(limit // 60))
+    try:
+        OUT.mkdir(exist_ok=True)
+        send_stop_flag().write_text(time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
+    except OSError:
+        pass
+    reason = f"送信が上限の{mins}分を超えたため、いま送っている1社を終えたところで止めました。残りの会社は送っていないまま残り、あとで「送る内容を出す」から送れます"
+    slot["stop_reason"] = reason
+    slot["lines"].append(f"（{reason}）")
+    try:
+        p.wait(timeout=STOP_GRACE_S)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    reason = f"送信が上限の{mins}分を超え、止める指示から{STOP_GRACE_S}秒たっても終わらなかったため、送信の処理を終了しました。最後の1社は送れたか分からないので、送信の記録で確かめてから次へ進みます"
+    slot["stop_reason"] = reason
+    slot["lines"].append(f"（{reason}）")
+    try:
+        p.terminate()
+    except OSError:
+        pass
+
+
 def run_job(name, args, stdin_text=None, on_ok=None, extra_env=None):
     slot = SJOB if name == "探す" else JOB
     with LOCK:
         if slot["running"]:
             return False
-        slot.update(lines=[], running=True, name=name, code=None, proc=None, fresh=False, started=time.strftime("%Y-%m-%dT%H:%M:%S"), awake="")
+        slot.update(lines=[], running=True, name=name, code=None, proc=None, fresh=False, started=time.strftime("%Y-%m-%dT%H:%M:%S"), awake="", stop_reason="")
         if name == "本番送信":
             _rm(send_stop_flag())  # 前回の止める印を持ち越さない
             try:
                 OUT.mkdir(exist_ok=True)
-                (OUT / SEND_MARK).write_text(json.dumps({"total": SEND_INFO.get("total", 0), "started": SEND_INFO.get("started", ""), "port": PORT, "pid": os.getpid()}), encoding="utf-8")
+                filelock.atomic_write(OUT / SEND_MARK, json.dumps({"total": SEND_INFO.get("total", 0), "started": SEND_INFO.get("started", ""), "port": PORT, "pid": os.getpid()}), encoding="utf-8")  # 途中で落ちても半分の記録にならない(波2 A)
             except OSError:
                 pass
+        if name == "手動入力":
+            _rm(manual_stop_flag())
 
     def work():
         code = None
         release = None
+        watch = None
         try:
             env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONWARNINGS="ignore", **(extra_env or {}))
             if name == "本番送信":
                 env["FORMLIST_SEND_STOP_FLAG"] = str(send_stop_flag())
                 release, slot["awake"] = keep_awake_start()
+            if name == "手動入力":
+                env["FORMLIST_MANUAL_STOP_FLAG"] = str(manual_stop_flag())
             p = subprocess.Popen([PY, "-X", "utf8", *args], cwd=HERE, env=env, stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                                  errors="replace", creationflags=NO_WINDOW)
             slot["proc"] = p
             if name == "本番送信":
+                limit = send_job_limit()
+                watch = threading.Timer(limit, _over_limit, (slot, p, limit))  # 全体の上限(波2 C)。止まらない送信を待ち続けない
+                watch.daemon = True
+                watch.start()
                 try:
                     mf = OUT / SEND_MARK
                     md = json.loads(mf.read_text(encoding="utf-8"))
                     md["child"] = p.pid
-                    mf.write_text(json.dumps(md), encoding="utf-8")
+                    filelock.atomic_write(mf, json.dumps(md), encoding="utf-8")
                 except (OSError, ValueError):
                     pass
             if stdin_text is not None:
@@ -490,9 +553,12 @@ def run_job(name, args, stdin_text=None, on_ok=None, extra_env=None):
                 slot["lines"].append(line.rstrip())
             code = p.wait()
             slot["lines"].append(f"（終了 コード{code}）")
-        except Exception as e:
-            slot["lines"].append(f"（処理を始められませんでした: {e!r}）")
+        except Exception:
+            _sid = support_error("run_job")["support_id"]  # 原文はサポート記録へ。画面には受付番号だけ(破壊検証3 致命傷2)
+            slot["lines"].append(f"（処理を始められませんでした。受付番号 {_sid}。直らないときは、この受付番号を担当者に送ってください）")
         finally:
+            if watch:
+                watch.cancel()
             if release:
                 try:
                     release()
@@ -687,6 +753,7 @@ def init_ng_store(db_path=None):
     """Connect the UI to the NG/state DB. Tests pass a temp path; normal startup uses a sidecar DB."""
     global _NG_STORE
     _NG_STORE = NgStateStore(db_path or default_ng_state_db())
+    send_rules.register_send_db(_NG_STORE.db_path)  # 同じ会社の14日・2回で、「送信試行」が押されたかをこのDBでも確かめる
     _NG_STORE.migration_status()
     return _NG_STORE
 
@@ -716,8 +783,8 @@ def ensure_ng_migrated(store, src=None):
         else:
             raise RuntimeError(f"送らない会社の移行が途中の状態です({status})。手で確かめてください")
         store.sync_legacy_txt(src)
-    except Exception as e:
-        NG_MIGRATION["error"] = f"{type(e).__name__}: {str(e)}"
+    except Exception:
+        NG_MIGRATION["error"] = known_error("ng_migration")["error"]  # 原文はサポート記録へ。画面には日本語の理由と受付番号だけ(波2 D)
     return NG_MIGRATION["error"]
 
 
@@ -727,8 +794,8 @@ def sync_ng_txt(store):
         return
     try:
         store.sync_legacy_txt(ng_list.FILE)
-    except Exception as e:
-        NG_MIGRATION["error"] = f"{type(e).__name__}: {str(e)}"
+    except Exception:
+        NG_MIGRATION["error"] = known_error("sync_ng_txt")["error"]  # 原文はサポート記録へ(波2 D)
 
 
 NGMARK = "画面で「送らない」"
@@ -847,7 +914,7 @@ def load_portals():
 
 def save_portals(items):
     OUT.mkdir(exist_ok=True)
-    PORTALS_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
+    filelock.atomic_write(PORTALS_FILE, json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")  # 途中で落ちても前の登録が残る(波2 A)
 
 
 def plan(p, supp, mx, store=None, explain=False):
@@ -897,20 +964,6 @@ def read_sender():
 
 
 LIST_FIELD = "list"  # エラーの応答の field。リストの問題と送信元の問題を同じ文で返さない(E-1〜E-3)
-
-
-def use_industry_arg(v):
-    """画面③「今回使う文面」の値を検査する。戻り値 (業種 or None, エラー文 or None)。None=選んでいない / "" =基本の文面。
-    選べるのは画面の選択肢(基本の文面・業種ごとの文面・古い名前)だけ。それ以外の文字は受けない(文面フォルダの外を読ませない)"""
-    if v is None or str(v).strip() == "":
-        return None, None
-    v = str(v).strip()
-    if v == "default":
-        return "", None
-    mi = message_info()
-    if v not in set(mi["industries"]) | {o["name"] for o in mi["orphans"]}:
-        return None, "今回使う文面の指定が、選べる文面にありません。画面の「今回使う文面」から選び直してください"
-    return v, None
 
 
 def list_or_error(name):
@@ -986,10 +1039,12 @@ def load_settings():
 
 
 def save_settings(**kw):
-    d = load_settings()
-    d.update(kw)
+    """読み直し→変更→置き換えを同じ錠の中で行う(同時に2か所から保存しても、先の変更が消えない・波2 W3)"""
     OUT.mkdir(exist_ok=True)
-    (OUT / SETTINGS_NAME).write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+    with filelock.locked(OUT / SETTINGS_NAME):
+        d = load_settings()
+        d.update(kw)
+        filelock.atomic_write(OUT / SETTINGS_NAME, json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")  # 途中で落ちても前の設定が残る(波2 A)
 
 
 def _log():
@@ -1078,6 +1133,122 @@ def support_error(where):
         pass
     return {"error": f"ツールの側で問題が起きました(受付番号 {sid})。少し待って、もう一度押します。直らないときは、この表示と受付番号を担当者に送ってください。"
                      "続くときは、この画面を写して連絡します", "support_id": sid}
+
+
+# 原因が分かっている失敗の一覧(波2 W5)。左=ツール自身が出す例外の文の書き出し、右=画面に出す決まった日本語。
+# 画面の文はいつも右の決まった文だけから作る(例外の文から切り出さない)。ここに無い例外は、受付番号と次にすることだけを出す
+KNOWN_REASONS = (
+    ("計測用の鍵がまだ入っていません", "計測用の鍵がまだ入っていません。「3 送る」の画面の「送信元」の行の「直す」を押して、「計測キー」の欄に担当者から届いた計測キーを入れて「この送信元を保存」を押します"),
+    ("送らない会社の移行が途中の状態です", "送らない会社の移行が途中の状態です。手で確かめてください"),
+    ("文面の指定の記録(message_adoptions.json)が壊れていて読めません", "文面の指定の記録が壊れていて読めません。直るまで、指定のある会社は送りません"),
+    ("採用済み会社のフォームURLが一致しません", "採用済み会社のフォームURLが一致しません"),
+    ("承認した会社名とフォームURLの組合せではありません", "承認した会社名とフォームURLの組合せではありません"),
+    ("承認テンプレートのパスが不正です", "承認した文面の置き場が正しくありません"),
+    ("本文採用が承認されていません", "本文採用が承認されていません"),
+    ("この会社は本文採用済みですが、実送信は承認されていません", "この会社は本文採用済みですが、実送信は承認されていません"),
+    ("実際のフォームURLが、承認したURLと文字列として一致しません", "実際のフォームURLが、承認したURLと一致しません(末尾の「/」や http と https の違いも別のURLとして扱います)"),
+    ("この会社は採用済みの個別の文面があるため、指定では変えません", "この会社は採用済みの個別の文面があるため、指定では変えません"),
+    # 更新(updater.py が出す ValueError)。ファイル名が先頭に入る文は正規表現で見る(破壊検証3 致命傷2)
+    ("ほかの画面が更新している最中です", "ほかの画面が更新している最中です。少し待ってから、もう一度開いてください"),
+    ("前の版の控えを正しく作れませんでした", "前の版の控えを正しく作れませんでした(ほかのプログラムがファイルを開いている等)。何も入れ替えていません。少し待ってからもう一度更新します"),
+    ("開発用の作業フォルダのため、更新しません", "開発用の作業フォルダのため、更新しません(手元の変更が公開版で上書きされるのを防ぐ目印があります)"),
+    ("公開されている最新の版の一覧(manifest.json)を取得できませんでした", "公開されている最新の版の一覧を取得できませんでした。通信を確かめてください"),
+    (re.compile(r"\S+ を取得できませんでした。"), "新しい版のファイルを取得できませんでした。インターネットにつながっているかを確かめて、少し待ってからもう一度更新します。何も入れ替えていません"),
+    (re.compile(r"\S+ の中身が manifest と合いません"), "新しい版のファイルの中身が一覧と合いませんでした(取得の途中で変わった可能性があります)。何も入れ替えていません"),
+    (re.compile(r"\S+ が Python として読めません"), "新しい版のファイルが正しく読めませんでした。何も入れ替えていません"),
+    (re.compile(r"\S+ が公開鍵の形をしていません"), "新しい版の公開鍵のファイルが正しい形ではありませんでした。何も入れ替えていません"),
+    # 送り方の選択の保存(channel_choice.ChoiceSaveError)
+    ("送り方の選択を保存できませんでした(ほかの処理が使っています)", "送り方の選択を保存できませんでした(ほかの処理が使っています)。少し待ってもう一度選んでください"),
+    ("送り方の選択を保存できませんでした(前の選択を新しい置き場へ写せませんでした)", "送り方の選択を保存できませんでした(前の選択を新しい置き場へ写せませんでした)。少し待ってもう一度選んでください"),
+    # 資料から見本を作る(sample_from_material)
+    ("資料の文章が空です", "資料の文章が空です"),
+    # 開封の記録(proposal_links)
+    ("開封の記録を取りに行けませんでした", "開封の記録を取りに行けませんでした。通信を確かめて、もう一度開きます"),
+    ("開封の記録の形が想定と違います", "開封の記録の形が想定と違います(集計ページが別の内容を返しました)"),
+    ("サーバーの記録フォルダに書き込めない状態です", "開封の記録のサーバーが書き込めない状態です。開封が記録されていない可能性があるため、0件とは扱いません"),
+    (re.compile(r"サーバーが \d+ 件の識別子を受け付けませんでした"), "開封の記録のサーバーが一部の識別子を受け付けませんでした(PC側の鍵とサーバーの鍵がずれている可能性)。0件とは扱いません"),
+    # メール送信の設定(mail_channel.MailError)
+    ("メール送信の設定(smtp.json)がありません", "メール送信の設定がまだありません。設定してから送ります"),
+    ("メール送信の設定(smtp.json)を読めません", "メール送信の設定を読めません。設定し直します"),
+    ("メール送信の設定(smtp.json)の形が正しくありません", "メール送信の設定の形が正しくありません。設定し直します"),
+    ("メール送信の設定の「host」が空です", "メール送信の設定の「サーバー(host)」が空です"),
+    ("メール送信の設定の「user」が空です", "メール送信の設定の「ユーザー名(user)」が空です"),
+    ("メール送信の設定の「password」が空です", "メール送信の設定の「パスワード(password)」が空です"),
+    ("メール送信の設定の「port」が数字ではありません", "メール送信の設定の「番号(port)」が数字ではありません"),
+    ("メール送信の設定の「port」は1〜65535の数字にしてください", "メール送信の設定の「番号(port)」は1〜65535の数字にしてください"),
+    ("メール送信の設定の「security」は ssl / starttls / none のどれかです", "メール送信の設定の「暗号化の方式(security)」は ssl / starttls / none のどれかです"),
+    ("メール送信の設定の「security」が none のままでは", "メール送信の設定の「暗号化の方式(security)」が none のままでは、パスワードが暗号化されずに流れます。ssl か starttls にしてください"),
+    ("メール送信の設定の「from_addr」のメールアドレスの形が正しくありません", "メール送信の設定の「送信元のメールアドレス(from_addr)」の形が正しくありません"),
+)
+
+
+def known_reason(exc):
+    """例外が一覧の失敗なら、画面に出す決まった日本語。一覧に無ければ空(例外の文は画面に使わない)。
+    見出しは文字列(書き出しの一致)か、正規表現(書き出しから一致。ファイル名・欄の名前が先頭に入る文)"""
+    msg = str(exc or "")
+    for head, text in KNOWN_REASONS:
+        if (head.match(msg) if isinstance(head, re.Pattern) else msg.startswith(head)):
+            return text
+    return ""
+
+
+MAIL_LOGIN_REASONS = (  # 左=mail_channel が返す文の書き出し、右=画面に出す決まった文
+    ("設定: SMTPの認証に失敗しました", "設定: SMTPの認証に失敗しました(ユーザー名・パスワード)"),
+    ("設定: SMTPのユーザー名・パスワードに使えない文字が入っています", "設定: SMTPのユーザー名・パスワードに使えない文字が入っています"),
+    ("設定: SMTPサーバーに送れませんでした(", "設定: SMTPサーバーに接続できませんでした(サーバー名・番号・暗号化の方式を確かめます)"),
+)
+
+
+def support_note(where, raw):
+    """例外の外で起きた想定外の文(原文)を、受付番号つきでサポート記録に残す。戻りは受付番号"""
+    sid = next_support_id()
+    try:
+        OUT.mkdir(exist_ok=True)
+        cap_log(OUT / SUPPORT_NAME, 300_000, 100_000)
+        with open(OUT / SUPPORT_NAME, "a", encoding="utf-8") as f:
+            f.write(f"===== 受付番号 {sid} {time.strftime('%Y-%m-%d %H:%M:%S')} {where}\n{raw}\n")
+    except OSError:
+        pass
+    return sid
+
+
+def mail_login_reason(memo):
+    """メールの接続の確認の結果を画面に出す前に、決まった文の一覧(MAIL_LOGIN_REASONS)に置き換える。
+    一覧に無い文は画面に出さず、受付番号だけを出す(原文はサポート記録へ。Codex 弱点)"""
+    memo = str(memo or "")
+    for head, text in MAIL_LOGIN_REASONS:
+        if memo.startswith(head):
+            return text
+    sid = support_note("mail_login", memo)
+    return f"設定: メールサーバーへの接続の確認がうまくいきませんでした(受付番号 {sid})。直らないときは、この受付番号を担当者に送ってください"
+
+
+def update_failure_tail(sid, exc=None):
+    """更新に失敗したあと、手元のファイルが前の版のままかを確かめてから言う(戻せたかを確かめずに「前の版のまま」と言わない)。
+    控えを作った後の失敗(exc に控えの場所が付く)は、控えの一覧の sha256 と照合する(Codex 2周目 弱点)。控えを作る前の失敗は何も書いていない。
+    例外は控えの場所を読むだけで、文は画面に出さない"""
+    backup = getattr(exc, "formlist_backup", None)
+    if backup:
+        same = updater.matches_backup_list(backup)
+    else:
+        try:
+            same = updater.build() == BUILD  # 控えを作る前の失敗(取得・検査・作業中)。念のため読み込んだ時点の版とも比べる
+        except OSError:
+            same = False
+    if same:
+        return "前の版のまま使えます"
+    return (f"ファイルの一部が新しい版に入れ替わったまま、前の版に戻しきれていない可能性があります。"
+            f"このまま送らずに、ツールを終了してから、もう一度起動してください。直らないときは、受付番号 {sid} を担当者に送ってください")
+
+
+def known_error(where):
+    """原因が分かっている失敗。原文は 出力/サポート記録.txt に受付番号つきで残し、画面には一覧(KNOWN_REASONS)の決まった日本語と受付番号だけを返す(波2 D・W5)。
+    except 節の中で呼ぶ。一覧に無い失敗は support_error と同じ「受付番号と次にすること」だけを返す"""
+    r = support_error(where)
+    why = known_reason(sys.exc_info()[1])
+    if why:
+        r["error"] = f"{why}(受付番号 {r['support_id']})"
+    return r
 
 
 def last_support_id():
@@ -1268,7 +1439,9 @@ def busy_error():
 def send_counts(since, running=False):
     """送信ログのうち since(本番を始めた時刻)以降の行を、送れた・送れたか確かめる・フォームで送る(自動挿入) に数える。
     1社につき数えるのは最後の1行だけ(押す直前に「送信試行」を書き、そのあと「送信済み」を書くので、全部の行を数えると送れた会社が「確かめる」にも入る。
-    陽性対照: test_send_counts_count_each_company_once_by_its_last_row)"""
+    陽性対照: test_send_counts_count_each_company_once_by_its_last_row)
+    最後の行が「送信試行」の会社は「確かめる」に入る。送信試行のうち押す前に止まったと確かに言えるもの(send_rules.pressed_rows が外すもの)は、
+    次の本番の対象に戻る(この関数は画面の件数の表示だけで、送る対象は決めない)"""
     out = {"sent": 0, "check": 0, "manual": 0}
     if not since or not _log().exists():
         return out
@@ -1445,8 +1618,8 @@ class H(BaseHTTPRequestHandler):
             rows.append((r.get("企業名", ""), url, r.get("業種", ""), r.get("書き出し", ""), r.get("HP URL", "")))
         try:
             todo, bodies, rejected = autosend.prepare_message_plan(rows[:50], MSG, sender)
-        except RuntimeError as e:
-            return self.send(400, {"error": str(e)})
+        except RuntimeError:
+            return self.send(400, known_error("manual_list"))  # 例外の原文を画面に出さない(波2 D)
         out = [{"company": t[0], "form": t[1], "subject": autosend.subject_for(t[0], t[1], sender, autosend.subject_industry(MSG, t[2], t[0], t[1])), "message": b}
                for t, b in zip(todo, bodies)]
         return self.send(200, {"companies": out, "skipped": [{"company": n, "why": w} for n, _u, w in rejected],
@@ -1478,13 +1651,16 @@ class H(BaseHTTPRequestHandler):
                              "warn": _send_warn(body), "notice": _send_notice(body), "text": body,
                              "adoption_diff": autosend.message_adoption.difference_text(autosend.message_adoption.changed_parts(n, u, body, sender))})
                 _, template, local_sender = autosend.message_adoption.resolve_row((n, u, ind, op, hp), str(MSG), sender, autosend.pick_message)
-                c = commons.setdefault((label, template), {"template_label": label, "subject": marked_subject(local_sender),
+                # 見本の件名は、実際にフォームへ入る件名(業種の件名を通したもの・autosend.subject_for と同じ決め方)。{企業名} は印のまま(波2 G1)
+                used = autosend.message_adoption.effective_sender(n, u, sender, autosend.subject_industry(str(MSG), ind, n, u))
+                shown = marked_subject(used)  # 表示する件名もまとめる鍵に入れる(同じ文面でも件名が違う会社を、先頭の件名にまとめない・波2 W6)
+                c = commons.setdefault((label, template, shown), {"template_label": label, "subject": shown,
                                                             "text_with_marks": marked_text(template, local_sender), "count": 0})
                 c["count"] += 1
         except PermissionError:
             return self.send(409, excel_error(p))
-        except RuntimeError as e:  # 計測用の鍵が無い等、原因が分かっているもの(利用者向けの文)
-            return self.send(400, {"error": str(e)})
+        except RuntimeError:  # 計測用の鍵が無い等、原因が分かっているもの(利用者向けの文)。例外の原文は除き、受付番号を添える(波2 D)
+            return self.send(400, known_error("targets"))
         except Exception:
             return self.send(400, support_error("targets"))
         skipped = [dict({"name": s["name"], "url": s.get("url", ""), "reason_code": s["reason_code"], "text": s["text"], "fix": s["fix"]},
@@ -1575,8 +1751,8 @@ class H(BaseHTTPRequestHandler):
     def render_sample(self, d):
         try:
             return self._render_sample(d)
-        except autosend_adoption_error() as e:  # 採用記録が壊れている等。500にせず、理由を1行で言う
-            return self.send(400, {"error": str(e)})
+        except autosend_adoption_error():  # 採用記録が壊れている等。500にせず、理由を1行で言う(例外の原文は除き、受付番号を添える・波2 D)
+            return self.send(400, known_error("render_sample"))
 
     def _render_sample(self, d):
         """文面の見本(D-10・M3)。送るリストの1社目(無ければ「株式会社サンプル」)で、autosend.render と同じ置き換えをした件名と全文。
@@ -1653,8 +1829,8 @@ class H(BaseHTTPRequestHandler):
                     lab = autosend.source_for_company(str(MSG), n, u, ind)[0].replace("指定: ", "")
                     if lab in want:
                         recipients.append(n)
-            except autosend.message_adoption.AdoptionError as e:
-                note = str(e)
+            except autosend.message_adoption.AdoptionError:
+                note = known_error("render_sample_recipients")["error"]  # 原文はサポート記録へ(破壊検証3 致命傷2)
             sample_note = note
         probs = message_problems({industry or "標準": template})
         if any(w["match"] == "{資料URL}" for w in left):
@@ -1759,7 +1935,7 @@ class H(BaseHTTPRequestHandler):
                 JOB["fresh"] = False
             other = {"name": o["name"], "last": ([l for l in o["lines"] if l.strip()] or [""])[-1][:120]} if o is not None and o["running"] else None
             return self.send(200, {"lines": v["lines"][-300:], "running": v["running"], "name": v["name"], "code": v.get("code"), "files": outputs(), "version": VERSION, "build": BUILD, "here": str(HERE), "started": v.get("started", ""), "port": PORT,
-                                   "other": other})
+                                   "other": other, "stop_reason": v.get("stop_reason", "")})
         if u.path == "/api/shot":
             # 1社目の確認で見せる、押す直前に保存した画面。出力/送信画面 の中の .png だけを返す(ほかの場所は読ませない)
             name = q.get("file") or q.get("name", "")
@@ -1819,8 +1995,8 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, {"companies": [], "total": 0, "note": "送信元の資料URLに {識別} が入っていないため、会社ごとの開封は数えていません"})
             try:
                 return self.send(200, proposal_links.report(tpl, send_log=LOG))
-            except RuntimeError as e:
-                return self.send(502, {"error": str(e)})
+            except RuntimeError:
+                return self.send(502, known_error("opens"))  # 原文(通信の例外の型名を含む)はサポート記録へ(破壊検証3 致命傷2)
         if u.path == "/api/manual_kit":
             return self.manual_kit(q, ng_store)
         if u.path == "/api/manual_draft":  # 「フォームで送る(自動挿入)」の前に、その会社に届く件名と本文(フォームに入る文)を見せる。通信しない
@@ -1832,17 +2008,12 @@ class H(BaseHTTPRequestHandler):
                 return self.send(400, problem_error(probs))
             import autosend
             name = str(q.get("name", "")).strip()
-            use, uerr = use_industry_arg(q.get("use"))  # 画面③「今回使う文面」(この表示だけ。何も保存しない)
-            if uerr:
-                return self.send(400, {"error": uerr})
-            row, bodies, problem = autosend.manual_precheck(str(p), str(SENDER), str(MSG), name, use)
+            row, bodies, problem = autosend.manual_precheck(str(p), str(SENDER), str(MSG), name)
             if problem:
                 return self.send(400, {"error": f"理由: {problem[0]}。直し方: {problem[1]}"})
             sender = read_sender()
-            label = autosend.source_for_company(str(MSG), row[0], row[1], row[2], use)[0]
-            return self.send(200, {"company": name, "subject": autosend.subject_for(row[0], row[1], sender, autosend.subject_industry(MSG, row[2], row[0], row[1], use)), "message": bodies[0], "use_industry": use, "use_overridden_by_assignment": use is not None and autosend.message_adoption.case_for(row[0], row[1]) is not None,
-                                   "use_note": ("「今回使う文面」の選択は使われていません。この会社には、会社ごとの文面の指定(または採用済みの文面)があり、そちらが先に使われます" if use is not None and autosend.message_adoption.case_for(row[0], row[1]) is not None
-                                                else "「今回使う文面」の選択は使われていません。業種ごとの文面がオフのため、基本の文面が入ります" if use is not None and (MSG / autosend.EXPAND_OFF).exists() else ""),
+            label = autosend.source_for_company(str(MSG), row[0], row[1], row[2])[0]
+            return self.send(200, {"company": name, "subject": autosend.subject_for(row[0], row[1], sender, autosend.subject_industry(MSG, row[2], row[0], row[1])), "message": bodies[0],
                                    "template_label": label, "template_note": ("業種ごとの文面がオフのため、指定は使われず基本の文面が入ります" if (MSG / autosend.EXPAND_OFF).exists() and autosend.message_adoption.assigned_industry(row[0], row[1]) is not None else ""), "assigned": autosend.message_adoption.assigned_industry(row[0], row[1]), "company_industry": row[2],
                                    "options": ["default"] + list(message_info()["industries"]) + [o["name"] for o in message_info()["orphans"]],
                                    "adoption_diff": autosend.message_adoption.difference_text(autosend.message_adoption.changed_parts(row[0], row[1], bodies[0], sender))})
@@ -1969,6 +2140,11 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, busy_reply(d))
         if self.path == "/api/stop":
             # 手で止める。「探す」だけ止める(印のファイルを置くと、探す処理が次の区切り(検索1回・会社1社)で止まり、調べ終えた分でリストを作る)。送信は止めない
+            # 自動挿入(手動入力)も止める(波2 C): 画面が what=手動入力 を送ったとき、または「探す」が動いておらず自動挿入だけが動いているとき。印を見た autosend がブラウザを閉じて終わる(何も送らない)
+            if JOB["running"] and JOB["name"] == "手動入力" and (d.get("what") == "手動入力" or not SJOB["running"]):
+                OUT.mkdir(exist_ok=True)
+                manual_stop_flag().write_text(time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
+                return self.send(200, {"stopped": True, "note": "止める指示を出しました。開いているフォームの画面を数秒で閉じて終わります。ツールは送信ボタンを押していません。ご自身で送った場合は、その送信結果を確認してください"})
             if not SJOB["running"]:
                 return self.send(200, {"stopped": False, "note": "止める「探す」処理は動いていません"})
             OUT.mkdir(exist_ok=True)
@@ -1998,12 +2174,19 @@ class H(BaseHTTPRequestHandler):
             try:
                 try:
                     r = updater.apply()
-                except ValueError as e:
-                    updater.write_status("失敗", f"更新できませんでした（前の版のまま）: {e}")
-                    return self.send(200, {"updated": [], "error": str(e)})
-                except Exception as e:
-                    updater.write_status("失敗", f"更新に失敗しました（{type(e).__name__}: {e}）。前の版のまま")
-                    return self.send(500, {"updated": [], "error": f"更新に失敗しました（{type(e).__name__}: {e}）。前の版のまま使えます"})
+                except ValueError:  # 原因が分かっている失敗(取得・検査・作業中)。一覧の決まった日本語と受付番号だけ(破壊検証3 致命傷2)
+                    _k = known_error("update")
+                    _tail = update_failure_tail(_k["support_id"], sys.exc_info()[1])
+                    updater.write_status("失敗", f"更新できませんでした（{_tail}）: {_k['error']}")
+                    return self.send(200, {"updated": [], "error": f"{_k['error']}。{_tail}", "support_id": _k["support_id"]})
+                except Exception:  # 置き換え中の失敗(OneDrive・ウイルス対策ソフトがファイルを掴んだ等)。原文はサポート記録へ
+                    _sid = support_error("update")["support_id"]
+                    _tail = update_failure_tail(_sid, sys.exc_info()[1])
+                    updater.write_status("失敗", f"更新に失敗しました（受付番号 {_sid}）。{_tail}")
+                    return self.send(500, {"updated": [], "error": f"更新に失敗しました（受付番号 {_sid}）。{_tail}。"
+                                                                   "ほかのプログラム(OneDrive・ウイルス対策ソフトなど)がファイルを開いていることが多い原因です。"
+                                                                   "少し待ってからもう一度押します。直らないときは、受付番号を担当者に送ってください",
+                                           "support_id": _sid})
                 UPDATE_CACHE.clear()
                 if not r["updated"] and updater.build() == BUILD:
                     return self.send(200, {"updated": [], "restart": False})
@@ -2088,16 +2271,21 @@ class H(BaseHTTPRequestHandler):
             if proposal_links.MARK in url and new_key is None:
                 try:
                     proposal_links._secret()
-                except RuntimeError as e:  # 鍵が無いまま保存すると、プレビューと送信で初めて止まる
-                    return self.send(400, {"error": str(e)})
+                except RuntimeError:  # 鍵が無いまま保存すると、プレビューと送信で初めて止まる
+                    return self.send(400, known_error("sender_save_key"))  # 一覧の決まった日本語と受付番号(破壊検証3 致命傷2)
             if new_key is not None:
+                kf = proposal_links.KEY_FILE
+                if kf.is_file() and kf.read_text(encoding="utf-8", errors="replace").strip() != str(new_key).strip():
+                    settings_guard.backup(kf.parent, [kf])  # 置き換える前の計測キーを控える(送信元と同じ 出力/設定の控え。波2 B)
                 proposal_links.save_key(new_key)
-            old.update({k: str(v) for k, v in d.items()})  # 画面に出ない項目を消さず、決めた項目だけ文字で受ける
-            new_text = json.dumps(old, ensure_ascii=False, indent=1)
-            kept = None
-            if SENDER.exists() and SENDER.read_text(encoding="utf-8-sig").strip() != new_text.strip():
-                kept = settings_guard.backup(SENDER.parent, [SENDER])  # 変わる前の送信元を控える(上書きしても戻せる)
-            SENDER.write_text(new_text, encoding="utf-8")
+            with filelock.locked(SENDER):  # 画面とコマンドが同時に保存しても、互いの項目を消さない。読み直してから決めた項目だけ重ねる(波2 A)
+                old = json.loads(SENDER.read_text(encoding="utf-8-sig")) if SENDER.exists() else {}
+                old.update({k: str(v) for k, v in d.items()})  # 画面に出ない項目を消さず、決めた項目だけ文字で受ける
+                new_text = json.dumps(old, ensure_ascii=False, indent=1)
+                kept = None
+                if SENDER.exists() and SENDER.read_text(encoding="utf-8-sig").strip() != new_text.strip():
+                    kept = settings_guard.backup(SENDER.parent, [SENDER])  # 変わる前の送信元を控える(上書きしても戻せる)
+                filelock.atomic_write(SENDER, new_text, encoding="utf-8")  # 一時ファイルに書いてから置き換える(書き込みの途中で落ちても半分の sender.json にならない)
             # 保存した結果と、まだ送れない理由を同じ応答で返す(「保存しました」と「足りません」を別々に出さない。S2)
             files = outputs()
             try:
@@ -2158,6 +2346,9 @@ class H(BaseHTTPRequestHandler):
                 HUMAN["last_action"] = time.monotonic()
             if not _ok:
                 APPROVED["key"] = None
+                if approval.LAST.get("reason") == "timeout":  # 確認の窓が上限まで押されなかった(波2 C)。承認しなかったものとして扱う
+                    return self.send(200, {"ok": False, "declined": True, "timeout": True,
+                                           "message": f"送りませんでした(確認の窓が{max(1, approval.ASK_TIMEOUT_S // 60)}分のあいだ押されなかったため、承認しなかったものとして閉じました)。送るときは、もう一度送るボタンを押します"})
                 return self.send(200, {"ok": False, "declined": True, "message": "送りませんでした(確認で「いいえ」を押したため)"})  # E-16
             if PREVIEW["key"] != key_now:  # ダイアログの間に確認が変わった
                 APPROVED["key"] = None
@@ -2203,8 +2394,8 @@ class H(BaseHTTPRequestHandler):
             try:
                 sender = json.loads(SENDER.read_text(encoding="utf-8-sig")) if SENDER.exists() else {}
                 return self.send(200, sample_from_material.make_sample(str(d.get("material", ""))[:20000], sender))
-            except ValueError as e:
-                return self.send(400, {"error": str(e)})
+            except ValueError:
+                return self.send(400, known_error("sample"))  # 破壊検証3 致命傷2
         if self.path == "/api/message/assign":  # 会社ごとの文面の指定(採用記録の assigned_only)。文面の選択だけで、送信の許可ではない。industry が空なら指定を外す
             import autosend
             p, err = list_or_error(d.get("file", ""))
@@ -2226,8 +2417,8 @@ class H(BaseHTTPRequestHandler):
             try:
                 contacts = [url, rows[0].get("メールアドレス", ""), autosend._mail_of(rows[0])]  # フォームでもメールでも、この会社として指定が見つかるように、行の連絡先を全部記録する
                 autosend.message_adoption.assign(name, url, None if ind in (None, "") else ("" if ind == "default" else ind), contacts)
-            except autosend.message_adoption.AdoptionError as e:
-                return self.send(409, {"error": str(e)})
+            except autosend.message_adoption.AdoptionError:
+                return self.send(409, known_error("message_assign"))  # 破壊検証3 致命傷2
             label = autosend.source_for_company(str(MSG), name, url, rows[0].get("業種", ""))[0]
             return self.send(200, {"ok": True, "template_label": label})
         if self.path == "/api/message":
@@ -2253,7 +2444,7 @@ class H(BaseHTTPRequestHandler):
             kept = settings_guard.backup(MSG.parent, [MSG / f"{k}.txt" for k, v in saved.items()
                                                        if (MSG / f"{k}.txt").exists() and settings_guard._norm((MSG / f"{k}.txt").read_text(encoding="utf-8-sig")) != settings_guard._norm(v)])  # 変わる文面だけ、変わる前を控える
             for k, v in saved.items():
-                (MSG / f"{k}.txt").write_text(v, encoding="utf-8")
+                filelock.atomic_write(MSG / f"{k}.txt", v, encoding="utf-8")  # 書き込みの途中で落ちても、半分の文面にならない(波2 A)
             # 見本の文字が残っていても保存はできる(途中で保存したい人のため)。送る内容を出すところで止まる。ここでは何が残っているかを返す
             probs = message_problems({("標準" if k == "default" else k): v for k, v in saved.items()})
             return self.send(200, {"ok": True, "problems": probs, "parts": {k: split_message(v) for k, v in saved.items()}, "skipped": skipped, "backup": str(kept) if kept else None})
@@ -2383,13 +2574,10 @@ class H(BaseHTTPRequestHandler):
             if probs:
                 return self.send(400, problem_error(probs))
             import autosend
-            use, uerr = use_industry_arg(d.get("use_industry"))  # 画面③「今回使う文面」。この1回のジョブにだけ渡し、何も保存しない
-            if uerr:
-                return self.send(400, {"error": uerr})
-            _row, _bodies, problem = autosend.manual_precheck(str(p), str(SENDER), str(MSG), name, use)  # 始める前に、書き出し空欄・フォームURLなしを確かめる(ジョブを走らせて終了コードだけ見せない)
+            _row, _bodies, problem = autosend.manual_precheck(str(p), str(SENDER), str(MSG), name)  # 始める前に、書き出し空欄・フォームURLなしを確かめる(ジョブを走らせて終了コードだけ見せない)
             if problem:
                 return self.send(400, {"error": f"「{name}」の「フォームで送る(自動挿入)」は始められません。理由: {problem[0]}。直し方: {problem[1]}", "field": LIST_FIELD, "fix": "list"})
-            return self.send(200, {"started": run_job("手動入力", ["autosend.py", str(p), "--sender", str(SENDER), "--message", str(MSG), "--manual-company", name] + (["--use-industry", use or "default"] if use is not None else []))})
+            return self.send(200, {"started": run_job("手動入力", ["autosend.py", str(p), "--sender", str(SENDER), "--message", str(MSG), "--manual-company", name])})
         if self.path == "/api/send/stop":  # 送信の途中で止める。今の1社は終え、次の会社に進まない。残りは未送信のまま残り、次の「送る内容を出す」に出る(承認・全文確認・確認番号は変えない)
             if not (JOB["running"] and JOB["name"] == "本番送信"):
                 return self.send(200, {"stopped": False, "note": "止める送信は動いていません"})
@@ -2450,7 +2638,8 @@ def mail_status():
     except mail_channel.MailError as e:
         names = {"host": "サーバー", "user": "ユーザー名", "password": "パスワード"}
         missing = [names[k] for k in ("host", "user", "password") if not str(raw.get(k) or "").strip()]
-        return dict(out, configured=False, missing=missing, problem=str(e), **shown)
+        _why = known_reason(e)  # 一覧の失敗(未設定・欄が空など)は「設定の状態」なので、開くたびに記録を増やさない
+        return dict(out, configured=False, missing=missing, problem=_why or known_error("mail_status")["error"], **shown)  # 一覧に無い失敗は受付番号つき・原文はサポート記録へ(Codex 弱点)
 
 
 def mail_annotate(rows):
@@ -2543,13 +2732,18 @@ def mail_post(handler, d, mx, ng_store):
         if path == "/api/choice/rule":
             if not isinstance(d.get("enabled"), bool):
                 return handler.send(400, {"error": "有効か無効か(enabled: true/false)を入れてください"})
-            channel_choice.set_rule(d["enabled"])
+            try:
+                channel_choice.set_rule(d["enabled"])
+            except channel_choice.ChoiceSaveError:  # 置き場を1つにそろえられない。旧へ書かず保存の失敗として返す(波2 E)
+                return handler.send(503, dict(known_error("channel_choice"), saved=False))  # 一覧の決まった日本語と受付番号(破壊検証3 致命傷2)
             return handler.send(200, {"ok": True, "rule": channel_choice.rule_enabled()})
         name, hp = str(d.get("name") or "").strip(), str(d.get("hp") or "").strip()
         if not name:
             return handler.send(400, {"error": "会社名を入れてください"})
         try:
             channel_choice.set_choice(channel_choice.company_key(name, hp), str(d.get("channel") or ""), name)
+        except channel_choice.ChoiceSaveError:  # 置き場を1つにそろえられない。旧へ書かず保存の失敗として返す(波2 E)
+            return handler.send(503, dict(known_error("channel_choice"), saved=False))  # 一覧の決まった日本語と受付番号(破壊検証3 致命傷2)
         except ValueError:
             return handler.send(400, {"error": "送り方は「フォーム」か「メール」のどちらかです"})
         return handler.send(200, {"ok": True})
@@ -2562,16 +2756,16 @@ def mail_post(handler, d, mx, ng_store):
             return handler.send(409, {"error": "いま送っている最中は、メール送信の設定を変えられません。送り終わってから変えます"})
         try:
             _mail_save_settings(d)
-        except mail_channel.MailError as e:
-            return handler.send(400, {"error": str(e), "field": "mail_settings"})
+        except mail_channel.MailError:
+            return handler.send(400, dict(known_error("mail_settings"), field="mail_settings"))  # 破壊検証3 致命傷2
         return handler.send(200, dict(mail_status(), ok=True))
     if path == "/api/mail/test":
         try:
             settings = mail_channel.load_settings()
-        except mail_channel.MailError as e:
-            return handler.send(400, {"error": str(e), "field": "mail_settings"})
+        except mail_channel.MailError:
+            return handler.send(400, dict(known_error("mail_test"), field="mail_settings"))  # 破壊検証3 致命傷2
         ok, memo = mail_channel.check_login(settings)
-        return handler.send(200, {"ok": ok, "message": "接続と認証ができました(メールは送っていません)" if ok else memo})
+        return handler.send(200, {"ok": ok, "message": "接続と認証ができました(メールは送っていません)" if ok else mail_login_reason(memo)})
     # 以降は確認(preview)と本番(send)。フォームの send_api と同じ止め方・同じ承認の印(PREVIEW/APPROVED)を使う
     real = path == "/api/mail/send"
     p, err = list_or_error(d.get("file", ""))
@@ -2688,8 +2882,12 @@ def auto_update_once(why):
             return False
         try:
             res = updater.apply()
-        except Exception as e:
-            updater.write_status("失敗", f"自動更新に失敗しました（{type(e).__name__}: {e}）。前の版のまま動いています")
+        except Exception:
+            _k = known_error("auto_update")  # 原文はサポート記録へ。状態表示には一覧の決まった日本語か受付番号だけ(破壊検証3 致命傷2)
+            _why = known_reason(sys.exc_info()[1])
+            _tail = update_failure_tail(_k["support_id"], sys.exc_info()[1])
+            updater.write_status("失敗", f"自動更新に失敗しました（{_why + '・' if _why else ''}受付番号 {_k['support_id']}）。"
+                                         + ("前の版のまま動いています" if _tail == "前の版のまま使えます" else _tail))
             return False
         UPDATE_CACHE.clear()
         if not res["updated"] and updater.build() == BUILD:
@@ -2755,9 +2953,10 @@ if __name__ == "__main__":
                 _proc = subprocess.Popen([_pythonw()] + _args, cwd=_target, env=dict(os.environ, PYTHONIOENCODING="utf-8"),
                                          stdin=subprocess.DEVNULL, stdout=_ef, stderr=_ef, creationflags=NO_WINDOW,
                                          start_new_session=(os.name != "nt"))
-        except OSError as e:
+        except OSError:
             _proc = None
-            launch_notice(f"導入先のコピー({_target})を起動できませんでした({type(e).__name__})。このフォルダ({HERE})で起動します", show=not NO_BROWSER)
+            _sid = support_error("launch_target")["support_id"]  # 原文はサポート記録へ(破壊検証3 致命傷2)
+            launch_notice(f"導入先のコピー({_target})を起動できませんでした(受付番号 {_sid})。このフォルダ({HERE})で起動します", show=not NO_BROWSER)
         if _proc is not None:
             # 振り向けた先が、画面の番号で実際に答えるまで待つ(R6: ファイルがそろっていても、起動すると落ちる壊れ方がある)
             _wait = float(os.environ.get("FORMLIST_REDIRECT_WAIT") or 20)

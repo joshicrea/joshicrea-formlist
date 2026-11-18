@@ -6,7 +6,7 @@
   ・同じ会社: 送ってから14日は、同じ会社(会社名・フォームのドメイン)へ送らない。14日を過ぎても、2回送った会社にはもう送らない
 数値の出どころ: 14日と2回は 09 の送信ルール2「同じ企業へは1回だけ。返信が無ければ14日後に別の窓口へ1回まで」。
           9時〜18時は 09 の送信ルール6「平日の日中」をこの時間と読んだもの。
-守備範囲: 祝日は見ていない(平日の扱いになる)。会社名の表記違い(株式会社の有無以外)と、別ドメインの同じ会社は同じ会社と分からない。
+守備範囲: 祝日は見ていない(平日の扱いになる)。会社名の表記違い(株式会社等の有無・全角半角・大文字小文字・空白以外。正本は state.company_norm)と、別ドメインの同じ会社は同じ会社と分からない。
           数えるのは このパソコンの送信ログと送信状態のDBだけ(別のパソコンで送った分は数えない)。
 """
 import csv
@@ -196,8 +196,102 @@ def pressed_today(log, now=None):
     return len(_pressed_pairs(log, now))
 
 
+ATTEMPT = "送信試行"  # 押す直前に書く行。押す前に止まった実行でも残る
+_ATTEMPT_ID = re.compile(r"\[試行 ([0-9a-f]{8})\]")
+_NOT_SENT = re.compile(r"^\[試行 ([0-9a-f]{8}) 未送信\]")
+
+
+def attempt_memo(subject, aid):
+    """メールの「送信試行」の行のメモ。件名のあとに、この試行の印を付ける"""
+    return f"{subject} [試行 {aid}]"
+
+
+def not_sent_memo(memo, aid):
+    """送信関数が「送っていない」と返した失敗の行のメモ。送信試行と同じ印を頭に付ける(この行があるときだけ、その試行を数えない)"""
+    return f"[試行 {aid} 未送信] {memo}"
+_SEND_DBS = []  # 送信状態の正本(SQLite)のうち、既定の2つ(state.DB と画面版の _ng)以外に使われたもの。register_send_db で足す
+
+
+def register_send_db(path):
+    """送信状態のDB(sends 表)を、「送信試行」が押されたかの照合先に足す(autosend.set_send_gate・app.init_ng_store が呼ぶ)"""
+    if path and str(path) not in {str(p) for p in _SEND_DBS}:
+        _SEND_DBS.append(path)
+
+
+def _send_dbs(dbs=None):
+    if dbs is not None:
+        return list(dbs)
+    base = state.DB
+    return list(dict.fromkeys([str(base), str(base.with_name(base.stem + "_ng" + base.suffix))] + [str(p) for p in _SEND_DBS]))
+
+
+def _form_not_clicked(name, url, dbs=None):
+    """フォームの「送信試行」の行が、押す前に止まったと確かに言えるか。
+    言えるのは、どれかのDBにその会社名＋URLの行が実際にあり、見つかった行が全て「準備」のときだけ(押す直前に「クリック開始」へ変わるため)。
+    行が無い(画面の起動で空のDBができる・DBの作り直し・別のパソコン・別のDB)・DBが読めない・準備以外の行がある → False(押したかもしれない側に倒す)。
+    陽性対照: 押したあとDBを消して作り直した(行が無い) → False。誤爆の対照: 準備の行だけ → True"""
+    import sqlite3
+    from pathlib import Path
+    seen_prepared = False
+    for p in [p for p in _send_dbs(dbs) if Path(p).exists()]:
+        try:
+            c = sqlite3.connect(str(p), timeout=5)
+            try:
+                if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sends'").fetchone():
+                    continue
+                rows = state.matching_rows(c, [url], name)
+            finally:
+                c.close()
+        except sqlite3.Error:
+            return False
+        if any(row[0] != state.PREPARED for row in rows):
+            return False
+        seen_prepared = seen_prepared or bool(rows)
+    return seen_prepared
+
+
+def _mail_attempt_key(r):
+    u = (r.get("フォームURL") or "").strip()
+    if not u.lower().startswith("mailto:"):
+        return None
+    return company_key(r.get("企業名")), ng_list.norm_email(u[len("mailto:"):])
+
+
+def pressed_rows(rows, dbs=None, want=None):
+    """送信ログの行(rows: 並びのまま)のうち、押した(か、押したかもしれない)行。数え方の正本(company_refusal・autosend の送信済みの判定が使う)。
+    結果が PRESSED の行を数える。ただし「送信試行」は、押していないと確かに言えるときだけ外す:
+      メール: 送信試行の行のメモに試行の印 [試行 xxxxxxxx] があり、同じ会社名＋アドレスで、同じ印の「要手動」の行
+              (not_sent_memo: 送信関数が送っていないと返した失敗だけが書く)があるとき。並び(次の行か)では決めない。
+              関門・組み立ての失敗・別の実行が書いた要手動には印が無いので外さない。印の無い古い送信試行も外さない(数える側)。
+      フォーム: 送信状態のDBに、その会社名＋URLの行があり、全て「準備」(_form_not_clicked)。行が無い・DBが無い・読めなければ数える。
+    want(行) を渡すと、当たる行だけDBを見る(遅くしないため)。
+    陽性対照: 送信試行→(落ちた)でDBが「クリック開始」→数える。DBを作り直して行が無い→数える。メールの送信試行(印あり)→別の実行の関門の要手動→数える。
+    誤爆の対照: DBが「準備」だけの送信試行→数えない。メールの送信試行(印あり)→同じ印の要手動→数えない。
+    原理的に取りこぼす型(数えない側): 準備の行が残ったまま、別のDBで押して落ちた送信試行(別のDBは登録したものしか見ない)"""
+    failed = set()  # 送っていないと確かな失敗の行が持つ (会社名, アドレス, 試行の印)
+    for r in rows:
+        k = _mail_attempt_key(r)
+        m = _NOT_SENT.match(r.get("メモ") or "")
+        if k and m and r.get("結果") == "要手動":
+            failed.add(k + (m.group(1),))
+    out = []
+    for i, r in enumerate(rows):
+        if r.get("結果") not in PRESSED or (want is not None and not want(r)):
+            continue
+        if r.get("結果") == ATTEMPT:
+            if _mail_attempt_key(r):
+                m = _ATTEMPT_ID.search(r.get("メモ") or "")
+                if m and _mail_attempt_key(r) + (m.group(1),) in failed:
+                    continue
+            elif (r.get("フォームURL") or "").startswith("http") and _form_not_clicked(r.get("企業名") or "", r.get("フォームURL"), dbs):
+                continue
+        out.append(r)
+    return out
+
+
 def company_key(name):
-    return re.sub(r"\s|株式会社|有限会社|合同会社|\(株\)|（株）", "", name or "")
+    """会社名の照合用の形。正本は state.company_norm(送信状態のDBの複合鍵と同じ形。全角半角・大文字小文字・空白・株式会社等の違いは同じ会社)"""
+    return state.company_norm(name)
 
 
 def form_domain(url):
@@ -205,23 +299,25 @@ def form_domain(url):
     return "" if not h or ng_list._shared(h) else h  # 共有サービス(Googleフォーム等)のドメインは別会社と同じになるので使わない
 
 
-def company_refusal(log, name, url, hp="", now=None):
-    """同じ会社へ送りすぎないための理由。送れるなら None"""
+def company_refusal(log, name, url, hp="", now=None, dbs=None):
+    """同じ会社へ送りすぎないための理由。送れるなら None。押した記録の数え方は pressed_rows(押す前に止まった「送信試行」は数えない)。
+    dbs は送信状態のDBの一覧(試験用。None なら既定と登録済みのもの)"""
     now = now or dt.datetime.now()
     me = {company_key(name)} - {""}
     doms = {form_domain(url), form_domain(hp)} - {""}
     forms = set(state.keys_of([url]))  # 同じフォームURL(別の会社名で押した記録も数える。2026-11-16 0310 独立レビュー・決定 D-20261116-013。共有サービスのフォームはドメインでは当たらないため)
     hits = []
     unreadable = False
-    for r in _rows(log):
-        if r.get("結果") not in PRESSED:
-            continue
-        if company_key(r.get("企業名")) in me or form_domain(r.get("フォームURL")) in doms or (forms and forms & set(state.keys_of([r.get("フォームURL") or ""]))):
-            t = _when(r)
-            if t:
-                hits.append(t)
-            else:
-                unreadable = True
+
+    def same(r):
+        return company_key(r.get("企業名")) in me or form_domain(r.get("フォームURL")) in doms or bool(forms and forms & set(state.keys_of([r.get("フォームURL") or ""])))
+
+    for r in pressed_rows(_rows(log), dbs, want=same):
+        t = _when(r)
+        if t:
+            hits.append(t)
+        else:
+            unreadable = True
     if unreadable:  # 押した記録があるのに日付が読めない。間隔を確かめられないので、送らない側に倒す
         return "この会社に送った記録がありますが、送信の記録の日付が読めないため、間隔を確かめられません。この会社には送りません(送信の記録の「日時」を 2026-10-27 10:00 の形に直すと確かめられます)"
     if not hits:

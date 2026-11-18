@@ -22,21 +22,41 @@ PORT_ENV = "FORMLIST_APP_PORT"  # 子プロセスが鍵を問い合わせる先(
 UI_TOKEN_ENV = "FORMLIST_UI_TOKEN"  # 画面の操作用の合言葉。問い合わせも画面と同じ関門を通る
 TICKET_SECONDS = 600
 ASKER = None  # テストが差し替える。(題, 本文) -> bool
+ASK_TIMEOUT_S = 600  # 確認の窓を待つ上限(10分)。押されないまま過ぎたら「承認しなかった」として閉じる(波2 C)
+MB_TIMEDOUT = 32000  # MessageBoxTimeoutW が上限で閉じたときの戻り値
+LAST = {"reason": ""}  # 直近の ask_human が False になった理由。"timeout"(上限で閉じた) / "" (いいえ・閉じた・出せない)
+
+
+def _message_box(body, title, flags, timeout_ms):
+    """Windows の確認の窓(上限つき)。MessageBoxTimeoutW は user32 にある上限つきの窓(Windows XP 以降)。戻り値は押したボタンか MB_TIMEDOUT"""
+    import ctypes
+    f = ctypes.windll.user32.MessageBoxTimeoutW
+    f.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_ushort, ctypes.c_uint]
+    return f(None, body, title, flags, 0, timeout_ms)
 
 
 def ask_human(title, body):
-    """はい=True。出せない環境・閉じた・いいえ は False(安全側)"""
+    """はい=True。出せない環境・閉じた・いいえ・上限(ASK_TIMEOUT_S)を過ぎた は False(安全側)。上限で閉じたときは LAST["reason"]="timeout" """
+    LAST["reason"] = ""
     if ASKER is not None:
         return bool(ASKER(title, body))
     try:
         if sys.platform == "win32":
-            import ctypes
             MB_YESNO, MB_ICONQUESTION, MB_DEFBUTTON2, MB_TOPMOST, MB_SETFOREGROUND = 0x4, 0x20, 0x100, 0x40000, 0x10000
-            r = ctypes.windll.user32.MessageBoxW(None, body, title, MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_TOPMOST | MB_SETFOREGROUND)
+            r = _message_box(body, title, MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_TOPMOST | MB_SETFOREGROUND, int(ASK_TIMEOUT_S * 1000))
+            if r == MB_TIMEDOUT:
+                LAST["reason"] = "timeout"
             return r == 6  # IDYES
         if sys.platform == "darwin":
-            script = 'display dialog %s with title %s buttons {"やめる","送ることを承認する"} default button "やめる"' % (json.dumps(body, ensure_ascii=False), json.dumps(title, ensure_ascii=False))
-            r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=600)
+            script = 'display dialog %s with title %s buttons {"やめる","送ることを承認する"} default button "やめる" giving up after %d' % (json.dumps(body, ensure_ascii=False), json.dumps(title, ensure_ascii=False), int(ASK_TIMEOUT_S))
+            try:
+                r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=ASK_TIMEOUT_S + 30)
+            except subprocess.TimeoutExpired:
+                LAST["reason"] = "timeout"
+                return False
+            if "gave up:true" in r.stdout:
+                LAST["reason"] = "timeout"
+                return False
             return r.returncode == 0 and "送ることを承認する" in r.stdout
     except Exception:
         return False

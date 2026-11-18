@@ -7,6 +7,7 @@ atomic_write(path, text): 同じフォルダの一時ファイルに書いてか
 """
 import contextlib
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -52,7 +53,7 @@ def locked(path, timeout=30.0):
 
 def atomic_write(path, text, encoding="utf-8-sig"):
     p = Path(path)
-    tmp = p.with_name(p.name + f".tmp{os.getpid()}")
+    tmp = p.with_name(p.name + f".tmp{os.getpid()}_{threading.get_ident()}")  # 画面の同時の要求(別スレッド)が同じ一時ファイルを交互に書かない
     try:
         tmp.write_text(text, encoding=encoding)
         for i in range(20):  # ウイルス対策ソフト・同期ソフトが一瞬つかんでいる間は、置き換えが PermissionError になる

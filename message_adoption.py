@@ -39,8 +39,9 @@ def norm_contact(value):
     return v.rstrip('/')
 
 def norm_name(value):
-    """会社名の照合用の形(前後の空白・全角空白を除く)。CSVの値と画面から来た値を、同じ形で比べる"""
-    return unicodedata.normalize('NFKC', str(value or '')).replace('\u3000', ' ').strip()
+    """会社名の照合用の形(前後の空白・全角空白を除く)。CSVの値と画面から来た値を、同じ形で比べる。
+    文面の指定・採用は「どの会社を選んだか」の照合なので、法人格や表記ゆれはそろえない(state.company_norm は止める側の判定にだけ使う。別会社を同じ会社にして選ばない)"""
+    return unicodedata.normalize('NFKC', str(value or '')).replace('　', ' ').strip()
 
 def _names_of(case):
     return {norm_name(case.get('source_name')), norm_name(case.get('display_name'))}
@@ -105,13 +106,11 @@ def effective_sender(name, url, sender, industry=None):
             base['件名'] = subject
     return dict(base, **case['sender_overrides']) if case else base
 
-def resolve_row(row, message_path, sender, pick_message, use_industry=None):
-    """use_industry=画面③「今回使う文面」の業種(None は選ばない)。優先順: 会社ごとの指定・採用済み > ③の今回の選択 > 会社の業種欄。
-    ③は保存せず、呼び出しごとの引数だけ。会社ごとの指定がある会社には効かない"""
+def resolve_row(row, message_path, sender, pick_message):
     name, url, industry, opener, hp = row
     case = case_for(name, url)
     if not case:
-        return row, pick_message(message_path, industry if use_industry is None else use_industry), dict(sender)
+        return row, pick_message(message_path, industry), dict(sender)
     if case.get('assigned_only'):  # 指定した業種の文面(見本と同じ選び方)。書き出し・会社名は行のまま
         return row, pick_message(message_path, case.get('template_industry') or ''), effective_sender(name, url, sender)
     filename = case['template_name']
