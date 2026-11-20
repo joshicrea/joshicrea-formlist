@@ -9,7 +9,7 @@
   試験・運用者は環境変数 FORMLIST_MUSE_URL で指定できる。
 サーバーとの取り決め(S1 で確定・ガイア相談45 2026-11-16。変わったらここと poll_once を直す):
   POST <URL>/poll.php   見出し X-License-Key: <許可キー>、本文 {"install_id","version"}。
-     200 {"calls":[{"id","method","path","body","expires_at"}], "muse_linked": true/false} / 204 呼び出しなし / 401・403 キーの拒否
+     200 {"calls":[{"id","method","path","body","expires_at"}], "muse_linked": true/false, "muse_linked_at": ISO8601文字列かnull(任意。古い応答には無い)} / 204 呼び出しなし / 401・403 キーの拒否
   POST <URL>/result.php 見出し X-License-Key、本文 {"install_id","id","status","code","body"}
 同じ操作の二度実行の防止(弱点4・波3): Muse が時間切れのあとに呼び直すと、サーバーは新しい id を付けるので、id の照合では止まらない。
   そこで、やり直すと効果が重なる操作(REPEAT_GUARDED: 本番送信・会社探し・手で送る・手で送った記録・返信の記録・不具合の提出)は、
@@ -99,16 +99,32 @@ MESSAGES = {
     "off": "",
     "no_server": "Muse との接続先がまだ用意されていません。画面の操作はこのまま使えます",
     "bad_url": "Muse との接続先の設定が正しくありません。担当者にご連絡ください",
-    "no_key": "許可キーが入っていないので、Muse とつなげません。担当者にご連絡ください",
+    "no_key": "許可キーが入っていないので、Muse とつなげません。画面の一番上の欄に、担当者から届いた許可キーを入れてください",
     "connecting": "つなぎ直しています",
     "connected": "Muse とつながっています",
-    "not_linked": "Muse の画面での接続がまだです。Muse の画面で接続してください",
+    "not_linked": "ツールの準備はできています。残っているのは Muse 側の接続だけです",
     "offline": "Muse につながっていません。インターネットの接続を確かめてください。このまま画面の操作では使えます",
     "denied": "キーが合っていないようです。担当者にご連絡ください",
 }
 
+# 未接続(not_linked)のとき画面に番号つきで出す手順(正本はここ。画面はそのまま出す)
+NOT_LINKED_STEPS = (
+    "自分の Muse を開く",
+    "担当者から届いた、Muse 接続用のあなた専用のリンクを開く(まだ届いていない場合は、担当者にご連絡ください)",
+    "許可キーを入れる。キーは、このツールに入れた許可キーと同じものです",
+)
+NOT_LINKED_ETA = "終わると、この表示は自動で「Muse とつながっています」に変わります(最大1分ほど)"
+NOT_LINKED_LONG = 600  # 未接続がこの秒数続いたら、キーの取り違えを疑う案内を足す
+NOT_LINKED_LONG_NOTE = ("まだ変わらない場合は、Muse で入れたキーが合っていない可能性があります。Muse 側で入れたキーが、"
+                        "このツールに入れた許可キーと合っているか確かめてください")
+LINKED_MIN = 1767193200  # 2026-01-01 00:00 +09:00。サーバーが muse_linked_at を返し始める公開日より前の固定日。これより前の時刻(v=1 のような標本・1970年前後の値)は日付に出さない
+LINKED_STALE = 7 * 86400 # 最後に Muse から使われてからこの秒数を過ぎたら、古いと添える
+LINKED_STALE_NOTE = "長く使われていません。Muse 側で接続が残っているか確かめてください"
+RETRY_STATES = ("offline", "denied")  # 「つなぎ直す」が意味を持つ状態。未接続では押しても足りないのは Muse 側の手順なので出さない
+UNKNOWN_STATE_MESSAGE = "接続の状態が読めませんでした。「つなぎ直す」を押してください"  # 想定外の状態値(OFFLINE・空文字・None 等)でも、画面が行き止まりにならないように
+
 _LOCK = threading.Lock()
-_STATE = {"state": "off", "last_ok_at": None, "since": None}
+_STATE = {"state": "off", "last_ok_at": None, "since": None, "linked_at": None}
 _RUN = {"stop": None, "thread": None, "args": None}
 _DONE = {}  # 実行した id → その呼び出しの期限(done_path() のファイルと同じ中身)
 _DONE_FILE = {"loaded": False, "blocked_until": 0.0}
@@ -259,11 +275,48 @@ def _set(state):
             _STATE["last_ok_at"] = time.time()
 
 
-def status():
+def _linked_time(v):
+    """サーバーが返す muse_linked_at(ISO8601 の文字列)を epoch 秒に。読めなければ None(古い応答でも壊れない)"""
+    if not isinstance(v, str) or not v:
+        return None
+    try:
+        from datetime import datetime
+        dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.astimezone()
+        return dt.timestamp()
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _linked_ok(v, now):
+    """表示してよい最終時刻か。数値で、公開日以前の固定日(LINKED_MIN)から今日の1日先まで(未来の時刻・固定日より前・1970年前後の極端な値は日付を出さない)"""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and LINKED_MIN <= v <= now + 86400
+
+
+def status(now=None):
     """画面・whoami・サポート報告が見る状態。キーの値は含めない"""
     with _LOCK:
         d = dict(_STATE)
-    d["message"] = MESSAGES.get(d["state"], "")
+    now = time.time() if now is None else now
+    known = d["state"] in MESSAGES
+    d["message"] = MESSAGES[d["state"]] if known else UNKNOWN_STATE_MESSAGE
+    d["can_retry"] = d["state"] in RETRY_STATES or not known
+    d["steps"] = list(NOT_LINKED_STEPS) if d["state"] == "not_linked" else []
+    d["hint"] = ""
+    if d["state"] == "not_linked":
+        d["hint"] = NOT_LINKED_ETA
+        if d["since"] is not None and now - d["since"] >= NOT_LINKED_LONG:
+            d["hint"] += "。" + NOT_LINKED_LONG_NOTE
+    elif d["state"] == "connected" and _linked_ok(d.get("linked_at"), now):
+        from datetime import datetime
+        try:
+            t = datetime.fromtimestamp(d["linked_at"])
+            d["message"] += "(最後に Muse から使われたのは %d月%d日)" % (t.month, t.day)
+            if now - d["linked_at"] >= LINKED_STALE:
+                d["hint"] = LINKED_STALE_NOTE
+        except (ValueError, OverflowError, OSError):  # Windows は範囲外の時刻で OSError。日付は出さず、画面の他の経路を巻き込まない
+            pass
     return d
 
 
@@ -519,6 +572,11 @@ def poll_once(key, iid, version, port, token, stop=None, http=None, local=None):
         return "offline"
     if not isinstance(d, dict):
         return "offline"
+    # 項目が無い応答は従来どおり接続中。項目があって真でない値(false・null・文字列・数)は、つながっている証拠が無いので未接続。
+    # 最終時刻を消す条件と戻りの状態は、この1つの判定で決める(別々に書くと食い違い、未接続なのに最終時刻だけ残る)
+    not_linked = "muse_linked" in d and d["muse_linked"] is not True
+    with _LOCK:  # 最新の応答の値をそのまま持つ(未接続の応答や、最終時刻の無い古い応答で、前の時刻を残さない)
+        _STATE["linked_at"] = None if not_linked else _linked_time(d.get("muse_linked_at"))
     for call in d.get("calls") or []:
         if stop is not None and stop.is_set():  # claude_code へ戻した後は、受け取っていた分も実行しない
             break
@@ -529,7 +587,7 @@ def poll_once(key, iid, version, port, token, stop=None, http=None, local=None):
             http.post(base + "/result.php", headers={"X-License-Key": key}, json={"install_id": iid, **res}, timeout=POLL_TIMEOUT, allow_redirects=False)
         except requests.RequestException:
             return "offline"
-    return "not_linked" if d.get("muse_linked") is False else "connected"
+    return "not_linked" if not_linked else "connected"
 
 
 def _loop(stop, port, token, version, key_reader, iid_reader):
